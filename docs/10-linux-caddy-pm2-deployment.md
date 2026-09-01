@@ -466,53 +466,62 @@ PostgreSQL 管理员以外的访问。
 
 ### 更新应用
 
-更新前先完成数据库备份。以下操作只更新应用代码，不会重建数据库、不改环境文件、不改
-Caddy 配置。
+更新前先完成数据库备份。以下操作直接更新当前 Git 工作目录，不新建发布目录、不改环境
+文件、不改 Caddy 配置，也不会退出当前 SSH 终端。
+
+#### 旧环境的一次性兼容处理
+
+如果 PM2 日志提示 `ADMIN_ENTRY_PATH must be explicitly configured in production`，说明服务器
+使用的是早于管理员独立入口功能的环境文件。先仅执行一次下面的命令；它只在缺少该配置时
+追加新值，不会修改已有的管理员入口、数据库、Caddy 或其他环境变量。
 
 ```bash
-export REPO_URL=https://github.com/inspoaibox/ModelBridge.git
-export RELEASE="$(date -u +%Y%m%d-%H%M%S)"
-export RELEASE_DIR="/opt/ai-token/releases/$RELEASE"
+if ! grep -Eq '^ADMIN_ENTRY_PATH=/admin-[A-Za-z0-9_-]{16,160}$' /etc/ai-token/ai-token.env; then
+  ADMIN_ENTRY_SUFFIX="$(openssl rand -hex 16)"
+  printf '\nADMIN_ENTRY_PATH=/admin-%s\n' "$ADMIN_ENTRY_SUFFIX" >> /etc/ai-token/ai-token.env
+  chmod 0600 /etc/ai-token/ai-token.env
+  printf '请保存管理员入口：https://你的域名/admin-%s\n' "$ADMIN_ENTRY_SUFFIX"
+  unset ADMIN_ENTRY_SUFFIX
+fi
+```
 
-git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"
-cd "$RELEASE_DIR"
-go mod download
+首次完整安装已经在第 6 节自动写入该配置，不需要执行本小节。
+
+```bash
+cd /opt/ai-token/current
+git pull --ff-only origin main
+
 cd web
 npm ci
 npm run build
 cd ..
+
 mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
-chmod 0755 deploy/pm2/start.sh
-test -x bin/ai-token
-test -f web/dist/index.html
 
-if ! grep -q '^ADMIN_ENTRY_PATH=' /etc/ai-token/ai-token.env; then
-  ADMIN_ENTRY_SUFFIX="$(openssl rand -hex 16)"
-  printf '\nADMIN_ENTRY_PATH=/admin-%s\n' "$ADMIN_ENTRY_SUFFIX" >> /etc/ai-token/ai-token.env
-  chmod 0600 /etc/ai-token/ai-token.env
-  printf '请保存管理员入口：https://%s/admin-%s\n' "$DOMAIN" "$ADMIN_ENTRY_SUFFIX"
-  unset ADMIN_ENTRY_SUFFIX
-fi
-
-ln -sfn "$RELEASE_DIR" /opt/ai-token/current
 PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
-  /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs --update-env
-PM2_HOME=/opt/ai-token/.pm2 pm2 save
-curl -fsS "https://$DOMAIN/healthz"
+  /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
+
+curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-如果新版本启动失败，先切回上一次目录，再重载 PM2：
+这是每次更新都执行的一组命令。`go build` 会自动下载新增的 Go 依赖，因此不需要额外
+执行 `go mod download`；`npm ci` 会严格按照 `package-lock.json` 安装前端依赖；Git 会保留
+`deploy/pm2/start.sh` 的可执行权限，因此不需要重复 `chmod`；PM2 首次安装后会由 systemd
+恢复，不需要每次更新都执行 `pm2 save`。
+
+最后一条会返回 `{"status":"ok"}`。若失败，浏览器就会显示 502；此时先查看应用日志：
 
 ```bash
-ln -sfn /opt/ai-token/releases/上一版本目录名 /opt/ai-token/current
-PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
-  /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs --update-env
-PM2_HOME=/opt/ai-token/.pm2 pm2 save
+PM2_HOME=/opt/ai-token/.pm2 pm2 logs ai-token --lines 100 --nostream
 ```
 
-只有确认新旧数据库迁移兼容时才能只回滚应用。若迁移不兼容，必须停服务、恢复已验证的
-数据库备份，再切回旧版本。
+若 `git pull --ff-only origin main` 提示服务器目录有本地改动或无法快进，请先执行
+`git status --short` 查看原因。该命令会停止更新，但不会关闭 SSH 终端。不要通过
+`git reset --hard` 强行覆盖，避免丢失服务器上的环境或人工修改。
+
+此流程直接修改当前目录，因此不提供自动目录回滚。更新前的数据库备份用于处理迁移不兼容
+或严重故障；代码回退必须使用已知的 Git 提交号，并确认数据库迁移兼容后再执行。
 
 ## 12. 常见问题
 
@@ -520,6 +529,7 @@ PM2_HOME=/opt/ai-token/.pm2 pm2 save
 | --- | --- |
 | `/etc/ai-token/ai-token.env already exists` | 旧安装器留下的半安装状态。不要删除和重跑脚本，按第 0 节只读检查，再继续未完成的 Caddy、PM2 和管理员步骤。 |
 | `cd /opt/ai-token/current: No such file or directory` | 下载或软链接步骤没有完成。回到第 5 节从 `git clone` 开始执行，不能只执行构建尾部命令。 |
+| PM2 日志提示 `ADMIN_ENTRY_PATH must be explicitly configured in production` | 旧环境文件缺少管理员独立入口。执行第 11 节的“一次性兼容处理”，保存输出的管理员地址后再重启 PM2。 |
 | Caddy 提示同域名站点已存在 | 该域名已有业务配置。不要追加、不要覆盖；读取原站点块后再决定如何把反代加入其中。 |
 | `caddy validate` 失败 | 只修改刚追加的 AI Token 站点块，修复后重新 validate；验证通过前不要 reload。 |
 | 访问返回 502 | 先运行本机 `curl http://127.0.0.1:8080/healthz`，再看 PM2 和 systemd 日志。 |

@@ -417,6 +417,27 @@ function resolveSystemSettingsError(
   return status === 503 ? t("systemSettingsUnavailable") : t("systemSettingsSaveFailed");
 }
 
+function resolveFeatureSettingsError(
+  status: number,
+  error: string | undefined,
+  t: (key: TranslationKey) => string
+) {
+  switch (error) {
+    case "INVALID_BALANCE_THRESHOLD":
+      return t("featureBalanceThresholdInvalid");
+    case "INVALID_RECHARGE_URL":
+      return t("featureRechargeURLInvalid");
+    case "EMAIL_SMTP_REQUIRED":
+      return t("featureEmailSMTPRequired");
+    case "INVALID_EMAIL_SMTP":
+      return t("featureEmailSMTPInvalid");
+    case "INVALID_FEATURE_SETTINGS":
+      return t("featureSettingsValidation");
+    default:
+      return status === 503 ? t("featureSettingsUnavailable") : t("featureSettingsSaveFailed");
+  }
+}
+
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = window.localStorage.getItem("ai-token-theme");
@@ -1707,7 +1728,7 @@ export default function App() {
 				body: JSON.stringify(next),
 			});
 			const result = (await response.json().catch(() => ({}))) as FeatureSettings & { error?: string };
-			if (!response.ok) throw new Error(response.status === 400 ? t("featureSettingsValidation") : t("featureSettingsSaveFailed"));
+			if (!response.ok) throw new Error(resolveFeatureSettingsError(response.status, result.error, t));
 			setFeatureSettings(result);
 			setPublicFeatures({
 				registration_enabled: result.registration_enabled !== false,

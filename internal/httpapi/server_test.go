@@ -1337,6 +1337,41 @@ func TestAdminEmailSettingsRoutesAreProtectedAndSeparated(t *testing.T) {
 	}
 }
 
+func TestFeatureSettingsValidationReturnsSpecificErrors(t *testing.T) {
+	testCases := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "balance threshold", err: adminsettings.ErrInvalidBalanceThreshold, code: "INVALID_BALANCE_THRESHOLD"},
+		{name: "recharge URL", err: adminsettings.ErrInvalidRechargeURL, code: "INVALID_RECHARGE_URL"},
+		{name: "SMTP required", err: adminsettings.ErrEmailSMTPRequired, code: "EMAIL_SMTP_REQUIRED"},
+		{name: "SMTP invalid", err: adminsettings.ErrInvalidEmailSMTP, code: "INVALID_EMAIL_SMTP"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			settings := &fakeSystemSettingsService{featureUpdateErr: testCase.err}
+			handler := New(auth.NewMiddleware(testResolver{
+				"feature-admin": {
+					ID:       "11111111-1111-4111-8111-111111111111",
+					Type:     auth.PrincipalPlatformUser,
+					Audience: auth.AudienceAdmin,
+					Permissions: map[string]struct{}{
+						"security:update": {},
+					},
+				},
+			}), &auth.Services{SecuritySettings: settings}, false, "../../web")
+			request := httptest.NewRequest(http.MethodPut, "/admin/v1/settings/features", strings.NewReader(`{"balance_threshold":"0","recharge_url":""}`))
+			request.Header.Set("Authorization", "Bearer feature-admin")
+			record := httptest.NewRecorder()
+			handler.ServeHTTP(record, request)
+			if record.Code != http.StatusBadRequest || !strings.Contains(record.Body.String(), `{"error":"`+testCase.code+`"}`) {
+				t.Fatalf("expected %s, got %d: %s", testCase.code, record.Code, record.Body.String())
+			}
+		})
+	}
+}
+
 func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
 	userService := &fakeProfileUserService{}
 	mfaService := &fakeMFASettingsService{}
@@ -1525,10 +1560,11 @@ func (s *fakeSecuritySettingsService) UpdateAdminMFAEnabled(_ context.Context, e
 
 type fakeSystemSettingsService struct {
 	fakeSecuritySettingsService
-	updated       adminsettings.SystemSettingsUpdate
-	emailSettings adminsettings.EmailSettings
-	features      adminsettings.FeatureSettings
-	templates     []adminsettings.EmailTemplate
+	updated          adminsettings.SystemSettingsUpdate
+	emailSettings    adminsettings.EmailSettings
+	features         adminsettings.FeatureSettings
+	featureUpdateErr error
+	templates        []adminsettings.EmailTemplate
 }
 
 func (s *fakeSystemSettingsService) GetSystemSettings(_ context.Context) (adminsettings.SystemSettings, error) {
@@ -1565,6 +1601,9 @@ func (s *fakeSystemSettingsService) GetFeatureSettings(context.Context) (adminse
 }
 
 func (s *fakeSystemSettingsService) UpdateFeatureSettings(_ context.Context, _ string, _ adminsettings.FeatureSettingsUpdate) (adminsettings.FeatureSettings, error) {
+	if s.featureUpdateErr != nil {
+		return adminsettings.FeatureSettings{}, s.featureUpdateErr
+	}
 	return s.features, nil
 }
 

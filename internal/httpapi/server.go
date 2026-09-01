@@ -1701,7 +1701,20 @@ func featureSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Ha
 		}
 		settings, err := provider.UpdateFeatureSettings(r.Context(), principal.ID, payload)
 		if err != nil {
-			if errors.Is(err, adminsettings.ErrInvalidEmailSettings) {
+			switch {
+			case errors.Is(err, adminsettings.ErrInvalidBalanceThreshold):
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_BALANCE_THRESHOLD"})
+				return
+			case errors.Is(err, adminsettings.ErrInvalidRechargeURL):
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_RECHARGE_URL"})
+				return
+			case errors.Is(err, adminsettings.ErrEmailSMTPRequired):
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "EMAIL_SMTP_REQUIRED"})
+				return
+			case errors.Is(err, adminsettings.ErrInvalidEmailSMTP):
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_SMTP"})
+				return
+			case errors.Is(err, adminsettings.ErrInvalidFeatureSettings), errors.Is(err, adminsettings.ErrInvalidEmailSettings):
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_FEATURE_SETTINGS"})
 				return
 			}

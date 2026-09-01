@@ -17,8 +17,13 @@ import (
 )
 
 var (
-	ErrInvalidEmailSettings  = errors.New("invalid email settings")
-	ErrEmailTemplateNotFound = errors.New("email template not found")
+	ErrInvalidEmailSettings    = errors.New("invalid email settings")
+	ErrInvalidFeatureSettings  = errors.New("invalid feature settings")
+	ErrInvalidBalanceThreshold = errors.New("invalid balance threshold")
+	ErrInvalidRechargeURL      = errors.New("invalid recharge url")
+	ErrEmailSMTPRequired       = errors.New("email smtp required")
+	ErrInvalidEmailSMTP        = errors.New("invalid email smtp")
+	ErrEmailTemplateNotFound   = errors.New("email template not found")
 )
 
 type EmailSettings struct {
@@ -352,12 +357,15 @@ func (s *Service) UpdateSiteSettings(ctx context.Context, actorID string, reques
 
 func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, request FeatureSettingsUpdate) (FeatureSettings, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(actorID) == "" {
-		return FeatureSettings{}, ErrInvalidEmailSettings
+		return FeatureSettings{}, ErrInvalidFeatureSettings
 	}
 	request.BalanceThreshold = strings.TrimSpace(request.BalanceThreshold)
 	request.RechargeURL = strings.TrimRight(strings.TrimSpace(request.RechargeURL), "/")
-	if (request.BalanceThreshold != "" && !validNonNegativeDecimal(request.BalanceThreshold)) || !validHTTPSURL(request.RechargeURL) {
-		return FeatureSettings{}, ErrInvalidEmailSettings
+	if request.BalanceThreshold != "" && !validNonNegativeDecimal(request.BalanceThreshold) {
+		return FeatureSettings{}, ErrInvalidBalanceThreshold
+	}
+	if !validHTTPSURL(request.RechargeURL) {
+		return FeatureSettings{}, ErrInvalidRechargeURL
 	}
 	if request.BalanceThreshold == "" {
 		request.BalanceThreshold = "0"
@@ -372,11 +380,14 @@ func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, req
 	}
 	if request.EmailEnabled {
 		smtp, err := s.readSMTPSettings(ctx, nil)
-		if err != nil || !smtp.Configured {
-			return FeatureSettings{}, ErrInvalidEmailSettings
+		if err != nil {
+			return FeatureSettings{}, err
+		}
+		if !smtp.Configured {
+			return FeatureSettings{}, ErrEmailSMTPRequired
 		}
 		if _, err := auth.NewSMTPNotifier(smtp); err != nil {
-			return FeatureSettings{}, ErrInvalidEmailSettings
+			return FeatureSettings{}, ErrInvalidEmailSMTP
 		}
 	}
 	items := []struct{ key, value string }{
