@@ -47,7 +47,7 @@ Internet -> Nginx :443 -> AI Token Gateway :8080 (127.0.0.1) -> PostgreSQL
 
 ## 2. 初始化 Ubuntu 或 Debian
 
-以 sudo 账号执行：
+全程使用 root 终端执行。若当前不是 root，先执行 `sudo -i`：
 
 ~~~bash
 sudo apt update
@@ -74,14 +74,11 @@ sudo timedatectl set-ntp true
 timedatectl status
 ~~~
 
-创建专用运行账号和目录：
+创建项目目录。项目采用 root 统一部署和运行，不会创建 `ai-token` Linux 用户：
 
 ~~~bash
-sudo useradd --system --create-home --home-dir /var/lib/ai-token \
-  --shell /usr/sbin/nologin ai-token
-sudo install -d -o ai-token -g ai-token -m 0750 \
-  /opt/ai-token/releases /opt/ai-token/bin /var/lib/ai-token
-sudo install -d -o root -g ai-token -m 0750 /etc/ai-token
+sudo install -d -m 0755 /opt/ai-token/releases
+sudo install -d -m 0700 /etc/ai-token
 ~~~
 
 ## 3. PostgreSQL
@@ -236,12 +233,15 @@ export RELEASE=2026-09-01-01
 export GIT_BRANCH=main
 export REPO_URL=https://github.com/inspoaibox/ModelBridge.git
 
-sudo -u ai-token -H mkdir -p /opt/ai-token/releases/$RELEASE
-sudo -u ai-token -H git clone --depth 1 --branch "$GIT_BRANCH" \
+sudo mkdir -p /opt/ai-token/releases/$RELEASE
+sudo git clone --depth 1 --branch "$GIT_BRANCH" \
   "$REPO_URL" \
   /opt/ai-token/releases/$RELEASE
 
-sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
+sudo git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
+sudo ln -sfn "/opt/ai-token/releases/$RELEASE" /opt/ai-token/current
+test -f /opt/ai-token/current/go.mod
+test -d /opt/ai-token/current/web
 ~~~
 
 最后一条会输出提交编号，请记录下来。以后有正式 Git 标签时，把
@@ -249,15 +249,13 @@ sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
 
 ### 第 2 步：执行检查并编译
 
-下面整段命令直接在 root 终端执行。它只会在执行期间临时使用 `ai-token`
-运行账号下载依赖和构建，完成后会自动回到 root；**不要手动切换到
-`ai-token` 账号**，也不要为它设置密码或 sudo 权限：
+下面整段命令直接在 root 终端执行。项目采用 root 统一部署、构建和进程守护，
+不需要切换 Linux 用户：
 
 ~~~bash
-sudo -u ai-token -H env RELEASE="$RELEASE" bash -lc '
 set -e
 export PATH=/usr/local/go/bin:$PATH
-cd /opt/ai-token/releases/$RELEASE
+cd /opt/ai-token/current
 
 go mod download
 go test ./...
@@ -276,7 +274,6 @@ cd ..
 mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 test -f web/dist/index.html
-'
 ~~~
 
 | 命令 | 在做什么 |
@@ -288,11 +285,9 @@ test -f web/dist/index.html
 | `go build ... -o bin/ai-token` | 生成真正运行的后端程序。 |
 
 命令成功后，你的提示符仍应是 `root@服务器:~#`，可以直接继续下一节。
-如果你之前已经误进入 `ai-token@服务器:...$`，先执行一次 `exit`，再运行
-`whoami`；只有输出 `root` 时，才可以编辑 `/etc/ai-token/ai-token.env`。
-
 任一步失败都不得继续发布。压缩包部署时，也必须先解压到
-`/opt/ai-token/releases/$RELEASE`，再从本节“第 2 步”开始执行。
+`/opt/ai-token/releases/$RELEASE`，建立 `current` 链接并确认发布目录有效后，
+再从本节“第 2 步”开始执行。
 
 ## 6. 生产环境变量
 
@@ -334,8 +329,8 @@ REGISTRATION_ENABLED=false
 退出 nano 后，回到 Linux 终端设置文件所有者和权限：
 
 ~~~bash
-chown root:ai-token /etc/ai-token/ai-token.env
-chmod 0640 /etc/ai-token/ai-token.env
+chown root:root /etc/ai-token/ai-token.env
+chmod 0600 /etc/ai-token/ai-token.env
 ~~~
 
 生成三组随机值时，立即存入安全密码管理器。前三条命令分别用于
@@ -367,7 +362,7 @@ openssl rand -hex 32
 
 ~~~bash
 sudo ln -sfn /opt/ai-token/releases/$RELEASE /opt/ai-token/current
-sudo chown -h ai-token:ai-token /opt/ai-token/current
+test -f /opt/ai-token/current/bin/ai-token
 ~~~
 
 创建 /etc/systemd/system/ai-token.service：
@@ -380,8 +375,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ai-token
-Group=ai-token
+User=root
+Group=root
 WorkingDirectory=/opt/ai-token/current
 EnvironmentFile=/etc/ai-token/ai-token.env
 ExecStartPre=/usr/bin/test -f /opt/ai-token/current/web/dist/index.html
@@ -395,7 +390,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ai-token
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -486,10 +480,9 @@ sudo certbot renew --dry-run
 
 ## 9. 创建首个管理员
 
-管理员不通过公开注册创建：
+管理员不通过公开注册创建。下面命令直接在 root 终端执行：
 
 ~~~bash
-sudo -u ai-token -H bash
 set -a
 source /etc/ai-token/ai-token.env
 set +a
@@ -499,7 +492,6 @@ echo
 export ADMIN_EMAIL ADMIN_PASSWORD
 /usr/local/go/bin/go run /opt/ai-token/current/cmd/bootstrap-admin
 unset ADMIN_PASSWORD
-exit
 ~~~
 
 若工具显示 TOTP Secret，只能在安全终端中导入认证器并保存恢复方案。不要复制到聊天、工单或日志。
@@ -558,7 +550,7 @@ export RELEASE=YOUR_RELEASE_TAG
 sudo -u postgres pg_dump -Fc -d ai_token \
   -f /var/backups/ai-token/pre-$RELEASE.dump
 
-sudo -u ai-token -H mkdir -p /opt/ai-token/releases/$RELEASE
+sudo mkdir -p /opt/ai-token/releases/$RELEASE
 # 下载并校验新版本，然后执行第 5 节的完整构建检查
 
 sudo ln -sfn /opt/ai-token/releases/$RELEASE /opt/ai-token/current

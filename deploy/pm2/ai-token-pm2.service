@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=forking
-User=ai-token
-Group=ai-token
-Environment=HOME=/var/lib/ai-token
-Environment=PM2_HOME=/var/lib/ai-token/.pm2
+User=root
+Group=root
+Environment=HOME=/root
+Environment=PM2_HOME=/opt/ai-token/.pm2
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-PIDFile=/var/lib/ai-token/.pm2/pm2.pid
+PIDFile=/opt/ai-token/.pm2/pm2.pid
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

@@ -15,15 +15,16 @@
 > | `sql` | PostgreSQL 的 `postgres=#` 提示符内的 SQL | 否，先执行进入 psql 的命令 |
 > | `conf` | PostgreSQL 配置文件内容 | 否，写入指定配置文件 |
 > | `dotenv` | AI Token 环境文件内容 | 否，写入 `/etc/ai-token/ai-token.env` |
-> | `caddyfile` | Caddy 配置文件内容 | 否，写入 `/etc/caddy/Caddyfile` |
+> | `caddyfile` | AI Token 的 Caddy 站点片段 | 否，写入 `/etc/caddy/conf.d/ai-token.caddy` |
 >
 > 看到 `REPLACE_...`、`gateway.example.com` 或 `YOUR_...` 时，必须替换成自己的值。
 > 文档中的 `$RELEASE` 是当前发布版本变量，不是要原样输入的文字。
 
 ### 终端身份和编辑器
 
-本文的普通命令可以在 root 终端执行，也可以在具有 sudo 权限的账号下执行。
-命令中的 `sudo -u ai-token`、`sudo -u postgres` 表示临时使用对应系统账号执行，不需要先切换账号。
+本文的项目部署命令统一在 root 终端执行。若当前不是 root，先执行 `sudo -i`，
+确认提示符为 `root@服务器:~#` 后再继续。只有 PostgreSQL 管理命令保留
+`sudo -u postgres`，这是 PostgreSQL 自带的数据库系统账号，不是本项目新建账号。
 
 遇到 `sudoedit` 或 `nano` 时，打开的是文件编辑器，不是在执行命令：
 
@@ -36,7 +37,7 @@
 
 | 文件 | 部署位置 |
 | --- | --- |
-| deploy/caddy/Caddyfile | /etc/caddy/Caddyfile |
+| deploy/caddy/ai-token.caddy | /etc/caddy/conf.d/ai-token.caddy |
 | deploy/pm2/start.sh | /opt/ai-token/current/deploy/pm2/start.sh |
 | deploy/pm2/ecosystem.config.cjs | /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs |
 | deploy/pm2/ai-token-pm2.service | /etc/systemd/system/ai-token-pm2.service |
@@ -70,7 +71,7 @@ PostgreSQL 16                     SMTP STARTTLS
 
 ## 2. 初始化服务器
 
-使用具备 sudo 权限的账号：
+全程使用 root 终端执行。若当前不是 root，先执行 `sudo -i`：
 
 ~~~bash
 sudo apt update
@@ -97,15 +98,34 @@ sudo timedatectl set-ntp true
 timedatectl status
 ~~~
 
-创建运行账号和目录：
+创建项目目录。不会创建 `ai-token` Linux 用户：
 
 ~~~bash
-sudo useradd --system --create-home --home-dir /var/lib/ai-token \
-  --shell /usr/sbin/nologin ai-token
-sudo install -d -o ai-token -g ai-token -m 0750 \
-  /opt/ai-token/releases /var/lib/ai-token
-sudo install -d -o root -g ai-token -m 0750 /etc/ai-token
+install -d -m 0755 /opt/ai-token/releases
+install -d -m 0700 /opt/ai-token/.pm2
+install -d -m 0700 /etc/ai-token
 ~~~
+
+### 清理旧的非 root 部署（仅已按旧文档部署过时执行）
+
+以下命令会停止旧应用、删除旧的 Linux `ai-token` 用户、项目文件、旧 PM2 配置和
+AI Token 的 Caddy 片段；**不会删除 PostgreSQL 数据库**。先从
+`/etc/caddy/Caddyfile` 手动删除仅属于 AI Token 的
+`import /etc/caddy/conf.d/ai-token.caddy` 一行，再执行：
+
+~~~bash
+systemctl disable --now ai-token-pm2 ai-token 2>/dev/null || true
+rm -f /etc/systemd/system/ai-token-pm2.service /etc/systemd/system/ai-token.service
+systemctl daemon-reload
+pkill -u ai-token 2>/dev/null || true
+userdel -r ai-token 2>/dev/null || true
+rm -rf /opt/ai-token /etc/ai-token
+rm -f /etc/caddy/conf.d/ai-token.caddy /var/log/caddy/ai-token.access.log
+~~~
+
+如果这个服务器从未部署过 AI Token，跳过本小节。若确实要清空所有平台用户、
+渠道、账务和使用记录，先完成数据库备份，再额外执行
+`sudo -u postgres dropdb ai_token` 和 `sudo -u postgres dropuser ai_token`。
 
 ## 3. 安装 PostgreSQL
 
@@ -280,12 +300,17 @@ export RELEASE=2026-09-01-01
 export GIT_BRANCH=main
 export REPO_URL=https://github.com/inspoaibox/ModelBridge.git
 
-sudo -u ai-token -H mkdir -p /opt/ai-token/releases/$RELEASE
-sudo -u ai-token -H git clone --depth 1 --branch "$GIT_BRANCH" \
+mkdir -p /opt/ai-token/releases/$RELEASE
+git clone --depth 1 --branch "$GIT_BRANCH" \
   "$REPO_URL" \
   /opt/ai-token/releases/$RELEASE
 
-sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
+git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
+
+# 只在这里使用 RELEASE。后续步骤全部固定使用 current，不依赖 Shell 变量。
+ln -sfn "/opt/ai-token/releases/$RELEASE" /opt/ai-token/current
+test -f /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
+test -f /opt/ai-token/current/deploy/pm2/start.sh
 ~~~
 
 最后一条会输出一长串提交编号。把它记录到部署记录中，用于将来确认当前服务器
@@ -297,15 +322,13 @@ sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
 
 ### 第 2 步：执行检查并编译
 
-下面整段命令直接在 root 终端执行。它只会在执行期间临时使用 `ai-token`
-运行账号下载依赖和构建，完成后会自动回到 root；**不要手动切换到
-`ai-token` 账号**，也不要为它设置密码或 sudo 权限。
+下面整段命令直接在 root 终端执行。项目采用 root 统一部署、构建和进程守护，
+不需要切换 Linux 用户。
 
 ~~~bash
-sudo -u ai-token -H env RELEASE="$RELEASE" bash -lc '
 set -e
 export PATH=/usr/local/go/bin:$PATH
-cd /opt/ai-token/releases/$RELEASE
+cd /opt/ai-token/current
 
 go mod download
 go test ./...
@@ -325,7 +348,6 @@ mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 chmod 0755 deploy/pm2/start.sh
 test -f web/dist/index.html
-'
 ~~~
 
 上面命令的作用：
@@ -343,13 +365,12 @@ test -f web/dist/index.html
 | `go build ... -o bin/ai-token` | 生成实际运行的后端程序 `/opt/ai-token/releases/本次版本/bin/ai-token`。 |
 | `chmod 0755 .../start.sh` | 让 PM2 启动脚本可以执行。 |
 
-命令成功后，你的提示符仍应是 `root@服务器:~#`，可以直接继续第 6 节。
-如果你之前已经误进入 `ai-token@服务器:...$`，先执行一次 `exit`，再运行
-`whoami`；只有输出 `root` 时，才可以编辑 `/etc/ai-token/ai-token.env`。
+命令成功后，提示符仍应是 `root@服务器:~#`，可以直接继续第 6 节。
 
 任何一条命令出现错误时，先停下来处理错误，不要跳过后面的检查继续上线。
-压缩包部署时，也必须先把压缩包解压到
-`/opt/ai-token/releases/$RELEASE`，再从本节“第 2 步”开始执行。
+压缩包部署时，也必须先把压缩包解压到一个独立目录，例如
+`/opt/ai-token/releases/2026-09-01-01`，建立 `current` 软链接并通过上一步的
+两个 `test` 校验后，再从本节“第 2 步”开始执行。
 
 ## 6. 完整生产环境文件
 
@@ -398,8 +419,8 @@ REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
 回到 Linux 终端后，设置文件所有者和权限：
 
 ~~~bash
-chown root:ai-token /etc/ai-token/ai-token.env
-chmod 0640 /etc/ai-token/ai-token.env
+chown root:root /etc/ai-token/ai-token.env
+chmod 0600 /etc/ai-token/ai-token.env
 ~~~
 
 生成随机密钥。前三条命令分别输出一个随机值，请依次填入环境文件对应的
@@ -433,8 +454,8 @@ nano /etc/ai-token/ai-token.env
 保存按 `Ctrl+O`，回车确认；退出按 `Ctrl+X`。退出后再次确认文件权限：
 
 ~~~bash
-chown root:ai-token /etc/ai-token/ai-token.env
-chmod 0640 /etc/ai-token/ai-token.env
+chown root:root /etc/ai-token/ai-token.env
+chmod 0600 /etc/ai-token/ai-token.env
 ~~~
 
 规则：
@@ -455,28 +476,55 @@ chmod 0640 /etc/ai-token/ai-token.env
 
 ## 7. Caddy 配置
 
-复制模板并编辑域名与邮箱。先在 Linux 终端执行：
+**不会覆盖客户已有的 `/etc/caddy/Caddyfile`。** 本节仅适用于使用标准
+Caddyfile 的 Caddy 服务；如果客户的 Caddy 由 JSON、Docker、面板或其他配置
+路径管理，先执行 `systemctl cat caddy` 找到真实配置来源，并在该来源中手工加入
+等价反向代理，不要执行本节的主配置修改命令。
+
+AI Token 只安装一个独立站点片段。以下命令必须在 root 终端执行；主配置不存在时
+会停止，存在时才会先备份原配置，再安装片段：
 
 ~~~bash
-sudo install -m 0644 /opt/ai-token/releases/$RELEASE/deploy/caddy/Caddyfile \
-  /etc/caddy/Caddyfile
-sudo nano /etc/caddy/Caddyfile
+test -f /etc/caddy/Caddyfile || {
+  echo "未找到 /etc/caddy/Caddyfile；请先执行：systemctl cat caddy"
+  exit 1
+}
+install -d -m 0755 /etc/caddy/conf.d
+cp -a /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d-%H%M%S)"
+install -m 0644 /opt/ai-token/current/deploy/caddy/ai-token.caddy \
+  /etc/caddy/conf.d/ai-token.caddy
+nano /etc/caddy/conf.d/ai-token.caddy
 ~~~
 
 进入 nano 后只修改以下内容：
 
-1. 将 `email ops@example.com` 改成接收证书通知的真实邮箱。
-2. 将所有 `gateway.example.com` 改成你的真实域名。
-3. 保留 `127.0.0.1:8080`，不要改成公网地址。
+1. 将所有 `gateway.example.com` 改成你的真实域名。
+2. 保留 `127.0.0.1:8080`，不要改成公网地址。
 
-保存：按 `Ctrl+O`，回车确认；退出：按 `Ctrl+X`。然后回到 Linux
-终端执行：
+保存：按 `Ctrl+O`，回车确认；退出：按 `Ctrl+X`。
+
+接着检查主配置是否已经加载 `/etc/caddy/conf.d` 下的片段：
 
 ~~~bash
-sudo caddy fmt --overwrite /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-sudo systemctl enable --now caddy
-sudo systemctl status caddy --no-pager
+grep -nE '^[[:space:]]*import[[:space:]].*conf\.d' /etc/caddy/Caddyfile
+~~~
+
+如果上面的命令有输出，说明客户已有配置已经加载了该目录，不要修改主配置。
+如果没有任何输出，执行以下命令只追加一行 `import`；不会替换任何已有站点：
+
+~~~bash
+grep -qxF 'import /etc/caddy/conf.d/ai-token.caddy' /etc/caddy/Caddyfile || \
+  printf '\n# AI Token Gateway\nimport /etc/caddy/conf.d/ai-token.caddy\n' >> /etc/caddy/Caddyfile
+~~~
+
+最后校验并加载。这里不会格式化或覆盖客户的主 Caddyfile：
+
+~~~bash
+caddy fmt --overwrite /etc/caddy/conf.d/ai-token.caddy
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+systemctl enable --now caddy
+systemctl reload caddy
+systemctl status caddy --no-pager
 ~~~
 
 Caddy 自动申请和续期证书。模板将客户端伪造的 X-Forwarded-For 替换为 Caddy 的直连来源地址；应用仅信任同机 Caddy 的回环 CIDR。
@@ -485,36 +533,41 @@ Caddy 自动申请和续期证书。模板将客户端伪造的 X-Forwarded-For 
 
 ## 8. PM2 进程守护
 
-切换 current 链接并安装 PM2 模板：
+`current` 已在下载完成后创建并经过文件校验。本节不再使用 `$RELEASE`。
+PM2 的状态和日志只存入 `/opt/ai-token/.pm2`，不会影响服务器上其他 PM2 项目。
+先确认当前发布包完整、root 可以执行 Node.js，再安装 PM2 模板：
 
 ~~~bash
-sudo ln -sfn /opt/ai-token/releases/$RELEASE /opt/ai-token/current
-sudo chown -h ai-token:ai-token /opt/ai-token/current
-sudo chmod 0755 /opt/ai-token/current/deploy/pm2/start.sh
-sudo install -m 0644 \
+test -f /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
+test -f /opt/ai-token/current/deploy/pm2/start.sh
+/usr/bin/node --version
+pm2 --version
+chmod 0755 /opt/ai-token/current/deploy/pm2/start.sh
+test -x /opt/ai-token/current/deploy/pm2/start.sh
+install -m 0644 \
   /opt/ai-token/current/deploy/pm2/ai-token-pm2.service \
   /etc/systemd/system/ai-token-pm2.service
-sudo systemctl daemon-reload
+systemctl daemon-reload
 ~~~
 
-以 ai-token 账号启动 PM2。PM2 配置不会保存任何生产密钥，启动脚本只读取权限为 root:ai-token 0640 的环境文件：
+以 root 启动 PM2。PM2 配置不会保存任何生产密钥，启动脚本只读取权限为
+root:root 0600 的环境文件：
 
 ~~~bash
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 \
-  pm2 startOrReload /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs \
-  --update-env
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 save
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 status
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 logs ai-token --lines 100
+PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
+  /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs --update-env
+PM2_HOME=/opt/ai-token/.pm2 pm2 save
+PM2_HOME=/opt/ai-token/.pm2 pm2 status
+PM2_HOME=/opt/ai-token/.pm2 pm2 logs ai-token --lines 100
 ~~~
 
 让 systemd 在重启后恢复 PM2：
 
 ~~~bash
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 kill
-sudo systemctl enable --now ai-token-pm2
-sudo systemctl status ai-token-pm2 --no-pager
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 status
+PM2_HOME=/opt/ai-token/.pm2 pm2 kill
+systemctl enable --now ai-token-pm2
+systemctl status ai-token-pm2 --no-pager
+PM2_HOME=/opt/ai-token/.pm2 pm2 status
 ~~~
 
 检查：
@@ -522,16 +575,15 @@ sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 status
 ~~~bash
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS https://gateway.example.com/healthz
-sudo journalctl -u ai-token-pm2 -n 100 --no-pager
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 monit
+journalctl -u ai-token-pm2 -n 100 --no-pager
+PM2_HOME=/opt/ai-token/.pm2 pm2 monit
 ~~~
 
 ## 9. 创建首个管理员
 
-管理员不通过公开注册创建：
+管理员不通过公开注册创建。下面命令在 root 终端直接执行：
 
 ~~~bash
-sudo -u ai-token -H bash
 set -a
 source /etc/ai-token/ai-token.env
 set +a
@@ -542,7 +594,6 @@ export ADMIN_EMAIL ADMIN_PASSWORD
 cd /opt/ai-token/current
 /usr/local/go/bin/go run ./cmd/bootstrap-admin
 unset ADMIN_PASSWORD
-exit
 ~~~
 
 若工具输出 TOTP Secret，只能在安全终端中导入认证器并保存恢复方案。
@@ -615,10 +666,10 @@ sudo -u postgres psql -d ai_token -c \
 查看状态：
 
 ~~~bash
-sudo systemctl status caddy ai-token-pm2 --no-pager
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 status
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 logs ai-token --lines 200
-sudo journalctl -u caddy -u ai-token-pm2 -n 200 --no-pager
+systemctl status caddy ai-token-pm2 --no-pager
+PM2_HOME=/opt/ai-token/.pm2 pm2 status
+PM2_HOME=/opt/ai-token/.pm2 pm2 logs ai-token --lines 200
+journalctl -u caddy -u ai-token-pm2 -n 200 --no-pager
 ~~~
 
 每日备份：
@@ -649,22 +700,23 @@ sudo -u postgres pg_dump -Fc -d ai_token \
   -f /var/backups/ai-token/pre-$RELEASE.dump
 
 # 下载到 /opt/ai-token/releases/$RELEASE，并执行第 5 节全部测试和构建
-sudo ln -sfn /opt/ai-token/releases/$RELEASE /opt/ai-token/current
-sudo chmod 0755 /opt/ai-token/current/deploy/pm2/start.sh
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 \
-  pm2 startOrReload /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs \
-  --update-env
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 pm2 save
+ln -sfn "/opt/ai-token/releases/$RELEASE" /opt/ai-token/current
+test -f /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
+test -f /opt/ai-token/current/deploy/pm2/start.sh
+chmod 0755 /opt/ai-token/current/deploy/pm2/start.sh
+PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
+  /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs --update-env
+PM2_HOME=/opt/ai-token/.pm2 pm2 save
 curl -fsS https://gateway.example.com/healthz
 ~~~
 
 仅当数据库迁移向后兼容时才可仅回滚应用：
 
 ~~~bash
-sudo ln -sfn /opt/ai-token/releases/PREVIOUS_RELEASE /opt/ai-token/current
-sudo -u ai-token -H env PM2_HOME=/var/lib/ai-token/.pm2 \
-  pm2 startOrReload /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs \
-  --update-env
+ln -sfn /opt/ai-token/releases/PREVIOUS_RELEASE /opt/ai-token/current
+test -f /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
+PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
+  /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs --update-env
 curl -fsS https://gateway.example.com/healthz
 ~~~
 

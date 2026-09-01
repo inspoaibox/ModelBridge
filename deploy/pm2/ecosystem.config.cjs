@@ -16,8 +16,8 @@ module.exports = {
       kill_timeout: 20000,
       merge_logs: true,
       time: true,
-      out_file: "/var/lib/ai-token/.pm2/logs/ai-token-out.log",
-      error_file: "/var/lib/ai-token/.pm2/logs/ai-token-error.log",
+      out_file: "/opt/ai-token/.pm2/logs/ai-token-out.log",
+      error_file: "/opt/ai-token/.pm2/logs/ai-token-error.log",
     },
   ],
 };
