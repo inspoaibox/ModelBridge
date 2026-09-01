@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { HomeView } from "@/components/HomeView";
@@ -14,6 +14,8 @@ import { UserModal } from "@/components/UserModal";
 import { ModelPriceModal } from "@/components/ModelPriceModal";
 import { NotFoundView } from "@/components/NotFoundView";
 import { ResetPasswordView } from "@/components/ResetPasswordView";
+import { EmailVerificationView } from "@/components/EmailVerificationView";
+import { StepUpDialog } from "@/components/StepUpDialog";
 import {
   AdminSection,
   AuditReport,
@@ -33,6 +35,10 @@ import {
   LoginMessage,
   ConsoleProfile,
   EmailFormState,
+	EmailSettings,
+	FeatureSettings,
+	EmailTemplate,
+	EmailTemplateFormState,
   	FinanceReport,
 	OperationsSnapshot,
   MFAEnrollment,
@@ -41,18 +47,27 @@ import {
   ProfileFormState,
   PriceMatrixSummary,
   ModelPriceFormState,
+  ModelStatusReport,
+  PublicFeatureSettings,
+  PlatformRole,
+  PlatformPermission,
+  PlatformRoleFormState,
   Principal,
   PublicModelSummary,
+  ProjectFormState,
+  ProjectMember,
+  ProjectSummary,
   SiteSettings,
   SectionRoute,
   SecuritySettings,
+  SMTPSettingsForm,
   SystemSettings,
   Theme,
   TokenSummary,
   TokenCreateFormState,
   TokenGroupOption,
   TranslationKey,
-  TenantSummary,
+  TenantMember,
   UsageReport,
   UserAdminFormState,
   UserSummary,
@@ -61,7 +76,7 @@ import { translations } from "@/locales/translations";
 
 function parseRoute(hash: string): SectionRoute {
   const raw = hash.replace(/^#/, "");
-  if (raw === "") {
+  if (raw === "" || raw === "home") {
     return { view: "home", section: "dashboard" };
   }
   if (raw === "login") {
@@ -73,6 +88,10 @@ function parseRoute(hash: string): SectionRoute {
   if (raw === "reset" || raw.startsWith("reset?")) {
     const [, query = ""] = raw.split("?", 2);
     return { view: "reset", section: "dashboard", reset_token: new URLSearchParams(query).get("token") || "" };
+  }
+  if (raw === "verify-email" || raw.startsWith("verify-email?")) {
+    const [, query = ""] = raw.split("?", 2);
+    return { view: "verify-email", section: "dashboard", verification_token: new URLSearchParams(query).get("token") || "" };
   }
   if (raw === "models") {
     return { view: "models", section: "dashboard" };
@@ -90,7 +109,7 @@ function parseRoute(hash: string): SectionRoute {
 
 function normalizeConsoleSection(value: string): ConsoleSection {
   if (value === "security") return "profile";
-  return value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "profile" || value === "docs"
+  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "profile" || value === "docs"
     ? value
     : "dashboard";
 }
@@ -98,7 +117,9 @@ function normalizeConsoleSection(value: string): ConsoleSection {
 function normalizeSection(value: string): AdminSection {
   if (value === "security") return "settings";
   return value === "ops" ||
+    value === "model-status" ||
     value === "users" ||
+    value === "roles" ||
     value === "groups" ||
     value === "tokens" ||
     value === "channels" ||
@@ -221,6 +242,29 @@ function defaultSiteSettings(): SiteSettings {
   return { site_name: "AI Token Gateway", site_logo_url: "", site_favicon_url: "" };
 }
 
+function defaultSMTPSettings(): SMTPSettingsForm {
+  return { smtp_host: "", smtp_port: 587, smtp_username: "", smtp_password: "", smtp_password_clear: false, smtp_from_email: "", smtp_from_name: "", smtp_tls: true, public_base_url: "" };
+}
+
+function defaultFeatureSettings(): FeatureSettings {
+	return {
+		email_enabled: false,
+		model_status_enabled: true,
+		email_verification_enabled: true,
+		email_password_reset_enabled: true,
+		email_subscription_enabled: true,
+		email_low_balance_alert_enabled: false,
+		email_recharge_success_enabled: false,
+		email_usage_limit_alert_enabled: false,
+		email_content_audit_enabled: false,
+		email_account_disabled_enabled: false,
+		email_cyber_policy_enabled: false,
+		email_operations_enabled: false,
+		balance_threshold: "0",
+		recharge_url: "",
+	};
+}
+
 function defaultGroupForm(): GroupFormState {
   return {
     id: "",
@@ -254,8 +298,6 @@ function defaultUserAdminForm(): UserAdminFormState {
     email: "",
     display_name: "",
     password: "",
-    tenant_id: "",
-    tenant_role: "developer",
   };
 }
 
@@ -310,6 +352,9 @@ function resolveLoginError(
 ) {
   if ((status === 401 || status === 403) && error?.toLowerCase() === "mfa_required") {
     return t("loginMFARequired");
+  }
+  if (status === 403 && error === "EMAIL_VERIFICATION_REQUIRED") {
+    return t("loginEmailVerificationRequired");
   }
   if (status === 401) {
     return t("loginInvalid");
@@ -383,6 +428,13 @@ export default function App() {
 	const [consoleUsageOffset, setConsoleUsageOffset] = useState(0);
   const [usageBusy, setUsageBusy] = useState(false);
   const [usageMessage, setUsageMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [modelStatusReport, setModelStatusReport] = useState<ModelStatusReport | null>(null);
+  const [modelStatusBusy, setModelStatusBusy] = useState(false);
+  const [modelStatusMessage, setModelStatusMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [adminModelStatusReport, setAdminModelStatusReport] = useState<ModelStatusReport | null>(null);
+  const [adminModelStatusBusy, setAdminModelStatusBusy] = useState(false);
+  const [adminModelStatusMessage, setAdminModelStatusMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [publicFeatures, setPublicFeatures] = useState<PublicFeatureSettings | null>(null);
   const [consoleProfile, setConsoleProfile] = useState<ConsoleProfile | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileFormState>(() => defaultProfileForm());
   const [emailForm, setEmailForm] = useState<EmailFormState>(() => defaultEmailForm());
@@ -397,12 +449,14 @@ export default function App() {
   const [usersBusy, setUsersBusy] = useState(false);
   const [usersMessage, setUsersMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [userActionBusy, setUserActionBusy] = useState("");
-  const [userTenants, setUserTenants] = useState<TenantSummary[]>([]);
   const [userFormOpen, setUserFormOpen] = useState(false);
-  const [userFormMode, setUserFormMode] = useState<"create" | "edit">("create");
   const [userForm, setUserForm] = useState<UserAdminFormState>(() => defaultUserAdminForm());
   const [userFormBusy, setUserFormBusy] = useState(false);
   const [userFormMessage, setUserFormMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [platformRoles, setPlatformRoles] = useState<PlatformRole[]>([]);
+  const [platformPermissions, setPlatformPermissions] = useState<PlatformPermission[]>([]);
+  const [platformRolesBusy, setPlatformRolesBusy] = useState(false);
+  const [platformRolesMessage, setPlatformRolesMessage] = useState<LoginMessage>({ kind: "", text: "" });
 
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings>({
     admin_mfa_enabled: false,
@@ -423,8 +477,25 @@ export default function App() {
   const [adminMfaBusy, setAdminMfaBusy] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(() => defaultSiteSettings());
   const [adminSiteForm, setAdminSiteForm] = useState<SiteSettings>(() => defaultSiteSettings());
-  const [siteSettingsMessage, setSiteSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
-  const [siteSettingsBusy, setSiteSettingsBusy] = useState(false);
+	  const [siteSettingsMessage, setSiteSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
+	  const [siteSettingsBusy, setSiteSettingsBusy] = useState(false);
+	  const [smtpForm, setSmtpForm] = useState<SMTPSettingsForm>(() => defaultSMTPSettings());
+	  const [emailSettings, setEmailSettings] = useState<EmailSettings | null>(null);
+	  const [emailBusy, setEmailBusy] = useState(false);
+	  const [emailMessage, setEmailMessage] = useState<LoginMessage>({ kind: "", text: "" });
+	  const [emailTestRecipient, setEmailTestRecipient] = useState("");
+	  const [smtpConnectionBusy, setSMTPConnectionBusy] = useState(false);
+	  const [smtpMessageBusy, setSMTPMessageBusy] = useState(false);
+	  const [featureSettings, setFeatureSettings] = useState<FeatureSettings>(() => defaultFeatureSettings());
+	  const [featureBusy, setFeatureBusy] = useState(false);
+	  const [featureMessage, setFeatureMessage] = useState<LoginMessage>({ kind: "", text: "" });
+	  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
+	  const [emailTemplatesBusy, setEmailTemplatesBusy] = useState(false);
+	  const [emailTemplatesMessage, setEmailTemplatesMessage] = useState<LoginMessage>({ kind: "", text: "" });
+	  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpCode, setStepUpCode] = useState("");
+  const [stepUpError, setStepUpError] = useState("");
+  const stepUpResolver = useRef<((code: string | null) => void) | null>(null);
 
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [channelsMessage, setChannelsMessage] = useState<LoginMessage>({ kind: "", text: "" });
@@ -441,7 +512,7 @@ export default function App() {
   const [tokensBusy, setTokensBusy] = useState(false);
   const [tokenActionBusy, setTokenActionBusy] = useState("");
   const [tokenCreateOpen, setTokenCreateOpen] = useState(false);
-  const [tokenCreateMode, setTokenCreateMode] = useState<"admin" | "console">("console");
+  const [tokenCreateMode, setTokenCreateMode] = useState<"console">("console");
   const [tokenCreateForm, setTokenCreateForm] = useState<TokenCreateFormState>(() => defaultTokenCreateForm());
   const [tokenCreateBusy, setTokenCreateBusy] = useState(false);
   const [tokenCreateMessage, setTokenCreateMessage] = useState<LoginMessage>({ kind: "", text: "" });
@@ -449,6 +520,20 @@ export default function App() {
   const [tokenRevokeConfirm, setTokenRevokeConfirm] = useState("");
   const [consoleTokenGroups, setConsoleTokenGroups] = useState<TokenGroupOption[]>([]);
   const [consoleTokenGroupsBusy, setConsoleTokenGroupsBusy] = useState(false);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectsBusy, setProjectsBusy] = useState(false);
+  const [projectsMessage, setProjectsMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [projectActionBusy, setProjectActionBusy] = useState("");
+  const [projectDeleteConfirm, setProjectDeleteConfirm] = useState("");
+  const [members, setMembers] = useState<TenantMember[]>([]);
+  const [membersBusy, setMembersBusy] = useState(false);
+  const [membersMessage, setMembersMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [memberActionBusy, setMemberActionBusy] = useState("");
+  const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
+  const [projectMembersBusy, setProjectMembersBusy] = useState(false);
+  const [projectMembersMessage, setProjectMembersMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [selectedProjectID, setSelectedProjectID] = useState("");
+  const [projectMemberActionBusy, setProjectMemberActionBusy] = useState("");
   const [channelFormOpen, setChannelFormOpen] = useState(false);
   const [channelForm, setChannelForm] = useState<ChannelFormState>(() => defaultChannelForm());
   const [channelActionBusy, setChannelActionBusy] = useState("");
@@ -501,6 +586,50 @@ export default function App() {
   const [profileMfaCode, setProfileMfaCode] = useState("");
 
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
+  const hasConsolePermission = (permission: string) => principal?.permissions?.includes(permission) === true;
+
+  function askForAdminStepUp(error = "") {
+    setStepUpError(error);
+    setStepUpCode("");
+    setStepUpOpen(true);
+    return new Promise<string | null>((resolve) => {
+      stepUpResolver.current = resolve;
+    });
+  }
+
+  function submitAdminStepUp(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!/^\d{6}$/.test(stepUpCode.trim())) {
+      setStepUpError(t("stepUpValidation"));
+      return;
+    }
+    const resolve = stepUpResolver.current;
+    stepUpResolver.current = null;
+    setStepUpOpen(false);
+    resolve?.(stepUpCode.trim());
+  }
+
+  function cancelAdminStepUp() {
+    const resolve = stepUpResolver.current;
+    stepUpResolver.current = null;
+    setStepUpOpen(false);
+    setStepUpCode("");
+    resolve?.(null);
+  }
+
+  async function fetchAdminSensitive(input: RequestInfo | URL, init: RequestInit = {}) {
+    let response = await fetch(input, init);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = (await response.clone().json().catch(() => ({}))) as { error?: string };
+      if (result.error !== "STEP_UP_REQUIRED" && result.error !== "MFA_CODE_INVALID") return response;
+      const code = await askForAdminStepUp(result.error === "MFA_CODE_INVALID" ? t("stepUpInvalid") : "");
+      if (!code) throw new Error("STEP_UP_CANCELLED");
+      const headers = new Headers(init.headers);
+      headers.set("X-MFA-Code", code);
+      response = await fetch(input, { ...init, headers });
+    }
+    return response;
+  }
 
   useEffect(() => {
     window.localStorage.setItem("ai-token-theme", theme);
@@ -529,6 +658,25 @@ export default function App() {
       }
     }
     loadSiteSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPublicFeatures() {
+      try {
+        const response = await fetch("/public/v1/features", { headers: { Accept: "application/json" } });
+        const result = (await response.json().catch(() => ({}))) as Partial<PublicFeatureSettings>;
+        if (!cancelled && response.ok) {
+          setPublicFeatures({ model_status_enabled: result.model_status_enabled !== false });
+        }
+      } catch {
+        // Keep optional customer features visible when the public settings endpoint is unavailable.
+      }
+    }
+    loadPublicFeatures();
     return () => {
       cancelled = true;
     };
@@ -645,7 +793,13 @@ export default function App() {
     if (route.view === "console") {
       setConsoleSection(route.console_section || "dashboard");
     }
-  }, [route, sessionReady, signedIn, audience]);
+  }, [route, sessionReady, signedIn, audience, publicFeatures]);
+
+  useEffect(() => {
+    if (route.view === "console" && route.console_section === "model-status" && publicFeatures?.model_status_enabled === false) {
+      window.location.hash = "#console/dashboard";
+    }
+  }, [route, publicFeatures]);
 
   useEffect(() => {
     if (!signedIn || audience !== "admin" || route.view !== "admin") {
@@ -657,9 +811,14 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens")) return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens" && consoleSection !== "projects")) return;
     refreshConsoleTokens(true);
     refreshConsoleTokenGroups();
+  }, [signedIn, audience, route.view, consoleSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens" && consoleSection !== "projects")) return;
+    refreshConsoleProjects(true);
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
@@ -682,11 +841,11 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "users") {
+    if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "users" && adminSection !== "roles")) {
       return;
     }
     refreshUsers(true);
-    refreshUserTenants();
+    refreshPlatformRoles(true);
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
@@ -697,6 +856,13 @@ export default function App() {
   useEffect(() => {
     if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "usage")) return;
     refreshConsoleUsage();
+  }, [signedIn, audience, route.view, consoleSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "model-status") return;
+    void refreshConsoleModelStatus(true);
+    const interval = window.setInterval(() => void refreshConsoleModelStatus(false), 15_000);
+    return () => window.clearInterval(interval);
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
@@ -775,6 +941,13 @@ export default function App() {
 	useEffect(() => {
 		if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "dashboard" && adminSection !== "ops")) return;
 		refreshOperations(true);
+	}, [signedIn, audience, route.view, adminSection, language]);
+
+	useEffect(() => {
+		if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "model-status") return;
+		void refreshAdminModelStatus(true);
+		const interval = window.setInterval(() => void refreshAdminModelStatus(false), 15_000);
+		return () => window.clearInterval(interval);
 	}, [signedIn, audience, route.view, adminSection, language]);
 
 	useEffect(() => {
@@ -1074,17 +1247,24 @@ export default function App() {
     setAdminProfileBusy(true);
     if (showPending) setAdminProfileMessage({ kind: "pending", text: t("systemSettingsLoading") });
     try {
-      const [profileResponse, mfaResponse, settingsResponse] = await Promise.all([
-        fetch("/admin/v1/profile", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
-        fetch("/admin/v1/auth/mfa/status", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
-        fetch("/admin/v1/settings", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
-      ]);
+	      const [profileResponse, mfaResponse, settingsResponse, emailResponse, featureResponse, templateResponse] = await Promise.all([
+	        fetch("/admin/v1/profile", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/auth/mfa/status", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/email", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/features", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/email/templates", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	      ]);
       const profileResult = (await profileResponse.json().catch(() => ({}))) as ConsoleProfile & { error?: string };
       const mfaResult = (await mfaResponse.json().catch(() => ({}))) as MFAStatus & { error?: string };
-      const settingsResult = (await settingsResponse.json().catch(() => ({}))) as Partial<SystemSettings> & { error?: string };
-      if (!profileResponse.ok) throw new Error(resolveProfileError(profileResponse.status, profileResult.error, t));
-      if (!mfaResponse.ok) throw new Error(resolveProfileError(mfaResponse.status, mfaResult.error, t));
-      if (!settingsResponse.ok) throw new Error(resolveSystemSettingsError(settingsResponse.status, settingsResult.error, t));
+	      const settingsResult = (await settingsResponse.json().catch(() => ({}))) as Partial<SystemSettings> & { error?: string };
+	      const emailResult = (await emailResponse.json().catch(() => ({}))) as EmailSettings & { error?: string };
+	      const featureResult = (await featureResponse.json().catch(() => ({}))) as FeatureSettings & { error?: string };
+	      const templateResult = (await templateResponse.json().catch(() => ({}))) as { templates?: EmailTemplate[]; error?: string };
+	      if (!profileResponse.ok) throw new Error(resolveProfileError(profileResponse.status, profileResult.error, t));
+	      if (!mfaResponse.ok) throw new Error(resolveProfileError(mfaResponse.status, mfaResult.error, t));
+	      if (!settingsResponse.ok) throw new Error(resolveSystemSettingsError(settingsResponse.status, settingsResult.error, t));
+	      if (!emailResponse.ok || !featureResponse.ok || !templateResponse.ok) throw new Error(t("emailSettingsUnavailable"));
       setAdminProfile(profileResult);
       setAdminProfileForm({ display_name: profileResult.display_name || "" });
       setAdminEmailForm({ email: profileResult.email || "", current_password: "" });
@@ -1102,6 +1282,20 @@ export default function App() {
         site_logo_url: settingsResult.site_logo_url?.trim() || "",
         site_favicon_url: settingsResult.site_favicon_url?.trim() || "",
       });
+	      setEmailSettings(emailResult);
+	      setSmtpForm({
+	        smtp_host: emailResult.smtp_host || "",
+	        smtp_port: Number(emailResult.smtp_port) || 587,
+	        smtp_username: emailResult.smtp_username || "",
+	        smtp_password: "",
+	        smtp_password_clear: false,
+	        smtp_from_email: emailResult.smtp_from_email || "",
+	        smtp_from_name: emailResult.smtp_from_name || "",
+	        smtp_tls: emailResult.smtp_tls !== false,
+	        public_base_url: emailResult.public_base_url || "",
+	      });
+	      setFeatureSettings({ ...defaultFeatureSettings(), ...featureResult });
+      setEmailTemplates(templateResult.templates || []);
       setSiteSettings({
         site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
         site_logo_url: settingsResult.site_logo_url?.trim() || "",
@@ -1287,11 +1481,11 @@ export default function App() {
     setSiteSettingsBusy(true);
     setSiteSettingsMessage({ kind: "pending", text: t("systemSettingsSaving") });
     try {
-      const response = await fetch("/admin/v1/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify(adminSiteForm),
+	      const response = await fetchAdminSensitive("/admin/v1/settings/site", {
+	        method: "PUT",
+	        headers: { "Content-Type": "application/json", Accept: "application/json" },
+	        credentials: "same-origin",
+	        body: JSON.stringify(adminSiteForm),
       });
       const result = (await response.json().catch(() => ({}))) as Partial<SystemSettings> & { error?: string };
       if (!response.ok) throw new Error(resolveSystemSettingsError(response.status, result.error, t));
@@ -1395,6 +1589,127 @@ export default function App() {
 		setOperationsBusy(false);
 	}
 
+	async function saveEmailSettings(event: React.FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		setEmailBusy(true);
+		setEmailMessage({ kind: "pending", text: t("emailSettingsSaving") });
+		try {
+			const response = await fetchAdminSensitive("/admin/v1/settings/email", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				credentials: "same-origin",
+				body: JSON.stringify(smtpForm),
+			});
+			const result = (await response.json().catch(() => ({}))) as EmailSettings & { error?: string };
+			if (!response.ok) throw new Error(response.status === 400 ? t("emailSettingsValidation") : t("emailSettingsSaveFailed"));
+			setEmailSettings(result);
+			setSmtpForm((current) => ({ ...current, smtp_password: "", smtp_password_clear: false }));
+			setEmailMessage({ kind: "success", text: t("emailSettingsSaved") });
+		} catch (error) {
+			setEmailMessage({ kind: "error", text: error instanceof Error ? error.message : t("emailSettingsSaveFailed") });
+		} finally {
+			setEmailBusy(false);
+		}
+	}
+
+	async function testSMTPConnection() {
+		setSMTPConnectionBusy(true);
+		setEmailMessage({ kind: "pending", text: t("emailSMTPTesting") });
+		try {
+			const response = await fetchAdminSensitive("/admin/v1/settings/email/test-connection", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+			if (!response.ok) throw new Error(t("emailSMTPConnectionFailed"));
+			setEmailMessage({ kind: "success", text: t("emailSMTPConnectionSuccess") });
+		} catch (error) {
+			setEmailMessage({ kind: "error", text: error instanceof Error ? error.message : t("emailSMTPConnectionFailed") });
+		} finally {
+			setSMTPConnectionBusy(false);
+		}
+	}
+
+	async function sendTestEmail() {
+		if (!emailTestRecipient.trim()) {
+			setEmailMessage({ kind: "error", text: t("emailTestRecipientRequired") });
+			return;
+		}
+		setSMTPMessageBusy(true);
+		setEmailMessage({ kind: "pending", text: t("emailTestSending") });
+		try {
+			const response = await fetchAdminSensitive("/admin/v1/settings/email/test-message", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				credentials: "same-origin",
+				body: JSON.stringify({ recipient: emailTestRecipient.trim() }),
+			});
+			if (!response.ok) throw new Error(t("emailTestFailed"));
+			setEmailMessage({ kind: "success", text: t("emailTestSent") });
+		} catch (error) {
+			setEmailMessage({ kind: "error", text: error instanceof Error ? error.message : t("emailTestFailed") });
+		} finally {
+			setSMTPMessageBusy(false);
+		}
+	}
+
+	async function saveFeatureSettings(next: FeatureSettings) {
+		setFeatureBusy(true);
+		setFeatureMessage({ kind: "pending", text: t("featureSettingsSaving") });
+		try {
+			const response = await fetchAdminSensitive("/admin/v1/settings/features", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				credentials: "same-origin",
+				body: JSON.stringify(next),
+			});
+			const result = (await response.json().catch(() => ({}))) as FeatureSettings & { error?: string };
+			if (!response.ok) throw new Error(response.status === 400 ? t("featureSettingsValidation") : t("featureSettingsSaveFailed"));
+			setFeatureSettings(result);
+			setPublicFeatures({ model_status_enabled: result.model_status_enabled !== false });
+			setEmailSettings((current) => current ? { ...current, email_enabled: result.email_enabled, balance_threshold: result.balance_threshold, recharge_url: result.recharge_url } : current);
+			setFeatureMessage({ kind: "success", text: t("featureSettingsSaved") });
+		} catch (error) {
+			setFeatureMessage({ kind: "error", text: error instanceof Error ? error.message : t("featureSettingsSaveFailed") });
+		} finally {
+			setFeatureBusy(false);
+		}
+	}
+
+	async function saveEmailTemplate(form: EmailTemplateFormState): Promise<boolean> {
+		setEmailTemplatesBusy(true);
+		setEmailTemplatesMessage({ kind: "pending", text: t("emailTemplateSaving") });
+		try {
+			const response = await fetchAdminSensitive(form.id ? `/admin/v1/settings/email/templates/${encodeURIComponent(form.id)}` : "/admin/v1/settings/email/templates", {
+				method: form.id ? "PUT" : "POST",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				credentials: "same-origin",
+				body: JSON.stringify(form),
+			});
+			const result = (await response.json().catch(() => ({}))) as EmailTemplate & { error?: string };
+			if (!response.ok) throw new Error(response.status === 400 ? t("emailTemplateValidation") : t("emailTemplateSaveFailed"));
+			setEmailTemplates((current) => form.id ? current.map((item) => item.id === result.id ? result : item) : [result, ...current]);
+			setEmailTemplatesMessage({ kind: "success", text: t("emailTemplateSaved") });
+			return true;
+		} catch (error) {
+			setEmailTemplatesMessage({ kind: "error", text: error instanceof Error ? error.message : t("emailTemplateSaveFailed") });
+			return false;
+		} finally {
+			setEmailTemplatesBusy(false);
+		}
+	}
+
+	async function deleteEmailTemplate(template: EmailTemplate) {
+		if (!window.confirm(t("emailTemplateDeleteConfirm"))) return;
+		setEmailTemplatesBusy(true);
+		try {
+			const response = await fetchAdminSensitive(`/admin/v1/settings/email/templates/${encodeURIComponent(template.id)}`, { method: "DELETE", headers: { Accept: "application/json" }, credentials: "same-origin" });
+			if (!response.ok) throw new Error(t("emailTemplateSaveFailed"));
+			setEmailTemplates((current) => current.filter((item) => item.id !== template.id));
+			setEmailTemplatesMessage({ kind: "success", text: t("emailTemplateDeleted") });
+		} catch (error) {
+			setEmailTemplatesMessage({ kind: "error", text: error instanceof Error ? error.message : t("emailTemplateSaveFailed") });
+		} finally {
+			setEmailTemplatesBusy(false);
+		}
+	}
+
 	async function refreshAudit(showPending = false, offset = 0) {
 		if (!signedIn || audience !== "admin") return;
 		setAuditBusy(true);
@@ -1490,7 +1805,7 @@ export default function App() {
     setGroupActionBusy(groupForm.id ? `update:${groupForm.id}` : "create");
     setGroupsMessage({ kind: "pending", text: t("groupsSavePending") });
     try {
-      const response = await fetch(groupForm.id ? `/admin/v1/groups/${encodeURIComponent(groupForm.id)}` : "/admin/v1/groups", {
+      const response = await fetchAdminSensitive(groupForm.id ? `/admin/v1/groups/${encodeURIComponent(groupForm.id)}` : "/admin/v1/groups", {
         method: groupForm.id ? "PUT" : "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -1529,7 +1844,7 @@ export default function App() {
     }
     setGroupActionBusy(`delete:${group.id}`);
     try {
-      const response = await fetch(`/admin/v1/groups/${encodeURIComponent(group.id)}`, {
+      const response = await fetchAdminSensitive(`/admin/v1/groups/${encodeURIComponent(group.id)}`, {
         method: "DELETE",
         headers: { Accept: "application/json" },
         credentials: "same-origin",
@@ -1577,7 +1892,7 @@ export default function App() {
     setTokenActionBusy(token.id);
     setTokensMessage({ kind: "pending", text: t("tokensLoading") });
     try {
-      const response = await fetch(`/admin/v1/tokens/${encodeURIComponent(token.id)}/group`, {
+      const response = await fetchAdminSensitive(`/admin/v1/tokens/${encodeURIComponent(token.id)}/group`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -1597,7 +1912,7 @@ export default function App() {
   }
 
   async function refreshConsoleTokens(showPending = false) {
-    if (!signedIn || audience !== "console" || !principal?.tenant_id) return;
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("token:read")) return;
     setTokensBusy(true);
     if (showPending) setTokensMessage({ kind: "pending", text: t("tokensLoading") });
     try {
@@ -1617,7 +1932,7 @@ export default function App() {
   }
 
   async function refreshConsoleTokenGroups() {
-    if (!signedIn || audience !== "console" || !principal?.tenant_id) return;
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("token:create")) return;
     setConsoleTokenGroupsBusy(true);
     try {
       const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/token-groups`, {
@@ -1634,8 +1949,175 @@ export default function App() {
     }
   }
 
+  async function refreshConsoleProjects(showPending = false) {
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("project:read")) return;
+    setProjectsBusy(true);
+    if (showPending) setProjectsMessage({ kind: "pending", text: t("consoleUsageLoading") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { projects?: ProjectSummary[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "projects unavailable");
+      const nextProjects = result.projects || [];
+      setProjects(nextProjects);
+      setPrincipal((current) => current ? { ...current, project_ids: nextProjects.filter((project) => project.status === "active").map((project) => project.id) } : current);
+      setProjectsMessage({ kind: "", text: "" });
+    } catch {
+      setProjectsMessage({ kind: "error", text: t("consoleProjectActionFailed") });
+    } finally {
+      setProjectsBusy(false);
+    }
+  }
+
+  async function refreshConsoleMembers(showPending = false) {
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("member:invite")) return;
+    setMembersBusy(true);
+    if (showPending) setMembersMessage({ kind: "pending", text: t("consoleUsageLoading") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/members`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { members?: TenantMember[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "members unavailable");
+      setMembers(result.members || []);
+      setMembersMessage({ kind: "", text: "" });
+    } catch {
+      setMembersMessage({ kind: "error", text: t("consoleMemberFailed") });
+    } finally {
+      setMembersBusy(false);
+    }
+  }
+
+  async function refreshConsoleProjectMembers(projectID: string, showPending = false) {
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !projectID || !hasConsolePermission("project:update")) return;
+    setProjectMembersBusy(true);
+    if (showPending) setProjectMembersMessage({ kind: "pending", text: t("consoleUsageLoading") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects/${encodeURIComponent(projectID)}/members`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { members?: ProjectMember[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "project members unavailable");
+      setProjectMembers(result.members || []);
+      setProjectMembersMessage({ kind: "", text: "" });
+    } catch {
+      setProjectMembers([]);
+      setProjectMembersMessage({ kind: "error", text: t("consoleProjectMemberFailed") });
+    } finally {
+      setProjectMembersBusy(false);
+    }
+  }
+
+  async function saveConsoleProject(form: ProjectFormState): Promise<boolean> {
+    if (!principal?.tenant_id) return false;
+    setProjectActionBusy(form.id || "new");
+    try {
+      const response = await fetch(form.id
+        ? `/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects/${encodeURIComponent(form.id)}`
+        : `/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects`, {
+        method: form.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name: form.name.trim(), slug: form.slug.trim(), status: form.status }),
+      });
+      const result = (await response.json().catch(() => ({}))) as ProjectSummary & { error?: string };
+      if (!response.ok) throw new Error(result.error || "project save failed");
+      await refreshConsoleProjects(false);
+      setProjectsMessage({ kind: "success", text: form.id ? t("consoleProjectSaveSuccess") : t("consoleProjectCreateSuccess") });
+      return true;
+    } catch (error) {
+      setProjectsMessage({ kind: "error", text: error instanceof Error && error.message === "TENANT_RESOURCE_EXISTS" ? t("consoleProjectActionFailed") : t("consoleProjectActionFailed") });
+      return false;
+    } finally {
+      setProjectActionBusy("");
+    }
+  }
+
+  async function deleteConsoleProject(project: ProjectSummary) {
+    if (!principal?.tenant_id) return;
+    if (projectDeleteConfirm !== project.id) { setProjectDeleteConfirm(project.id); setProjectsMessage({ kind: "pending", text: t("consoleProjectDelete") }); return; }
+    setProjectActionBusy(project.id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects/${encodeURIComponent(project.id)}`, { method: "DELETE", headers: { Accept: "application/json" }, credentials: "same-origin" });
+      if (!response.ok) throw new Error("project delete failed");
+      setProjectDeleteConfirm("");
+      if (selectedProjectID === project.id) { setSelectedProjectID(""); setProjectMembers([]); }
+      await refreshConsoleProjects(false);
+      setProjectsMessage({ kind: "success", text: t("consoleProjectDeleteSuccess") });
+    } catch {
+      setProjectsMessage({ kind: "error", text: t("consoleProjectActionFailed") });
+    } finally {
+      setProjectActionBusy("");
+    }
+  }
+
+  async function addConsoleMember(email: string, role: TenantMember["role"]) {
+    if (!principal?.tenant_id) return;
+    setMemberActionBusy("new");
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/members`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, credentials: "same-origin", body: JSON.stringify({ email, role }) });
+      if (!response.ok) throw new Error("member add failed");
+      await refreshConsoleMembers(false);
+      setMembersMessage({ kind: "success", text: t("consoleMemberAddSuccess") });
+    } catch { setMembersMessage({ kind: "error", text: t("consoleMemberFailed") }); } finally { setMemberActionBusy(""); }
+  }
+
+  async function updateConsoleMember(member: TenantMember, role: TenantMember["role"], status: TenantMember["status"]) {
+    if (!principal?.tenant_id) return;
+    setMemberActionBusy(member.user_id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/members/${encodeURIComponent(member.user_id)}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json" }, credentials: "same-origin", body: JSON.stringify({ role, status }) });
+      if (!response.ok) throw new Error("member update failed");
+      await refreshConsoleMembers(false);
+      setMembersMessage({ kind: "success", text: t("consoleMemberUpdateSuccess") });
+    } catch { setMembersMessage({ kind: "error", text: t("consoleMemberFailed") }); } finally { setMemberActionBusy(""); }
+  }
+
+  async function removeConsoleMember(member: TenantMember) {
+    if (!principal?.tenant_id) return;
+    setMemberActionBusy(member.user_id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/members/${encodeURIComponent(member.user_id)}`, { method: "DELETE", headers: { Accept: "application/json" }, credentials: "same-origin" });
+      if (!response.ok) throw new Error("member remove failed");
+      await refreshConsoleMembers(false);
+      setMembersMessage({ kind: "success", text: t("consoleMemberRemoveSuccess") });
+    } catch { setMembersMessage({ kind: "error", text: t("consoleMemberFailed") }); } finally { setMemberActionBusy(""); }
+  }
+
+  async function addConsoleProjectMember(email: string, role: ProjectMember["role"]) {
+    if (!principal?.tenant_id || !selectedProjectID) return;
+    setProjectMemberActionBusy("new");
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects/${encodeURIComponent(selectedProjectID)}/members`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, credentials: "same-origin", body: JSON.stringify({ email, role }) });
+      if (!response.ok) throw new Error("project member add failed");
+      await refreshConsoleProjectMembers(selectedProjectID, false);
+      await refreshConsoleProjects(false);
+      setProjectMembersMessage({ kind: "success", text: t("consoleProjectMemberSuccess") });
+    } catch { setProjectMembersMessage({ kind: "error", text: t("consoleProjectMemberFailed") }); } finally { setProjectMemberActionBusy(""); }
+  }
+
+  async function updateConsoleProjectMember(member: ProjectMember, role: ProjectMember["role"]) {
+    if (!principal?.tenant_id) return;
+    setProjectMemberActionBusy(member.user_id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects/${encodeURIComponent(member.project_id)}/members/${encodeURIComponent(member.user_id)}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json" }, credentials: "same-origin", body: JSON.stringify({ role }) });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "project member update failed");
+      await refreshConsoleProjectMembers(member.project_id, false);
+      setProjectMembersMessage({ kind: "success", text: t("consoleProjectMemberSuccess") });
+    } catch (error) { setProjectMembersMessage({ kind: "error", text: error instanceof Error && error.message === "LAST_PROJECT_ADMIN_PROTECTED" ? t("consoleProjectLastAdmin") : t("consoleProjectMemberFailed") }); } finally { setProjectMemberActionBusy(""); }
+  }
+
+  async function removeConsoleProjectMember(member: ProjectMember) {
+    if (!principal?.tenant_id) return;
+    setProjectMemberActionBusy(member.user_id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/projects/${encodeURIComponent(member.project_id)}/members/${encodeURIComponent(member.user_id)}`, { method: "DELETE", headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "project member remove failed");
+      await refreshConsoleProjectMembers(member.project_id, false);
+      await refreshConsoleProjects(false);
+      setProjectMembersMessage({ kind: "success", text: t("consoleProjectMemberSuccess") });
+    } catch (error) { setProjectMembersMessage({ kind: "error", text: error instanceof Error && error.message === "LAST_PROJECT_ADMIN_PROTECTED" ? t("consoleProjectLastAdmin") : t("consoleProjectMemberFailed") }); } finally { setProjectMemberActionBusy(""); }
+  }
+
   async function refreshConsoleBilling() {
-    if (!signedIn || audience !== "console" || !principal?.tenant_id) return;
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("billing:read")) return;
     setBillingBusy(true);
     setBillingMessage({ kind: "pending", text: t("consoleBillingLoading") });
     try {
@@ -1656,7 +2138,7 @@ export default function App() {
   }
 
 	async function refreshConsoleUsage(showPending = false, offset = consoleUsageOffset) {
-    if (!signedIn || audience !== "console" || !principal?.tenant_id) return;
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("usage:read")) return;
     setUsageBusy(true);
     if (showPending) setUsageMessage({ kind: "pending", text: t("consoleUsageLoading") });
     try {
@@ -1676,6 +2158,48 @@ export default function App() {
       setUsageMessage({ kind: "error", text: t("consoleUsageUnavailable") });
     } finally {
       setUsageBusy(false);
+	}
+  }
+
+  async function refreshConsoleModelStatus(showPending = false) {
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("model:status:read")) return;
+    setModelStatusBusy(true);
+    if (showPending) setModelStatusMessage({ kind: "pending", text: t("consoleModelStatusLoading") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/model-status`, {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as ModelStatusReport & { error?: string };
+      if (!response.ok) throw new Error(result.error || "model status unavailable");
+      setModelStatusReport(result);
+      setModelStatusMessage({ kind: "", text: "" });
+    } catch {
+      setModelStatusReport(null);
+      setModelStatusMessage({ kind: "error", text: t("consoleModelStatusUnavailable") });
+    } finally {
+      setModelStatusBusy(false);
+    }
+  }
+
+  async function refreshAdminModelStatus(showPending = false) {
+    if (!signedIn || audience !== "admin") return;
+    setAdminModelStatusBusy(true);
+    if (showPending) setAdminModelStatusMessage({ kind: "pending", text: t("adminModelStatusLoading") });
+    try {
+      const response = await fetch("/admin/v1/model-status", {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as ModelStatusReport & { error?: string };
+      if (!response.ok) throw new Error(result.error || "model status unavailable");
+      setAdminModelStatusReport(result);
+      setAdminModelStatusMessage({ kind: "", text: "" });
+    } catch {
+      setAdminModelStatusReport(null);
+      setAdminModelStatusMessage({ kind: "error", text: t("adminModelStatusUnavailable") });
+    } finally {
+      setAdminModelStatusBusy(false);
     }
   }
 
@@ -1715,15 +2239,102 @@ export default function App() {
     }
   }
 
-  async function refreshUserTenants() {
+  async function refreshPlatformRoles(showPending = false) {
     if (!signedIn || audience !== "admin") return;
+    setPlatformRolesBusy(true);
+    if (showPending) setPlatformRolesMessage({ kind: "pending", text: t("rolesLoading") });
     try {
-      const response = await fetch("/admin/v1/tenants", { headers: { Accept: "application/json" }, credentials: "same-origin" });
-      const result = (await response.json().catch(() => ({}))) as { tenants?: TenantSummary[] };
-      if (!response.ok) throw new Error("tenants unavailable");
-      setUserTenants(result.tenants || []);
+      const [rolesResponse, permissionsResponse] = await Promise.all([
+        fetch("/admin/v1/roles", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+        fetch("/admin/v1/permissions", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+      ]);
+      const rolesResult = (await rolesResponse.json().catch(() => ({}))) as { roles?: PlatformRole[]; error?: string };
+      const permissionsResult = (await permissionsResponse.json().catch(() => ({}))) as { permissions?: PlatformPermission[]; error?: string };
+      if (!rolesResponse.ok || !permissionsResponse.ok) throw new Error(rolesResult.error || permissionsResult.error || "roles unavailable");
+      setPlatformRoles(rolesResult.roles || []);
+      setPlatformPermissions(permissionsResult.permissions || []);
+      setPlatformRolesMessage({ kind: "", text: "" });
     } catch {
-      setUserTenants([]);
+      setPlatformRolesMessage({ kind: "error", text: t("rolesUnavailable") });
+    } finally {
+      setPlatformRolesBusy(false);
+    }
+  }
+
+  async function savePlatformRole(form: PlatformRoleFormState): Promise<boolean> {
+    setPlatformRolesBusy(true);
+    setPlatformRolesMessage({ kind: "pending", text: t("rolesSaving") });
+    try {
+      const response = await fetchAdminSensitive(form.id ? `/admin/v1/roles/${encodeURIComponent(form.id)}` : "/admin/v1/roles", {
+        method: form.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ code: form.code.trim(), name: form.name.trim(), status: form.status, permissions: form.permissions }),
+      });
+      const result = (await response.json().catch(() => ({}))) as PlatformRole & { error?: string };
+      if (!response.ok) throw new Error(result.error || "role save failed");
+      await refreshPlatformRoles(false);
+      setPlatformRolesMessage({ kind: "success", text: form.id ? t("rolesUpdated") : t("rolesCreated") });
+      return true;
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      setPlatformRolesMessage({ kind: "error", text: code === "PLATFORM_ROLE_EXISTS" ? t("rolesExists") : code === "PLATFORM_OWNER_ROLE_PROTECTED" ? t("rolesProtected") : t("rolesSaveFailed") });
+      return false;
+    } finally {
+      setPlatformRolesBusy(false);
+    }
+  }
+
+  async function disablePlatformRole(role: PlatformRole) {
+    setPlatformRolesBusy(true);
+    setPlatformRolesMessage({ kind: "pending", text: t("rolesSaving") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/roles/${encodeURIComponent(role.id)}/disable`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "role disable failed");
+      await refreshPlatformRoles(false);
+      setPlatformRolesMessage({ kind: "success", text: t("rolesDisabledSuccess") });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      setPlatformRolesMessage({ kind: "error", text: code === "LAST_PLATFORM_ADMIN_PROTECTED" ? t("usersLastAdminProtected") : code === "PLATFORM_OWNER_ROLE_PROTECTED" ? t("rolesProtected") : t("rolesSaveFailed") });
+    } finally {
+      setPlatformRolesBusy(false);
+    }
+  }
+
+  async function loadPlatformUserRoles(userID: string) {
+    const response = await fetch(`/admin/v1/users/${encodeURIComponent(userID)}/roles`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+    const result = (await response.json().catch(() => ({}))) as { roles?: PlatformRole[]; error?: string };
+    if (!response.ok) throw new Error(result.error || "roles unavailable");
+    return result.roles || [];
+  }
+
+  async function savePlatformUserRoles(user: UserSummary, roleIDs: string[]): Promise<boolean> {
+    setPlatformRolesBusy(true);
+    setPlatformRolesMessage({ kind: "pending", text: t("rolesSaving") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/users/${encodeURIComponent(user.id)}/roles`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ role_ids: roleIDs }),
+      });
+      const result = (await response.json().catch(() => ({}))) as { roles?: PlatformRole[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "role binding failed");
+      setUsers((current) => current.map((item) => item.id === user.id ? { ...item, platform_roles: (result.roles || []).map((role) => role.code) } : item));
+      await refreshPlatformRoles(false);
+      setPlatformRolesMessage({ kind: "success", text: t("rolesBindingSaved") });
+      return true;
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      setPlatformRolesMessage({ kind: "error", text: code === "LAST_PLATFORM_ADMIN_PROTECTED" ? t("usersLastAdminProtected") : code === "PLATFORM_ADMIN_MFA_REQUIRED" ? t("rolesAdminMFARequired") : t("rolesBindingFailed") });
+      return false;
+    } finally {
+      setPlatformRolesBusy(false);
     }
   }
 
@@ -1732,7 +2343,7 @@ export default function App() {
     setUserActionBusy(user.id);
     setUsersMessage({ kind: "pending", text: t("usersUpdating") });
     try {
-      const response = await fetch(`/admin/v1/users/${encodeURIComponent(user.id)}/status`, {
+      const response = await fetchAdminSensitive(`/admin/v1/users/${encodeURIComponent(user.id)}/status`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -1743,29 +2354,19 @@ export default function App() {
       setUsers((current) => current.map((item) => item.id === user.id ? result : item));
       setUsersMessage({ kind: "success", text: t("usersUpdateSuccess") });
     } catch (error) {
-      setUsersMessage({ kind: "error", text: error instanceof Error && error.message === "LAST_PLATFORM_ADMIN_PROTECTED" ? t("usersLastAdminProtected") : t("usersUpdateFailed") });
+      setUsersMessage({ kind: "error", text: error instanceof Error && error.message === "LAST_PLATFORM_ADMIN_PROTECTED" ? t("usersLastAdminProtected") : error instanceof Error && error.message === "PLATFORM_OWNER_PROTECTED" ? t("usersPlatformOwnerProtected") : error instanceof Error && error.message === "USER_EMAIL_NOT_VERIFIED" ? t("usersEmailVerificationRequired") : t("usersUpdateFailed") });
     } finally {
       setUserActionBusy("");
     }
   }
 
-  function openCreateUser() {
-    setUserFormMode("create");
-    setUserForm(defaultUserAdminForm());
-    setUserFormMessage({ kind: "", text: "" });
-    setUserFormOpen(true);
-  }
-
   function openEditUser(user: UserSummary) {
     if (user.id === principal?.id) return;
-    setUserFormMode("edit");
     setUserForm({
       id: user.id,
       email: user.email,
       display_name: user.display_name,
       password: "",
-      tenant_id: "",
-      tenant_role: "developer",
     });
     setUserFormMessage({ kind: "", text: "" });
     setUserFormOpen(true);
@@ -1781,8 +2382,10 @@ export default function App() {
     event.preventDefault();
     const emailValue = userForm.email.trim();
     const displayName = userForm.display_name.trim();
-    const passwordValue = userForm.password.trim();
-    if (!emailValue || !displayName || (userFormMode === "create" && (!passwordValue || !userForm.tenant_id)) || (passwordValue && passwordValue.length < 12)) {
+    // Passwords are opaque credentials; whitespace at either edge is valid
+    // input and must not be silently removed before hashing.
+    const passwordValue = userForm.password;
+    if (!emailValue || !displayName || (passwordValue && passwordValue.length < 12)) {
       setUserFormMessage({ kind: "error", text: t("usersFormValidation") });
       return;
     }
@@ -1794,17 +2397,8 @@ export default function App() {
         display_name: displayName,
         password: passwordValue,
       };
-      let endpoint = "/admin/v1/users";
-      let method = "POST";
-      if (userFormMode === "create") {
-        payload.tenant_id = userForm.tenant_id;
-        payload.tenant_role = userForm.tenant_role;
-      } else {
-        endpoint = `/admin/v1/users/${encodeURIComponent(userForm.id)}`;
-        method = "PUT";
-      }
-      const response = await fetch(endpoint, {
-        method,
+      const response = await fetchAdminSensitive(`/admin/v1/users/${encodeURIComponent(userForm.id)}`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
         body: JSON.stringify(payload),
@@ -1812,47 +2406,40 @@ export default function App() {
       const result = (await response.json().catch(() => ({}))) as UserSummary & { error?: string };
       if (!response.ok) {
         if (result.error === "EMAIL_ALREADY_EXISTS") throw new Error(t("usersEmailExists"));
+        if (result.error === "PLATFORM_OWNER_PROTECTED") throw new Error(t("usersPlatformOwnerProtected"));
+        if (result.error === "USER_EMAIL_NOT_VERIFIED") throw new Error(t("usersEmailVerificationRequired"));
         if (result.error === "TENANT_NOT_FOUND") throw new Error(t("usersTenantUnavailable"));
         throw new Error(t("usersSaveFailed"));
       }
-      setUsers((current) => userFormMode === "create" ? [result, ...current] : current.map((item) => item.id === result.id ? result : item));
-      setUsersMessage({ kind: "success", text: userFormMode === "create" ? t("usersCreateSuccess") : t("usersEditSuccess") });
+      setUsers((current) => current.map((item) => item.id === result.id ? result : item));
+      setUsersMessage({ kind: "success", text: t("usersEditSuccess") });
       closeUserForm();
-    } catch (error) {
+      } catch (error) {
       setUserFormMessage({ kind: "error", text: error instanceof Error ? error.message : t("usersSaveFailed") });
     } finally {
       setUserFormBusy(false);
     }
   }
 
-  function handleRegistered(registeredEmail: string, registeredTenantID: string) {
+  function handleRegistered(registeredEmail: string, registeredTenantID: string, verificationRequired: boolean) {
     setEmail(registeredEmail);
     setTenantId(registeredTenantID);
     setPassword("");
     setMfaCode("");
     setAudience("console");
-    setLoginMessage({ kind: "success", text: t("registerSuccessGoLogin") });
+    setLoginMessage({ kind: "success", text: verificationRequired ? t("registerVerificationSent") : t("registerSuccessGoLogin") });
     window.location.hash = "#login";
   }
 
-  function openCreateToken(mode: "admin" | "console") {
-    const projectID = mode === "console" ? principal?.project_ids?.[0] || "" : "";
-    const availableGroups: TokenGroupOption[] = mode === "console"
-      ? consoleTokenGroups
-      : groups.map((group) => ({
-          id: group.id,
-          code: group.code,
-          name: group.name,
-          multiplier: group.multiplier,
-          billing_type: group.billing_type,
-          status: group.status,
-          models: group.models || [],
-        }));
+  function openCreateToken() {
+    if (!hasConsolePermission("token:create")) return;
+    const projectID = projects.find((project) => project.status === "active")?.id || principal?.project_ids?.[0] || "";
+    const availableGroups: TokenGroupOption[] = consoleTokenGroups;
     const defaultGroup = availableGroups.find((group) => group.code === "default") || availableGroups.find((group) => group.status === "active");
-    setTokenCreateMode(mode);
+    setTokenCreateMode("console");
     setTokenCreateForm({
       ...defaultTokenCreateForm(),
-      tenant_id: mode === "console" ? principal?.tenant_id || "" : "",
+      tenant_id: principal?.tenant_id || "",
       project_id: projectID,
       group_id: defaultGroup?.id || "",
     });
@@ -1874,7 +2461,7 @@ export default function App() {
     const name = tokenCreateForm.name.trim();
     const tenantID = tokenCreateForm.tenant_id.trim();
     const projectID = tokenCreateForm.project_id.trim();
-    if (!name || !projectID || !tokenCreateForm.group_id || (tokenCreateMode === "admin" && !tenantID)) {
+    if (!name || !projectID || !tokenCreateForm.group_id || !tenantID) {
       setTokenCreateMessage({ kind: "error", text: t("tokensCreateValidation") });
       return;
     }
@@ -1889,13 +2476,10 @@ export default function App() {
         allowed_ips: parseTokenList(tokenCreateForm.allowed_ips),
         allowed_domains: parseTokenList(tokenCreateForm.allowed_domains),
       };
-      if (tokenCreateMode === "admin") payload.tenant_id = tenantID;
       if (tokenCreateForm.expires_at) {
         payload.expires_at = new Date(tokenCreateForm.expires_at).toISOString();
       }
-      const endpoint = tokenCreateMode === "admin"
-        ? "/admin/v1/tokens"
-        : `/console/v1/tenants/${encodeURIComponent(principal?.tenant_id || "")}/tokens`;
+      const endpoint = `/console/v1/tenants/${encodeURIComponent(principal?.tenant_id || "")}/tokens`;
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -1906,8 +2490,7 @@ export default function App() {
       if (!response.ok) throw new Error(result.error || "token creation failed");
       setIssuedToken(result);
       setTokenCreateMessage({ kind: "success", text: t("tokensCreateSuccess") });
-      if (tokenCreateMode === "admin") await refreshTokens(false);
-      else await refreshConsoleTokens(false);
+      await refreshConsoleTokens(false);
     } catch {
       setTokenCreateMessage({ kind: "error", text: t("tokensCreateValidation") });
     } finally {
@@ -1949,7 +2532,7 @@ export default function App() {
     }
     setTokenActionBusy(token.id);
     try {
-      const response = await fetch(`/admin/v1/tokens/${encodeURIComponent(token.id)}`, {
+      const response = await fetchAdminSensitive(`/admin/v1/tokens/${encodeURIComponent(token.id)}`, {
         method: "DELETE",
         headers: { Accept: "application/json" },
         credentials: "same-origin",
@@ -2029,7 +2612,7 @@ export default function App() {
     setOfficialPriceSyncBusy(true);
     setBillingMessage({ kind: "pending", text: t("billingOfficialSyncing") });
     try {
-      const response = await fetch("/admin/v1/prices/sync-official", {
+      const response = await fetchAdminSensitive("/admin/v1/prices/sync-official", {
         method: "POST",
         headers: { Accept: "application/json" },
         credentials: "same-origin",
@@ -2103,7 +2686,7 @@ export default function App() {
     setModelPriceFormBusy(true);
     setModelPriceFormMessage({ kind: "pending", text: t("billingPriceSaving") });
     try {
-      const response = await fetch("/admin/v1/prices/publish", {
+      const response = await fetchAdminSensitive("/admin/v1/prices/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -2143,7 +2726,7 @@ export default function App() {
     setBillingMessage({ kind: "pending", text: t("billingCrediting") });
     try {
       const idempotencyKey = `admin-credit-${crypto.randomUUID()}`;
-      const response = await fetch(
+      const response = await fetchAdminSensitive(
         `/admin/v1/tenants/${encodeURIComponent(tenant)}/billing/credit`,
         {
           method: "POST",
@@ -2282,7 +2865,7 @@ export default function App() {
     setModelDiscoveryBusy(true);
     setModelDiscoveryMessage({ kind: "pending", text: t("channelsFormDiscovering") });
     try {
-      const response = await fetch("/admin/v1/channels/discover-models", {
+      const response = await fetchAdminSensitive("/admin/v1/channels/discover-models", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -2353,7 +2936,7 @@ export default function App() {
         weight: Number(channelForm.weight),
         models,
       };
-      const response = await fetch(
+      const response = await fetchAdminSensitive(
         channelForm.id ? `/admin/v1/channels/${channelForm.id}` : "/admin/v1/channels",
         {
           method: channelForm.id ? "PUT" : "POST",
@@ -2382,7 +2965,7 @@ export default function App() {
     setChannelDeleteConfirm("");
     setChannelActionBusy(`status:${channel.id}`);
     try {
-      const response = await fetch(
+      const response = await fetchAdminSensitive(
         `/admin/v1/channels/${channel.id}/${nextStatus === "active" ? "enable" : "pause"}`,
         {
           method: "POST",
@@ -2410,7 +2993,7 @@ export default function App() {
     }
     setChannelActionBusy(`delete:${channel.id}`);
     try {
-      const response = await fetch(`/admin/v1/channels/${channel.id}`, {
+      const response = await fetchAdminSensitive(`/admin/v1/channels/${channel.id}`, {
         method: "DELETE",
         headers: { Accept: "application/json" },
         credentials: "same-origin",
@@ -2457,10 +3040,28 @@ export default function App() {
     setTokenRevokeConfirm("");
     setConsoleTokenGroups([]);
     setConsoleTokenGroupsBusy(false);
+    setProjects([]);
+    setProjectsBusy(false);
+    setProjectsMessage({ kind: "", text: "" });
+    setMembers([]);
+    setMembersBusy(false);
+    setMembersMessage({ kind: "", text: "" });
+    setProjectMembers([]);
+    setProjectMembersBusy(false);
+    setProjectMembersMessage({ kind: "", text: "" });
+    setSelectedProjectID("");
+    setProjectActionBusy("");
+    setProjectDeleteConfirm("");
+    setMemberActionBusy("");
+    setProjectMemberActionBusy("");
     setUsers([]);
     setUsersMessage({ kind: "", text: "" });
     setUsersBusy(false);
     setUserActionBusy("");
+    setPlatformRoles([]);
+    setPlatformPermissions([]);
+    setPlatformRolesBusy(false);
+    setPlatformRolesMessage({ kind: "", text: "" });
     setConsoleSection("dashboard");
     setUsageStatus(null);
 	setConsoleUsageReport(null);
@@ -2487,13 +3088,30 @@ export default function App() {
     setAdminMfaEnrollment(null);
     setAdminMfaCode("");
     setAdminMfaBusy(false);
-    setAdminSiteForm(defaultSiteSettings());
+	    setAdminSiteForm(defaultSiteSettings());
+	    setSmtpForm(defaultSMTPSettings());
+	    setEmailSettings(null);
+	    setEmailMessage({ kind: "", text: "" });
+	    setEmailTestRecipient("");
+	    setEmailBusy(false);
+	    setSMTPConnectionBusy(false);
+	    setSMTPMessageBusy(false);
+	    setFeatureSettings(defaultFeatureSettings());
+	    setFeatureMessage({ kind: "", text: "" });
+	    setFeatureBusy(false);
+	    setEmailTemplates([]);
+	    setEmailTemplatesBusy(false);
+	    setEmailTemplatesMessage({ kind: "", text: "" });
     setSiteSettingsMessage({ kind: "", text: "" });
     setSiteSettingsBusy(false);
     setModelCatalog([]);
     setModelCatalogMessage({ kind: "", text: "" });
     setModelCatalogBusy(false);
+    setAdminModelStatusReport(null);
+    setAdminModelStatusMessage({ kind: "", text: "" });
+    setAdminModelStatusBusy(false);
     setOfficialPriceSyncBusy(false);
+    cancelAdminStepUp();
     setChannelFormOpen(false);
     setChannelForm(defaultChannelForm());
     setChannelActionBusy("");
@@ -2536,7 +3154,7 @@ export default function App() {
     setSecurityBusy(true);
     setSecurityMessage({ kind: "pending", text: t("securitySaving") });
     try {
-      const response = await fetch("/admin/v1/security/settings", {
+      const response = await fetchAdminSensitive("/admin/v1/security/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -2640,6 +3258,8 @@ export default function App() {
           <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} />
         ) : currentView === "reset" ? (
           <ResetPasswordView language={language} token={route.reset_token} routeTo={routeTo} />
+        ) : currentView === "verify-email" ? (
+          <EmailVerificationView language={language} token={route.verification_token} routeTo={routeTo} />
         ) : currentView === "not-found" ? (
           <NotFoundView language={language} routeTo={routeTo} />
         ) : currentView === "console" ? (
@@ -2656,7 +3276,33 @@ export default function App() {
             refreshTokens={refreshConsoleTokens}
             revokeToken={revokeConsoleToken}
             revokeConfirm={tokenRevokeConfirm}
-            openCreateToken={() => openCreateToken("console")}
+            openCreateToken={openCreateToken}
+            projects={projects}
+            projectsBusy={projectsBusy}
+            projectsMessage={projectsMessage}
+            refreshProjects={refreshConsoleProjects}
+            saveProject={saveConsoleProject}
+            deleteProject={deleteConsoleProject}
+            projectActionBusy={projectActionBusy}
+            projectDeleteConfirm={projectDeleteConfirm}
+            members={members}
+            membersBusy={membersBusy}
+            membersMessage={membersMessage}
+            refreshMembers={refreshConsoleMembers}
+            addMember={addConsoleMember}
+            updateMember={updateConsoleMember}
+            removeMember={removeConsoleMember}
+            memberActionBusy={memberActionBusy}
+            projectMembers={projectMembers}
+            projectMembersBusy={projectMembersBusy}
+            projectMembersMessage={projectMembersMessage}
+            selectedProjectID={selectedProjectID}
+            selectProject={setSelectedProjectID}
+            refreshProjectMembers={refreshConsoleProjectMembers}
+            addProjectMember={addConsoleProjectMember}
+            updateProjectMember={updateConsoleProjectMember}
+            removeProjectMember={removeConsoleProjectMember}
+            projectMemberActionBusy={projectMemberActionBusy}
             billingAccount={billingAccount}
             billingBusy={billingBusy}
             billingMessage={billingMessage}
@@ -2666,6 +3312,11 @@ export default function App() {
             usageMessage={usageMessage}
             refreshUsage={refreshConsoleUsage}
 			 consoleUsageReport={consoleUsageReport}
+            modelStatusEnabled={publicFeatures?.model_status_enabled !== false}
+            modelStatusReport={modelStatusReport}
+            modelStatusBusy={modelStatusBusy}
+            modelStatusMessage={modelStatusMessage}
+            refreshModelStatus={refreshConsoleModelStatus}
             consoleProfile={consoleProfile}
             profileForm={profileForm}
             setProfileForm={setProfileForm}
@@ -2723,7 +3374,6 @@ export default function App() {
             tokensMessage={tokensMessage}
             refreshTokens={refreshTokens}
             updateTokenGroup={updateTokenGroup}
-            openCreateToken={() => openCreateToken("admin")}
             revokeToken={revokeAdminToken}
             tokenRevokeConfirm={tokenRevokeConfirm}
             tokenActionBusy={tokenActionBusy}
@@ -2731,10 +3381,18 @@ export default function App() {
             usersBusy={usersBusy}
             usersMessage={usersMessage}
             refreshUsers={refreshUsers}
-            openCreateUser={openCreateUser}
             openEditUser={openEditUser}
             updateUserStatus={updateUserStatus}
             userActionBusy={userActionBusy}
+            platformRoles={platformRoles}
+            platformPermissions={platformPermissions}
+            platformRolesBusy={platformRolesBusy}
+            platformRolesMessage={platformRolesMessage}
+            refreshPlatformRoles={refreshPlatformRoles}
+            savePlatformRole={savePlatformRole}
+            disablePlatformRole={disablePlatformRole}
+            loadPlatformUserRoles={loadPlatformUserRoles}
+            savePlatformUserRoles={savePlatformUserRoles}
             prices={prices}
             billingAccount={billingAccount}
             billingMessage={billingMessage}
@@ -2776,6 +3434,27 @@ export default function App() {
             siteBusy={siteSettingsBusy}
             siteMessage={siteSettingsMessage}
             saveSiteSettings={saveSystemSettings}
+	            smtpForm={smtpForm}
+	            setSmtpForm={setSmtpForm}
+	            emailSettings={emailSettings}
+	            emailBusy={emailBusy}
+	            emailMessage={emailMessage}
+	            emailTestRecipient={emailTestRecipient}
+	            setEmailTestRecipient={setEmailTestRecipient}
+	            smtpConnectionBusy={smtpConnectionBusy}
+	            smtpMessageBusy={smtpMessageBusy}
+	            saveEmailSettings={saveEmailSettings}
+	            testSMTPConnection={testSMTPConnection}
+	            sendTestEmail={sendTestEmail}
+	            featureSettings={featureSettings}
+	            featureBusy={featureBusy}
+	            featureMessage={featureMessage}
+	            saveFeatureSettings={saveFeatureSettings}
+	            emailTemplates={emailTemplates}
+	            emailTemplatesBusy={emailTemplatesBusy}
+	            emailTemplatesMessage={emailTemplatesMessage}
+	            saveEmailTemplate={saveEmailTemplate}
+	            deleteEmailTemplate={deleteEmailTemplate}
             usageReport={usageReport}
             usageReportBusy={usageReportBusy}
             usageReportMessage={usageReportMessage}
@@ -2807,6 +3486,10 @@ export default function App() {
             reportTo={reportTo}
             setReportTo={(value: string) => { setReportTo(value); setReportOffset(0); }}
              reportOffset={reportOffset}
+			 adminModelStatusReport={adminModelStatusReport}
+			 adminModelStatusBusy={adminModelStatusBusy}
+			 adminModelStatusMessage={adminModelStatusMessage}
+			 refreshAdminModelStatus={refreshAdminModelStatus}
 			 operationsSnapshot={operationsSnapshot}
 			 operationsBusy={operationsBusy}
              refreshOperations={refreshOperations}
@@ -2817,6 +3500,17 @@ export default function App() {
            />
         )}
       </main>
+
+      <StepUpDialog
+        language={language}
+        open={stepUpOpen}
+        code={stepUpCode}
+        error={stepUpError}
+        busy={false}
+        setCode={setStepUpCode}
+        onSubmit={submitAdminStepUp}
+        onCancel={cancelAdminStepUp}
+      />
 
       {/* Global Channel Modal */}
       <ChannelModal
@@ -2857,9 +3551,9 @@ export default function App() {
         language={language}
         form={tokenCreateForm}
         setForm={setTokenCreateForm}
-        projectIDs={tokenCreateMode === "console" ? principal?.project_ids || [] : []}
-        groups={tokenCreateMode === "console" ? consoleTokenGroups : groups.map((group) => ({ id: group.id, code: group.code, name: group.name, multiplier: group.multiplier, billing_type: group.billing_type, status: group.status, models: group.models || [] }))}
-        groupsBusy={tokenCreateMode === "console" ? consoleTokenGroupsBusy : groupsBusy}
+        projectIDs={projects.filter((project) => project.status === "active").map((project) => project.id)}
+        groups={consoleTokenGroups}
+        groupsBusy={consoleTokenGroupsBusy}
         busy={tokenCreateBusy}
         message={tokenCreateMessage}
         issuedToken={issuedToken}
@@ -2869,10 +3563,8 @@ export default function App() {
 
       <UserModal
         open={userFormOpen}
-        mode={userFormMode}
         form={userForm}
         setForm={setUserForm}
-        tenants={userTenants}
         language={language}
         busy={userFormBusy}
         message={userFormMessage}

@@ -93,6 +93,7 @@ func (c *SQLCatalog) ListPublic(ctx context.Context) ([]Summary, error) {
 		       COUNT(DISTINCT cm.channel_id) FILTER (
 		           WHERE c.status = 'active'
 		             AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
+		             AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now())
 		       ),
 		       COALESCE(pricing.currency, official.currency),
 		       COALESCE(pricing.input_price_per_unit, official.input_price_per_unit),
@@ -122,11 +123,12 @@ func (c *SQLCatalog) ListPublic(ctx context.Context) ([]Summary, error) {
 			                 JOIN channels group_c ON group_c.id = rgc.channel_id
 			                 JOIN channel_models group_cm ON group_cm.channel_id = rgc.channel_id
 			                 WHERE rgc.group_id = rg.id
-			                   AND group_c.status = 'active'
-			                   AND (group_c.auto_disabled_until IS NULL OR group_c.auto_disabled_until <= now())
-			                   AND group_c.deleted_at IS NULL
-			                   AND group_cm.model_id = m.id
+		                   AND group_c.status = 'active'
+		                   AND (group_c.auto_disabled_until IS NULL OR group_c.auto_disabled_until <= now())
+		                   AND group_c.deleted_at IS NULL
+		                   AND group_cm.model_id = m.id
 	                   AND group_cm.enabled = true
+	                   AND (group_cm.auto_disabled_until IS NULL OR group_cm.auto_disabled_until <= now())
 	             )
 		       ), '[]'::jsonb)
 		FROM models m

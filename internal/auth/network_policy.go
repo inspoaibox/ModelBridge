@@ -6,9 +6,12 @@ import (
 	"strings"
 )
 
-// NetworkAllowlistAllows treats an empty allowlist as disabled. IP matches are
-// authoritative; domain matches use browser Origin/Referer host metadata and
-// are intended for browser clients, not as a substitute for mTLS.
+// NetworkAllowlistAllows treats an empty allowlist as disabled. IP/CIDR entries
+// match the actual peer address and are suitable for server-to-server calls;
+// domain entries match browser Origin/Referer metadata and are an alternative
+// policy for browser clients. Origin and Referer are client-controlled outside
+// a browser, so domain-only tokens must not be treated as a strong bearer-token
+// boundary for untrusted non-browser callers.
 func NetworkAllowlistAllows(principal *Principal, remoteAddr, origin, referer string) bool {
 	if principal == nil || principal.Type != PrincipalAPIToken {
 		return true
@@ -16,12 +19,14 @@ func NetworkAllowlistAllows(principal *Principal, remoteAddr, origin, referer st
 	if len(principal.AllowedIPs) == 0 && len(principal.AllowedDomains) == 0 {
 		return true
 	}
-	if sourceIPMatches(principal.AllowedIPs, remoteAddr) {
+	if len(principal.AllowedIPs) > 0 && sourceIPMatches(principal.AllowedIPs, remoteAddr) {
 		return true
 	}
-	for _, sourceDomain := range requestDomains(origin, referer) {
-		if sourceDomainMatches(principal.AllowedDomains, sourceDomain) {
-			return true
+	if len(principal.AllowedDomains) > 0 {
+		for _, sourceDomain := range requestDomains(origin, referer) {
+			if sourceDomainMatches(principal.AllowedDomains, sourceDomain) {
+				return true
+			}
 		}
 	}
 	return false

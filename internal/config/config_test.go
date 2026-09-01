@@ -134,6 +134,24 @@ func TestLoadAcceptsCompleteProductionConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsPublicRegistrationWithoutEmailVerification(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+	t.Setenv("DATABASE_URL", "postgres://app:password@db.example.com:5432/gateway")
+	t.Setenv("TOKEN_PEPPER", "token-pepper-with-at-least-thirty-two-chars")
+	t.Setenv("SESSION_PEPPER", "session-pepper-with-a-different-long-value")
+	t.Setenv("MFA_ENCRYPTION_KEY", hex.EncodeToString(make([]byte, 32)))
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://gateway.example.com")
+	t.Setenv("REGISTRATION_ENABLED", "true")
+	t.Setenv("REGISTRATION_EMAIL_VERIFICATION_REQUIRED", "false")
+	t.Setenv("PUBLIC_BASE_URL", "https://gateway.example.com")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
+	if _, err := Load(); err == nil {
+		t.Fatal("public registration must require email verification in production")
+	}
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
@@ -143,6 +161,7 @@ func clearConfigEnv(t *testing.T) {
 		"LOGIN_LOCK_DURATION", "APP_ENV", "CORS_ALLOWED_ORIGINS",
 		"REGISTRATION_ENABLED", "PUBLIC_BASE_URL", "SMTP_ADDR", "SMTP_FROM",
 		"SMTP_USERNAME", "SMTP_PASSWORD",
+		"REGISTRATION_EMAIL_VERIFICATION_REQUIRED",
 		"TRUSTED_PROXY_CIDRS",
 	} {
 		t.Setenv(name, "")

@@ -95,3 +95,78 @@ func TestParseGeminiMediaUsageMapsUsageMetadata(t *testing.T) {
 		t.Fatalf("Gemini usage metadata was not mapped: %#v", usage)
 	}
 }
+
+func TestGrokVoiceAndVideoUseXAIEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/stt":
+			if r.Method != http.MethodPost || !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data;") {
+				t.Fatalf("unexpected Grok STT request: %s %s", r.Method, r.URL.Path)
+			}
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := r.FormFile("file"); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{"text":"hello","usage":{"seconds":1.25}}`)
+		case "/v1/tts":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected Grok TTS method: %s", r.Method)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["text"] != "hello" || body["voice_id"] != "eve" || body["model"] != nil {
+				t.Fatalf("unexpected Grok TTS payload: %#v", body)
+			}
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write([]byte("audio"))
+		case "/v1/videos/generations":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected Grok video method: %s", r.Method)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["model"] != "grok-imagine-video-1.5" || body["prompt"] != "water" || body["duration"] != float64(12) || body["seconds"] != nil {
+				t.Fatalf("unexpected Grok video payload: %#v", body)
+			}
+			_, _ = io.WriteString(w, `{"request_id":"req-1","status":"pending"}`)
+		case "/v1/videos/req-1":
+			if r.Method != http.MethodGet {
+				t.Fatalf("unexpected Grok video status method: %s", r.Method)
+			}
+			_, _ = io.WriteString(w, `{"request_id":"req-1","status":"done","video":{"url":"https://cdn.example.com/video.mp4"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	transcript, err := (GrokProvider{}).TranscribeAudio(context.Background(), UpstreamAudioRequest{Channel: Channel{BaseURL: server.URL + "/v1"}, APIKey: "xai-test", Request: AudioRequest{Model: "grok-stt", FileName: "sample.mp3", FileType: "audio/mpeg", File: []byte("audio")}})
+	if err != nil || transcript.Usage.Metrics["input_audio_seconds"] != "1.250000" {
+		t.Fatalf("unexpected Grok STT result: %#v %v", transcript, err)
+	}
+	speech, err := (GrokProvider{}).SynthesizeSpeech(context.Background(), UpstreamSpeechRequest{Channel: Channel{BaseURL: server.URL + "/v1"}, APIKey: "xai-test", Request: SpeechRequest{Model: "grok-tts", Input: "hello", Payload: json.RawMessage(`{"voice":"eve"}`)}})
+	if err != nil || string(speech.Body) != "audio" {
+		t.Fatalf("unexpected Grok TTS result: %#v %v", speech, err)
+	}
+	created, err := (GrokProvider{}).CreateVideo(context.Background(), UpstreamVideoRequest{Channel: Channel{BaseURL: server.URL + "/v1"}, APIKey: "xai-test", Request: VideoCreateRequest{Model: "grok-imagine-video-1.5", Prompt: "water", Duration: "12", Payload: json.RawMessage(`{"seconds":12}`)}})
+	if err != nil || created.ID != "req-1" {
+		t.Fatalf("unexpected Grok video create result: %#v %v", created, err)
+	}
+	status, err := (GrokProvider{}).GetVideo(context.Background(), UpstreamVideoRequest{Channel: Channel{BaseURL: server.URL + "/v1"}, APIKey: "xai-test"}, "req-1")
+	if err != nil || status.Status != "done" {
+		t.Fatalf("unexpected Grok video status result: %#v %v", status, err)
+	}
+}
+
+func TestGrokDoesNotAdvertiseAnthropicStyleAudioTranslation(t *testing.T) {
+	var provider any = GrokProvider{}
+	if _, ok := provider.(AudioTranslationProvider); ok {
+		t.Fatal("Grok must not advertise unsupported audio translation")
+	}
+}

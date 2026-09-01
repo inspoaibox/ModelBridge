@@ -10,6 +10,62 @@ https://<gateway-domain>/v1
 
 使用租户控制台创建的 API Token。Token 必须已经绑定一个可用分组，并且当前模型已经被该分组中的渠道映射；否则请求会被拒绝。
 
+## 控制台模型状态
+
+登录租户控制台后，模型状态页面调用：
+
+```text
+GET /console/v1/tenants/{tenantID}/model-status
+```
+
+返回当前可见分组的模型路由摘要，包括 `normal`（正常）、`pending`（待观测）、`degraded`（部分可用）、`unavailable`（不可用）和 `disabled`（分组已停用）。活动分组可供租户选择；租户已有令牌绑定的停用分组也会保留显示，帮助解释令牌为何当前不可调用。路由数按该分组实际绑定的渠道模型映射统计；状态来自渠道启停、模型映射启停、自动熔断和真实请求成功/失败记录，不会主动请求上游，也不会返回 Base URL 或密钥。页面进入后默认每 15 秒刷新一次，并支持手动刷新。
+
+模型状态是否开放由管理员系统设置的功能开关控制：
+
+```text
+GET /public/v1/features
+```
+
+该接口只返回 `model_status_enabled`。关闭时租户前端隐藏模型状态菜单，直接访问模型状态接口会返回 `404` 和 `MODEL_STATUS_DISABLED`。管理员可以在具有 `operations:read` 权限的“模型监控”页面调用：
+
+```text
+GET /admin/v1/model-status
+```
+
+管理员视图按分组列出全部已配置模型，并显示路由可用数、当前状态、最近延迟、近 7 天真实请求可用率和最近请求状态条。它只读取数据库中的渠道映射、熔断健康字段和请求记录，不主动探测上游。
+
+## 管理员邮件设置
+
+管理员系统设置包含“基础设置”“邮件设置”和“功能开关”三个独立区域。基础设置只负责网站名称、Logo 和 Favicon；邮件设置负责 SMTP 主机、端口、用户名、密码、发件人、TLS、公开访问地址、连接测试和测试邮件；功能开关中的邮件总开关默认关闭，关闭时系统不会发送邮件，也不会因为邮箱验证阻塞注册。开启邮件系统前必须完成有效 SMTP 配置。
+
+邮件模板通过以下接口管理，所有写操作需要管理员权限和 Step-up MFA：
+
+```text
+GET    /admin/v1/settings/email
+PUT    /admin/v1/settings/email
+POST   /admin/v1/settings/email/test-connection
+POST   /admin/v1/settings/email/test-message
+GET    /admin/v1/settings/email/templates
+POST   /admin/v1/settings/email/templates
+PUT    /admin/v1/settings/email/templates/{templateID}
+DELETE /admin/v1/settings/email/templates/{templateID}
+GET    /admin/v1/settings/features
+PUT    /admin/v1/settings/features
+```
+
+模板支持 `zh` 和 `en`，HTML 内容可使用 `{{site_name}}`、`{{user_email}}`、`{{verification_url}}`、`{{reset_url}}`、`{{recharge_url}}`、`{{balance}}`、`{{amount}}`、`{{event_time}}` 等变量。SMTP 密码只在服务端加密保存，任何读取接口只返回是否已配置。
+
+## 注册与邮箱验证
+
+公开注册是否要求邮箱验证由管理员“邮件总开关”和“邮箱验证码”开关共同决定。邮件关闭时注册直接创建 active 账号，不使用邮件系统；两项开关开启且 SMTP 可用时，注册创建 `pending` 账号并向注册邮箱发送一次性链接。邮箱验证链接会打开 `/#verify-email?token=...`，前端随后调用：
+
+```text
+POST /console/v1/auth/email/verify
+{"token":"verify_..."}
+```
+
+验证令牌 30 分钟有效且只能使用一次。若邮件丢失，可以调用 `POST /console/v1/auth/email/resend` 请求重发；接口对未知邮箱返回相同的 accepted 语义，不暴露账号存在性。生产还必须在应用前配置 Captcha/Bot 防护和 WAF。
+
 ## OpenAI Chat Completions
 
 同步请求：
@@ -55,6 +111,10 @@ OpenAI/Grok 使用 OpenAI-compatible Embeddings；Gemini 使用官方 `EmbedCont
 `POST /v1/messages` 接受 Anthropic Messages 的文本、图片内容块、工具定义和工具结果，`stream: true` 返回 Anthropic SSE 事件。
 
 `POST /v1/responses` 提供文本和基础内容块映射，并支持文本流式事件。完整 Responses 高级事件、服务端工具和异步任务语义尚未开放。
+
+## Token 生命周期
+
+API Token 只能由当前登录用户在租户控制台创建，创建响应返回一次完整密钥；管理员不能代发用户 Token。创建表单需要选择项目和路由分组，可选设置模型/网络白名单、过期时间和速率限制。Token 列表按 `tenant_id + created_by` 返回，其他成员和管理员都不能看到完整密钥。用户可以撤销自己创建的 Token；账号、租户成员或项目权限失效后，解析器会拒绝该 Token，相关项目权限降级也会撤销已有 Token。
 
 ## 图片、音频与视频
 

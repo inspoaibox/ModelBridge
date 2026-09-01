@@ -4,9 +4,9 @@ export type Theme = "light" | "dark";
 export type Language = "zh" | "en";
 export type Audience = "admin" | "console";
 export type TranslationKey = keyof (typeof translations)["zh"];
-export type AdminSection = "dashboard" | "ops" | "users" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "settings";
-export type ConsoleSection = "dashboard" | "usage" | "projects" | "tokens" | "billing" | "profile" | "docs";
-export type View = "home" | "models" | "login" | "register" | "reset" | "admin" | "console" | "not-found";
+export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "settings";
+export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "profile" | "docs";
+export type View = "home" | "models" | "login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
 
 export interface Principal {
   id: string;
@@ -15,8 +15,10 @@ export interface Principal {
   email?: string;
   display_name?: string;
   roles?: string[];
+  permissions?: string[];
   tenant_id?: string;
   project_ids?: string[];
+  project_roles?: Record<string, string>;
 }
 
 export interface UserSummary {
@@ -32,21 +34,81 @@ export interface UserSummary {
   last_login_at?: string;
 }
 
+export interface PlatformPermission {
+  id: string;
+  resource: string;
+  action: string;
+  name: string;
+}
+
+export interface PlatformRole {
+  id: string;
+  code: string;
+  name: string;
+  status: "active" | "disabled";
+  member_count: number;
+  permissions: string[];
+  created_at: string;
+}
+
+export interface PlatformRoleFormState {
+  id: string;
+  code: string;
+  name: string;
+  status: "active" | "disabled";
+  permissions: string[];
+}
+
 export interface TenantSummary {
   id: string;
   name: string;
   slug: string;
 }
 
-export type UserTenantRole = "tenant_admin" | "developer" | "viewer";
+export interface TenantMember {
+  tenant_id: string;
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: "tenant_owner" | "tenant_admin" | "developer" | "viewer";
+  status: "active" | "suspended";
+  project_count: number;
+  created_at: string;
+}
+
+export interface ProjectSummary {
+  id: string;
+  tenant_id: string;
+  name: string;
+  slug: string;
+  status: "active" | "disabled";
+  created_by: string;
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectMember {
+  project_id: string;
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: "project_admin" | "developer" | "viewer";
+  created_at: string;
+}
+
+export interface ProjectFormState {
+  id: string;
+  name: string;
+  slug: string;
+  status: "active" | "disabled";
+}
 
 export interface UserAdminFormState {
   id: string;
   email: string;
   display_name: string;
   password: string;
-  tenant_id: string;
-  tenant_role: UserTenantRole;
 }
 
 export interface SecuritySettings {
@@ -61,7 +123,85 @@ export interface SiteSettings {
   site_favicon_url: string;
 }
 
-export interface SystemSettings extends SecuritySettings, SiteSettings {}
+export interface SystemSettings extends SecuritySettings, SiteSettings {
+  smtp_addr: string;
+  smtp_from: string;
+  smtp_username: string;
+  smtp_password_configured: boolean;
+  public_base_url: string;
+}
+
+export interface SMTPSettingsForm {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password: string;
+  smtp_password_clear: boolean;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_tls: boolean;
+  public_base_url: string;
+}
+
+export interface EmailSettings {
+  email_enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_username: string;
+  smtp_password_configured: boolean;
+  smtp_from_email: string;
+  smtp_from_name: string;
+  smtp_tls: boolean;
+  smtp_configured: boolean;
+  public_base_url: string;
+  balance_threshold: string;
+  recharge_url: string;
+  updated_at?: string;
+  updated_by?: string;
+}
+
+export interface FeatureSettings {
+  email_enabled: boolean;
+  model_status_enabled: boolean;
+  email_verification_enabled: boolean;
+  email_password_reset_enabled: boolean;
+  email_subscription_enabled: boolean;
+  email_low_balance_alert_enabled: boolean;
+  email_recharge_success_enabled: boolean;
+  email_usage_limit_alert_enabled: boolean;
+  email_content_audit_enabled: boolean;
+  email_account_disabled_enabled: boolean;
+  email_cyber_policy_enabled: boolean;
+  email_operations_enabled: boolean;
+  balance_threshold: string;
+  recharge_url: string;
+  updated_at?: string;
+  updated_by?: string;
+}
+
+export interface PublicFeatureSettings {
+  model_status_enabled: boolean;
+}
+
+export interface EmailTemplate {
+  id: string;
+  event_code: string;
+  language: "zh" | "en";
+  subject: string;
+  html_body: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmailTemplateFormState {
+  id: string;
+  event_code: string;
+  language: "zh" | "en";
+  subject: string;
+  html_body: string;
+  enabled: boolean;
+}
 
 export interface ChannelModel {
   model: string;
@@ -160,6 +300,45 @@ export interface GroupSummary {
   priority: number;
   channels: GroupChannelSummary[];
   models: string[];
+}
+
+export type ModelRouteStatus = "normal" | "pending" | "degraded" | "unavailable" | "disabled";
+
+export interface ModelStatus {
+  model: string;
+  provider: string;
+  status: ModelRouteStatus;
+  total_routes: number;
+  available_routes: number;
+  observed_routes: number;
+  consecutive_failures: number;
+  last_success_at?: string;
+  last_failure_at?: string;
+  last_latency_ms: number;
+  availability_7d: number;
+  request_count_7d: number;
+  recent_statuses?: string[];
+  last_request_at?: string;
+  last_request_status?: string;
+  last_failure_reason?: string;
+}
+
+export interface ModelStatusGroup {
+  group_id: string;
+  group_code: string;
+  group_name: string;
+  status: ModelRouteStatus;
+  group_status: "active" | "disabled";
+  multiplier: string;
+  rpm_limit: number;
+  billing_type: "prepaid" | "free";
+  models: ModelStatus[];
+  updated_at: string;
+}
+
+export interface ModelStatusReport {
+  updated_at: string;
+  groups: ModelStatusGroup[];
 }
 
 export interface GroupFormState {
@@ -449,6 +628,7 @@ export interface ConsoleProfile {
   tenant_id?: string;
   roles?: string[];
   project_ids?: string[];
+  project_roles?: Record<string, string>;
 }
 
 export interface ProfileFormState {
@@ -513,4 +693,5 @@ export interface SectionRoute {
   section: AdminSection;
   console_section?: ConsoleSection;
   reset_token?: string;
+  verification_token?: string;
 }

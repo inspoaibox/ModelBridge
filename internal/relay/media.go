@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -144,6 +146,18 @@ type AudioProvider interface {
 	SynthesizeSpeech(context.Context, UpstreamSpeechRequest) (MediaBinaryResponse, error)
 }
 
+type AudioTranscriptionProvider interface {
+	TranscribeAudio(context.Context, UpstreamAudioRequest) (MediaJSONResponse, error)
+}
+
+type AudioTranslationProvider interface {
+	TranslateAudio(context.Context, UpstreamAudioRequest) (MediaJSONResponse, error)
+}
+
+type SpeechProvider interface {
+	SynthesizeSpeech(context.Context, UpstreamSpeechRequest) (MediaBinaryResponse, error)
+}
+
 type VideoProvider interface {
 	CreateVideo(context.Context, UpstreamVideoRequest) (MediaJSONResponse, error)
 	GetVideo(context.Context, UpstreamVideoRequest, string) (MediaJSONResponse, error)
@@ -251,15 +265,19 @@ func (s *Service) audioRequest(ctx context.Context, principal *auth.Principal, r
 	return s.executeMediaJSON(ctx, principal, request.Model, requestType, estimated, request.RequestID, request.IdempotencyKey,
 		func(channel Channel, key string) (MediaJSONResponse, error) {
 			provider := s.providers[canonicalProvider(channel.Provider)]
-			audioProvider, ok := provider.(AudioProvider)
+			upstream := UpstreamAudioRequest{Channel: channel, APIKey: key, Request: request, UpstreamModel: upstreamModelFor(channel, request.Model)}
+			if translate {
+				translator, ok := provider.(AudioTranslationProvider)
+				if !ok {
+					return MediaJSONResponse{}, ErrProviderUnsupported
+				}
+				return translator.TranslateAudio(ctx, upstream)
+			}
+			transcriber, ok := provider.(AudioTranscriptionProvider)
 			if !ok {
 				return MediaJSONResponse{}, ErrProviderUnsupported
 			}
-			upstream := UpstreamAudioRequest{Channel: channel, APIKey: key, Request: request, UpstreamModel: upstreamModelFor(channel, request.Model)}
-			if translate {
-				return audioProvider.TranslateAudio(ctx, upstream)
-			}
-			return audioProvider.TranscribeAudio(ctx, upstream)
+			return transcriber.TranscribeAudio(ctx, upstream)
 		})
 }
 
@@ -271,11 +289,11 @@ func (s *Service) SynthesizeSpeech(ctx context.Context, principal *auth.Principa
 	return s.executeMediaBinary(ctx, principal, request.Model, "audio_speech", estimated, request.RequestID, request.IdempotencyKey,
 		func(channel Channel, key string) (MediaBinaryResponse, error) {
 			provider := s.providers[canonicalProvider(channel.Provider)]
-			audioProvider, ok := provider.(AudioProvider)
+			speechProvider, ok := provider.(SpeechProvider)
 			if !ok {
 				return MediaBinaryResponse{}, ErrProviderUnsupported
 			}
-			return audioProvider.SynthesizeSpeech(ctx, UpstreamSpeechRequest{Channel: channel, APIKey: key, Request: request, UpstreamModel: upstreamModelFor(channel, request.Model)})
+			return speechProvider.SynthesizeSpeech(ctx, UpstreamSpeechRequest{Channel: channel, APIKey: key, Request: request, UpstreamModel: upstreamModelFor(channel, request.Model)})
 		})
 }
 
@@ -582,8 +600,13 @@ func (s *Service) executeMediaJSON(ctx context.Context, principal *auth.Principa
 					return MediaJSONResponse{}, ErrProviderUnsupported
 				}
 			}
-			if requestType == "audio_translation" || requestType == "audio_transcription" {
-				if _, ok := provider.(AudioProvider); !ok {
+			if requestType == "audio_transcription" {
+				if _, ok := provider.(AudioTranscriptionProvider); !ok {
+					return MediaJSONResponse{}, ErrProviderUnsupported
+				}
+			}
+			if requestType == "audio_translation" {
+				if _, ok := provider.(AudioTranslationProvider); !ok {
 					return MediaJSONResponse{}, ErrProviderUnsupported
 				}
 			}
@@ -650,7 +673,7 @@ func (s *Service) executeMediaBinary(ctx context.Context, principal *auth.Princi
 		}
 		attempted[channelKey(channel)] = struct{}{}
 		provider := s.providers[canonicalProvider(channel.Provider)]
-		if _, ok := provider.(AudioProvider); !ok {
+		if _, ok := provider.(SpeechProvider); !ok {
 			lastErr = ErrProviderUnsupported
 			continue
 		}
@@ -886,7 +909,7 @@ func mediaMultipartRequest(ctx context.Context, baseURL, apiKey, path string, fi
 		}
 	}
 	if len(file) > 0 {
-		part, err := writer.CreateFormFile(fileField, fileName)
+		part, err := createMediaFilePart(writer, fileField, fileName, fileType)
 		if err != nil {
 			return nil, nil, 0, ErrInvalidRequest
 		}
@@ -895,7 +918,7 @@ func mediaMultipartRequest(ctx context.Context, baseURL, apiKey, path string, fi
 		}
 	}
 	if len(mask) > 0 {
-		part, err := writer.CreateFormFile("mask", maskName)
+		part, err := createMediaFilePart(writer, "mask", maskName, maskType)
 		if err != nil {
 			return nil, nil, 0, ErrInvalidRequest
 		}
@@ -924,6 +947,27 @@ func mediaMultipartRequest(ctx context.Context, baseURL, apiKey, path string, fi
 		return nil, response.Header, response.StatusCode, &UpstreamError{StatusCode: response.StatusCode, Err: ErrUpstream}
 	}
 	return data, response.Header, response.StatusCode, nil
+}
+
+func createMediaFilePart(writer *multipart.Writer, field, name, contentType string) (io.Writer, error) {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	if _, _, err := mime.ParseMediaType(contentType); err != nil {
+		contentType = "application/octet-stream"
+	}
+	return writer.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": []string{`form-data; name="` + escapeFormValue(field) + `"; filename="` + escapeFormValue(name) + `"`},
+		"Content-Type":        []string{contentType},
+	})
+}
+
+func escapeFormValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `_`)
+	value = strings.ReplaceAll(value, `"`, `_`)
+	value = strings.ReplaceAll(value, "\r", "_")
+	return strings.ReplaceAll(value, "\n", "_")
 }
 
 func mediaBinaryRequest(ctx context.Context, method, baseURL, apiKey, path string, body []byte, contentType string) (MediaBinaryResponse, error) {
@@ -979,11 +1023,8 @@ func decodeMediaJSON(data []byte, status int, header http.Header) (MediaJSONResp
 func parseMediaUsage(data []byte) MediaUsage {
 	usage := MediaUsage{Metrics: billing.MeteredUsage{}, Source: "upstream", Raw: append(json.RawMessage(nil), data...)}
 	var value struct {
-		ID       string            `json:"id"`
-		Usage    json.RawMessage   `json:"usage"`
-		Data     []json.RawMessage `json:"data"`
-		Duration float64           `json:"duration"`
-		Seconds  float64           `json:"seconds"`
+		Usage json.RawMessage   `json:"usage"`
+		Data  []json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(data, &value) != nil {
 		return usage
@@ -1051,16 +1092,6 @@ func parseMediaUsage(data []byte) MediaUsage {
 	if outputVideo > 0 {
 		usage.Metrics["output_video_tokens"] = strconv.FormatInt(outputVideo, 10)
 	}
-	seconds := providerUsage.Seconds
-	if seconds == 0 {
-		seconds = value.Duration
-	}
-	if seconds == 0 {
-		seconds = value.Seconds
-	}
-	if seconds > 0 {
-		usage.Metrics["input_audio_seconds"] = decimalFloat(seconds)
-	}
 	if len(value.Data) > 0 {
 		usage.Metrics["output_images"] = strconv.Itoa(len(value.Data))
 	}
@@ -1084,6 +1115,26 @@ func parseAudioResponseUsage(data []byte, file []byte) MediaUsage {
 	if _, ok := usage.Metrics["input_audio_seconds"]; !ok {
 		if seconds := wavDurationSeconds(file); seconds != "" {
 			usage.Metrics["input_audio_seconds"] = seconds
+		} else {
+			var value struct {
+				Seconds  float64 `json:"seconds"`
+				Duration float64 `json:"duration"`
+				Usage    struct {
+					Seconds float64 `json:"seconds"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal(data, &value) == nil {
+				seconds := value.Usage.Seconds
+				if seconds == 0 {
+					seconds = value.Seconds
+				}
+				if seconds == 0 {
+					seconds = value.Duration
+				}
+				if seconds > 0 {
+					usage.Metrics["input_audio_seconds"] = decimalFloat(seconds)
+				}
+			}
 		}
 	}
 	return usage

@@ -97,12 +97,15 @@ func TestSecurityHeadersAllowConfiguredHTTPSBrandAssets(t *testing.T) {
 	handler := withSecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/console/v1/profile", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	policy := rec.Header().Get("Content-Security-Policy")
 	if !strings.Contains(policy, "img-src 'self' https:") || !strings.Contains(policy, "frame-ancestors 'none'") {
 		t.Fatalf("unexpected content security policy: %q", policy)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("API responses must not be cacheable, got %q", rec.Header().Get("Cache-Control"))
 	}
 }
 
@@ -162,10 +165,11 @@ func TestOfficialPriceSyncRouteRequiresPricePublishPermission(t *testing.T) {
 				"price:publish": {},
 			},
 		},
-	}), nil, nil, false, "../../web", nil, nil, nil, nil, nil, service)
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, nil, false, "../../web", nil, nil, nil, nil, nil, service)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/prices/sync-official", nil)
 	req.Header.Set("Authorization", "Bearer price-publish")
+	req.Header.Set("X-MFA-Code", "123456")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || service.called != 1 {
@@ -177,6 +181,56 @@ func TestOfficialPriceSyncRouteRequiresPricePublishPermission(t *testing.T) {
 	handler.ServeHTTP(deniedRec, denied)
 	if deniedRec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthenticated price sync 401, got %d", deniedRec.Code)
+	}
+}
+
+func TestPlatformRoleManagementRoutesRequireStepUp(t *testing.T) {
+	service := &fakeUserAdminService{}
+	verifier := &fakeStepUpVerifier{}
+	ownerID := "11111111-1111-4111-8111-111111111111"
+	targetID := "22222222-2222-4222-8222-222222222222"
+	roleID := "33333333-3333-4333-8333-333333333333"
+	handler := NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsers(
+		auth.NewMiddleware(testResolver{
+			"owner": {ID: ownerID, Type: auth.PrincipalPlatformUser, Audience: auth.AudienceAdmin, Permissions: map[string]struct{}{
+				"role:read": {}, "role:update": {},
+			}},
+		}),
+		&auth.Services{StepUpMFA: verifier}, nil, false, "../../web", nil, nil, nil, nil, service,
+	)
+
+	read := httptest.NewRequest(http.MethodGet, "/admin/v1/roles", nil)
+	read.Header.Set("Authorization", "Bearer owner")
+	readRec := httptest.NewRecorder()
+	handler.ServeHTTP(readRec, read)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("expected role list 200, got %d: %s", readRec.Code, readRec.Body.String())
+	}
+
+	missing := httptest.NewRequest(http.MethodPost, "/admin/v1/roles", strings.NewReader(`{"code":"ops_admin","name":"Operations Admin","permissions":["channel:read"]}`))
+	missing.Header.Set("Authorization", "Bearer owner")
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, missing)
+	if missingRec.Code != http.StatusForbidden || !strings.Contains(missingRec.Body.String(), `"error":"STEP_UP_REQUIRED"`) {
+		t.Fatalf("missing role step-up must be rejected: %d %s", missingRec.Code, missingRec.Body.String())
+	}
+
+	create := httptest.NewRequest(http.MethodPost, "/admin/v1/roles", strings.NewReader(`{"code":"ops_admin","name":"Operations Admin","permissions":["channel:read"]}`))
+	create.Header.Set("Authorization", "Bearer owner")
+	create.Header.Set("X-MFA-Code", "123456")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusCreated || service.platformRole.Code != "ops_admin" || verifier.calls != 1 {
+		t.Fatalf("expected role create 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	bind := httptest.NewRequest(http.MethodPut, "/admin/v1/users/"+targetID+"/roles", strings.NewReader(`{"role_ids":["`+roleID+`"]}`))
+	bind.Header.Set("Authorization", "Bearer owner")
+	bind.Header.Set("X-MFA-Code", "123456")
+	bindRec := httptest.NewRecorder()
+	handler.ServeHTTP(bindRec, bind)
+	if bindRec.Code != http.StatusOK || service.boundUser != targetID || len(service.boundRoleIDs) != 1 {
+		t.Fatalf("expected role binding 200, got %d: %s", bindRec.Code, bindRec.Body.String())
 	}
 }
 
@@ -225,6 +279,41 @@ func TestAdminReportingRoutesRequireDedicatedPermissions(t *testing.T) {
 	handler.ServeHTTP(deniedRec, denied)
 	if deniedRec.Code != http.StatusForbidden {
 		t.Fatalf("expected finance permission denial, got %d", deniedRec.Code)
+	}
+}
+
+func TestSensitiveAdminRoutesRequireStepUpMFA(t *testing.T) {
+	verifier := &fakeStepUpVerifier{}
+	handler := NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSync(
+		auth.NewMiddleware(testResolver{
+			"admin-sensitive": {
+				ID:       "11111111-1111-4111-8111-111111111111",
+				Type:     auth.PrincipalPlatformUser,
+				Audience: auth.AudienceAdmin,
+				Permissions: map[string]struct{}{
+					"price:publish": {},
+				},
+			},
+		}),
+		&auth.Services{StepUpMFA: verifier}, nil, false, "../../web", nil, nil, nil, nil, nil, nil,
+		fakeBillingAdminService{},
+	)
+
+	missing := httptest.NewRequest(http.MethodPost, "/admin/v1/prices/publish", strings.NewReader(`{}`))
+	missing.Header.Set("Authorization", "Bearer admin-sensitive")
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, missing)
+	if missingRec.Code != http.StatusForbidden || !strings.Contains(missingRec.Body.String(), `"error":"STEP_UP_REQUIRED"`) {
+		t.Fatalf("missing step-up must be rejected: %d %s", missingRec.Code, missingRec.Body.String())
+	}
+
+	valid := httptest.NewRequest(http.MethodPost, "/admin/v1/prices/publish", strings.NewReader(`{"scope_type":"platform_default"}`))
+	valid.Header.Set("Authorization", "Bearer admin-sensitive")
+	valid.Header.Set("X-MFA-Code", "123456")
+	validRec := httptest.NewRecorder()
+	handler.ServeHTTP(validRec, valid)
+	if validRec.Code != http.StatusCreated || verifier.calls != 1 {
+		t.Fatalf("valid step-up must reach sensitive handler: %d %s calls=%d", validRec.Code, validRec.Body.String(), verifier.calls)
 	}
 }
 
@@ -363,7 +452,7 @@ func TestRelayInvokesConfiguredService(t *testing.T) {
 			Scopes:   map[string]struct{}{"model:use": {}},
 			TenantID: "tenant-1",
 		},
-	}), nil, service, false, "../../web")
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, service, false, "../../web")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
 		`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`,
@@ -400,6 +489,9 @@ func TestRelayEnforcesTokenNetworkAllowlistBeforeUpstream(t *testing.T) {
 			Type:     auth.PrincipalAPIToken,
 			Audience: auth.AudienceRelay,
 			Scopes:   map[string]struct{}{"model:use": {}},
+			AllowedIPs: map[string]struct{}{
+				"198.51.100.0/24": {},
+			},
 			AllowedDomains: map[string]struct{}{
 				"*.example.com": {},
 			},
@@ -507,7 +599,7 @@ func TestAdminBillingRoutesEnforceBillingPermissions(t *testing.T) {
 			Audience:    auth.AudienceAdmin,
 			Permissions: map[string]struct{}{},
 		},
-	}), nil, nil, false, "../../web", service)
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, nil, false, "../../web", service)
 
 	okRequest := httptest.NewRequest(http.MethodGet, "/admin/v1/prices", nil)
 	okRequest.Header.Set("Authorization", "Bearer billing-read")
@@ -545,7 +637,7 @@ func TestAdminChannelMutationRoutesRequireUpdatePermission(t *testing.T) {
 				"channel:read": {},
 			},
 		},
-	}), nil, service, false, "../../web")
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, service, false, "../../web")
 
 	body := `{
 		"name":"OpenAI Production",
@@ -559,6 +651,8 @@ func TestAdminChannelMutationRoutesRequireUpdatePermission(t *testing.T) {
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/channels", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer admin-update")
+	req.Header.Set("X-MFA-Code", "123456")
+	req.Header.Set("X-MFA-Code", "123456")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -591,7 +685,7 @@ func TestAdminChannelStatusAndDeleteRoutes(t *testing.T) {
 				"channel:update": {},
 			},
 		},
-	}), nil, service, false, "../../web")
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, service, false, "../../web")
 
 	for _, route := range []struct {
 		method string
@@ -603,6 +697,7 @@ func TestAdminChannelStatusAndDeleteRoutes(t *testing.T) {
 	} {
 		req := httptest.NewRequest(route.method, route.path, nil)
 		req.Header.Set("Authorization", "Bearer admin-update")
+		req.Header.Set("X-MFA-Code", "123456")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -615,6 +710,7 @@ func TestAdminChannelStatusAndDeleteRoutes(t *testing.T) {
 
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/admin/v1/channels/channel-1", nil)
 	deleteReq.Header.Set("Authorization", "Bearer admin-update")
+	deleteReq.Header.Set("X-MFA-Code", "123456")
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
@@ -648,11 +744,12 @@ func TestAdminChannelModelDiscoveryRequiresUpdatePermission(t *testing.T) {
 				"channel:read": {},
 			},
 		},
-	}), nil, service, false, "../../web")
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, service, false, "../../web")
 
 	body := `{"channel_id":"channel-1","provider":"openai","base_url":"https://api.openai.com/v1","api_key":"sk-discovery-secret"}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/channels/discover-models", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer admin-update")
+	req.Header.Set("X-MFA-Code", "123456")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -693,7 +790,7 @@ func TestAdminGroupRoutesEnforceGroupPermissions(t *testing.T) {
 				"group:update": {},
 			},
 		},
-	}), nil, nil, false, "../../web", service)
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, nil, false, "../../web", service)
 
 	readReq := httptest.NewRequest(http.MethodGet, "/admin/v1/groups", nil)
 	readReq.Header.Set("Authorization", "Bearer group-read")
@@ -705,6 +802,7 @@ func TestAdminGroupRoutesEnforceGroupPermissions(t *testing.T) {
 
 	createReq := httptest.NewRequest(http.MethodPost, "/admin/v1/groups", strings.NewReader(`{"code":"standard","name":"Standard","multiplier":"1","rpm_limit":0,"billing_type":"prepaid","priority":100,"channel_ids":[]}`))
 	createReq.Header.Set("Authorization", "Bearer group-update")
+	createReq.Header.Set("X-MFA-Code", "123456")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusCreated || service.createdBy != "user-2" {
@@ -747,7 +845,7 @@ func TestAdminTokenGroupRoutesEnforceTokenPermissions(t *testing.T) {
 				"token:create": {},
 			},
 		},
-	}), nil, nil, false, "../../web", service, nil)
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, nil, false, "../../web", service, nil)
 
 	readReq := httptest.NewRequest(http.MethodGet, "/admin/v1/tokens", nil)
 	readReq.Header.Set("Authorization", "Bearer token-read")
@@ -759,6 +857,7 @@ func TestAdminTokenGroupRoutesEnforceTokenPermissions(t *testing.T) {
 
 	updateReq := httptest.NewRequest(http.MethodPut, "/admin/v1/tokens/token-1/group", strings.NewReader(`{"group_id":"group-1"}`))
 	updateReq.Header.Set("Authorization", "Bearer token-update")
+	updateReq.Header.Set("X-MFA-Code", "123456")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
 	if updateRec.Code != http.StatusOK || service.updatedBy != "group-1" {
@@ -777,8 +876,8 @@ func TestAdminTokenGroupRoutesEnforceTokenPermissions(t *testing.T) {
 	createReq.Header.Set("Authorization", "Bearer token-create")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
-	if createRec.Code != http.StatusCreated || service.createdGroup != "group-1" || !strings.Contains(createRec.Body.String(), `"token":"sk-test-once"`) {
-		t.Fatalf("expected admin token create 201, got %d: %s", createRec.Code, createRec.Body.String())
+	if createRec.Code != http.StatusForbidden || !strings.Contains(createRec.Body.String(), `"error":"ADMIN_TOKEN_CREATION_DISABLED"`) {
+		t.Fatalf("expected admin token creation to be disabled, got %d: %s", createRec.Code, createRec.Body.String())
 	}
 }
 
@@ -809,7 +908,7 @@ func TestAdminUserRoutesEnforceUserPermissions(t *testing.T) {
 				"user:create": {},
 			},
 		},
-	}), nil, nil, false, "../../web", nil, nil, nil, nil, service)
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, nil, false, "../../web", nil, nil, nil, nil, service)
 
 	readReq := httptest.NewRequest(http.MethodGet, "/admin/v1/users", nil)
 	readReq.Header.Set("Authorization", "Bearer user-read")
@@ -831,12 +930,13 @@ func TestAdminUserRoutesEnforceUserPermissions(t *testing.T) {
 	createReq.Header.Set("Authorization", "Bearer user-create")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
-	if createRec.Code != http.StatusCreated || service.created.Email != "new@example.com" || strings.Contains(createRec.Body.String(), "password") {
-		t.Fatalf("expected user create 201 without password, got %d: %s", createRec.Code, createRec.Body.String())
+	if createRec.Code != http.StatusForbidden || !strings.Contains(createRec.Body.String(), `"error":"ADMIN_USER_CREATION_DISABLED"`) {
+		t.Fatalf("expected admin user creation to be disabled, got %d: %s", createRec.Code, createRec.Body.String())
 	}
 
 	updateReq := httptest.NewRequest(http.MethodPut, "/admin/v1/users/22222222-2222-4222-8222-222222222222/status", strings.NewReader(`{"status":"disabled"}`))
 	updateReq.Header.Set("Authorization", "Bearer user-update")
+	updateReq.Header.Set("X-MFA-Code", "123456")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
 	if updateRec.Code != http.StatusOK || service.status != "disabled" {
@@ -845,6 +945,7 @@ func TestAdminUserRoutesEnforceUserPermissions(t *testing.T) {
 
 	editReq := httptest.NewRequest(http.MethodPut, "/admin/v1/users/22222222-2222-4222-8222-222222222222", strings.NewReader(`{"email":"edited@example.com","display_name":"Edited User","password":"another-long-password"}`))
 	editReq.Header.Set("Authorization", "Bearer user-update")
+	editReq.Header.Set("X-MFA-Code", "123456")
 	editRec := httptest.NewRecorder()
 	handler.ServeHTTP(editRec, editReq)
 	if editRec.Code != http.StatusOK || service.updatedID != "22222222-2222-4222-8222-222222222222" || service.updated.Email != "edited@example.com" {
@@ -932,6 +1033,117 @@ func TestConsoleTokenRoutesAreTenantAndOwnerScoped(t *testing.T) {
 	}
 }
 
+func TestConsoleModelStatusRouteIsTenantAndPermissionBound(t *testing.T) {
+	groupService := &fakeGroupService{}
+	handler := NewWithRelayAndGroups(auth.NewMiddleware(testResolver{
+		"console-status": {
+			ID:       "user-1",
+			Type:     auth.PrincipalTenantUser,
+			Audience: auth.AudienceConsole,
+			TenantID: "tenant-1",
+			Permissions: map[string]struct{}{
+				"model:status:read": {},
+			},
+		},
+		"console-no-status": {
+			ID:       "user-2",
+			Type:     auth.PrincipalTenantUser,
+			Audience: auth.AudienceConsole,
+			TenantID: "tenant-1",
+		},
+	}), nil, nil, false, "../../web", groupService)
+
+	request := httptest.NewRequest(http.MethodGet, "/console/v1/tenants/tenant-1/model-status", nil)
+	request.Header.Set("Authorization", "Bearer console-status")
+	record := httptest.NewRecorder()
+	handler.ServeHTTP(record, request)
+	if record.Code != http.StatusOK || !strings.Contains(record.Body.String(), `"group_code":"standard"`) {
+		t.Fatalf("expected model status report 200, got %d: %s", record.Code, record.Body.String())
+	}
+
+	foreign := httptest.NewRequest(http.MethodGet, "/console/v1/tenants/tenant-2/model-status", nil)
+	foreign.Header.Set("Authorization", "Bearer console-status")
+	foreignRecord := httptest.NewRecorder()
+	handler.ServeHTTP(foreignRecord, foreign)
+	if foreignRecord.Code != http.StatusNotFound {
+		t.Fatalf("expected foreign tenant model status 404, got %d", foreignRecord.Code)
+	}
+
+	denied := httptest.NewRequest(http.MethodGet, "/console/v1/tenants/tenant-1/model-status", nil)
+	denied.Header.Set("Authorization", "Bearer console-no-status")
+	deniedRecord := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRecord, denied)
+	if deniedRecord.Code != http.StatusForbidden {
+		t.Fatalf("expected missing model status permission 403, got %d", deniedRecord.Code)
+	}
+}
+
+func TestModelStatusFeatureSwitchClosesConsoleRouteAndPublicFlag(t *testing.T) {
+	settings := &fakeSystemSettingsService{
+		features: adminsettings.FeatureSettings{ModelStatusEnabled: false},
+	}
+	handler := NewWithRelayAndGroups(auth.NewMiddleware(testResolver{
+		"console-status": {
+			ID:       "user-1",
+			Type:     auth.PrincipalTenantUser,
+			Audience: auth.AudienceConsole,
+			TenantID: "tenant-1",
+			Permissions: map[string]struct{}{
+				"model:status:read": {},
+			},
+		},
+	}), &auth.Services{SecuritySettings: settings}, nil, false, "../../web", &fakeGroupService{})
+
+	request := httptest.NewRequest(http.MethodGet, "/console/v1/tenants/tenant-1/model-status", nil)
+	request.Header.Set("Authorization", "Bearer console-status")
+	record := httptest.NewRecorder()
+	handler.ServeHTTP(record, request)
+	if record.Code != http.StatusNotFound || !strings.Contains(record.Body.String(), "MODEL_STATUS_DISABLED") {
+		t.Fatalf("expected disabled model status route, got %d: %s", record.Code, record.Body.String())
+	}
+
+	publicRequest := httptest.NewRequest(http.MethodGet, "/public/v1/features", nil)
+	publicRecord := httptest.NewRecorder()
+	handler.ServeHTTP(publicRecord, publicRequest)
+	if publicRecord.Code != http.StatusOK || !strings.Contains(publicRecord.Body.String(), `"model_status_enabled":false`) {
+		t.Fatalf("expected public model status flag false, got %d: %s", publicRecord.Code, publicRecord.Body.String())
+	}
+}
+
+func TestAdminModelStatusRouteRequiresOperationsPermission(t *testing.T) {
+	handler := NewWithRelayAndGroups(auth.NewMiddleware(testResolver{
+		"admin-ops": {
+			ID:       "admin-1",
+			Type:     auth.PrincipalPlatformUser,
+			Audience: auth.AudienceAdmin,
+			Permissions: map[string]struct{}{
+				"operations:read": {},
+			},
+		},
+		"admin-no-ops": {
+			ID:       "admin-2",
+			Type:     auth.PrincipalPlatformUser,
+			Audience: auth.AudienceAdmin,
+		},
+	}), nil, nil, false, "../../web", &fakeGroupService{})
+
+	allowed := httptest.NewRequest(http.MethodGet, "/admin/v1/model-status", nil)
+	allowed.Header.Set("Authorization", "Bearer admin-ops")
+	allowedRecord := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRecord, allowed)
+	if allowedRecord.Code != http.StatusOK || !strings.Contains(allowedRecord.Body.String(), `"group_code":"standard"`) {
+		t.Fatalf("expected admin model status report, got %d: %s", allowedRecord.Code, allowedRecord.Body.String())
+	}
+
+	denied := httptest.NewRequest(http.MethodGet, "/admin/v1/model-status", nil)
+	denied.Header.Set("Authorization", "Bearer admin-no-ops")
+	deniedRecord := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRecord, denied)
+	if deniedRecord.Code != http.StatusForbidden {
+		t.Fatalf("expected operations permission rejection, got %d", deniedRecord.Code)
+	}
+}
+
 func TestAdminSecuritySettingsRoutes(t *testing.T) {
 	settings := &fakeSecuritySettingsService{enabled: false}
 	handler := New(auth.NewMiddleware(testResolver{
@@ -946,7 +1158,7 @@ func TestAdminSecuritySettingsRoutes(t *testing.T) {
 				"audit:read":      {},
 			},
 		},
-	}), &auth.Services{SecuritySettings: settings}, false, "../../web")
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}, SecuritySettings: settings}, false, "../../web")
 
 	getReq := httptest.NewRequest(http.MethodGet, "/admin/v1/security/settings", nil)
 	getReq.Header.Set("Authorization", "Bearer admin-ok")
@@ -963,6 +1175,7 @@ func TestAdminSecuritySettingsRoutes(t *testing.T) {
 		`{"admin_mfa_enabled":true}`,
 	))
 	putReq.Header.Set("Authorization", "Bearer admin-ok")
+	putReq.Header.Set("X-MFA-Code", "123456")
 	putRec := httptest.NewRecorder()
 	handler.ServeHTTP(putRec, putReq)
 	if putRec.Code != http.StatusOK {
@@ -990,7 +1203,7 @@ func TestSystemSettingsRouteRequiresAdminPermission(t *testing.T) {
 			Type:     auth.PrincipalPlatformUser,
 			Audience: auth.AudienceAdmin,
 		},
-	}), &auth.Services{SecuritySettings: settings}, false, "../../web")
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}, SecuritySettings: settings}, false, "../../web")
 
 	read := httptest.NewRequest(http.MethodGet, "/admin/v1/settings", nil)
 	read.Header.Set("Authorization", "Bearer admin-settings")
@@ -1002,6 +1215,7 @@ func TestSystemSettingsRouteRequiresAdminPermission(t *testing.T) {
 
 	update := httptest.NewRequest(http.MethodPut, "/admin/v1/settings", strings.NewReader(`{"site_name":"Acme Gateway","site_logo_url":"/assets/acme.png","site_favicon_url":"https://cdn.example.com/acme.ico"}`))
 	update.Header.Set("Authorization", "Bearer admin-settings")
+	update.Header.Set("X-MFA-Code", "123456")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, update)
 	if updateRec.Code != http.StatusOK || settings.updated.SiteName != "Acme Gateway" {
@@ -1017,6 +1231,47 @@ func TestSystemSettingsRouteRequiresAdminPermission(t *testing.T) {
 	}
 }
 
+func TestAdminEmailSettingsRoutesAreProtectedAndSeparated(t *testing.T) {
+	settings := &fakeSystemSettingsService{}
+	stepUp := &fakeStepUpVerifier{}
+	handler := New(auth.NewMiddleware(testResolver{
+		"email-admin": {
+			ID:       "11111111-1111-4111-8111-111111111111",
+			Type:     auth.PrincipalPlatformUser,
+			Audience: auth.AudienceAdmin,
+			Permissions: map[string]struct{}{
+				"security:read":   {},
+				"security:update": {},
+			},
+		},
+	}), &auth.Services{StepUpMFA: stepUp, SecuritySettings: settings}, false, "../../web")
+
+	read := httptest.NewRequest(http.MethodGet, "/admin/v1/settings/email", nil)
+	read.Header.Set("Authorization", "Bearer email-admin")
+	readRec := httptest.NewRecorder()
+	handler.ServeHTTP(readRec, read)
+	if readRec.Code != http.StatusOK || !strings.Contains(readRec.Body.String(), `"email_enabled":false`) || strings.Contains(readRec.Body.String(), `"smtp_password":"`) {
+		t.Fatalf("expected separated email settings without password, got %d: %s", readRec.Code, readRec.Body.String())
+	}
+
+	update := httptest.NewRequest(http.MethodPut, "/admin/v1/settings/features", strings.NewReader(`{"email_enabled":false,"email_verification_enabled":true,"email_password_reset_enabled":true,"email_subscription_enabled":true,"email_low_balance_alert_enabled":false,"email_recharge_success_enabled":false,"email_usage_limit_alert_enabled":false,"email_content_audit_enabled":false,"email_account_disabled_enabled":false,"email_cyber_policy_enabled":false,"email_operations_enabled":false,"balance_threshold":"0","recharge_url":""}`))
+	update.Header.Set("Authorization", "Bearer email-admin")
+	update.Header.Set("X-MFA-Code", "123456")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, update)
+	if updateRec.Code != http.StatusOK || stepUp.calls == 0 {
+		t.Fatalf("expected protected feature update, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+
+	templates := httptest.NewRequest(http.MethodGet, "/admin/v1/settings/email/templates", nil)
+	templates.Header.Set("Authorization", "Bearer email-admin")
+	templatesRec := httptest.NewRecorder()
+	handler.ServeHTTP(templatesRec, templates)
+	if templatesRec.Code != http.StatusOK {
+		t.Fatalf("expected template list 200, got %d: %s", templatesRec.Code, templatesRec.Body.String())
+	}
+}
+
 func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
 	userService := &fakeProfileUserService{}
 	mfaService := &fakeMFASettingsService{}
@@ -1027,6 +1282,12 @@ func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
 			Audience: auth.AudienceConsole,
 			TenantID: "33333333-3333-4333-8333-333333333333",
 			Roles:    []string{"tenant_owner"},
+			Permissions: map[string]struct{}{
+				"token:read":   {},
+				"token:create": {},
+				"usage:read":   {},
+				"billing:read": {},
+			},
 			ProjectIDs: map[string]struct{}{
 				"44444444-4444-4444-8444-444444444444": {},
 			},
@@ -1069,8 +1330,16 @@ func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
 	profileRequest.Header.Set("Authorization", "Bearer console-user")
 	profileRec := httptest.NewRecorder()
 	handler.ServeHTTP(profileRec, profileRequest)
-	if profileRec.Code != http.StatusOK || !strings.Contains(profileRec.Body.String(), `"email":"user@example.com"`) {
+	if profileRec.Code != http.StatusOK || !strings.Contains(profileRec.Body.String(), `"email":"user@example.com"`) || !strings.Contains(profileRec.Body.String(), `"permissions":["billing:read","token:create","token:read","usage:read"]`) {
 		t.Fatalf("expected profile 200 with email, got %d: %s", profileRec.Code, profileRec.Body.String())
+	}
+
+	meRequest := httptest.NewRequest(http.MethodGet, "/console/v1/me", nil)
+	meRequest.Header.Set("Authorization", "Bearer console-user")
+	meRec := httptest.NewRecorder()
+	handler.ServeHTTP(meRec, meRequest)
+	if meRec.Code != http.StatusOK || !strings.Contains(meRec.Body.String(), `"permissions":["billing:read","token:create","token:read","usage:read"]`) {
+		t.Fatalf("console me response must include permissions, got %d: %s", meRec.Code, meRec.Body.String())
 	}
 
 	updateRequest := httptest.NewRequest(http.MethodPut, "/console/v1/profile", strings.NewReader(`{"display_name":"Updated User"}`))
@@ -1162,7 +1431,10 @@ func (s *fakeSecuritySettingsService) UpdateAdminMFAEnabled(_ context.Context, e
 
 type fakeSystemSettingsService struct {
 	fakeSecuritySettingsService
-	updated adminsettings.SystemSettingsUpdate
+	updated       adminsettings.SystemSettingsUpdate
+	emailSettings adminsettings.EmailSettings
+	features      adminsettings.FeatureSettings
+	templates     []adminsettings.EmailTemplate
 }
 
 func (s *fakeSystemSettingsService) GetSystemSettings(_ context.Context) (adminsettings.SystemSettings, error) {
@@ -1180,6 +1452,42 @@ func (s *fakeSystemSettingsService) UpdateSystemSettings(_ context.Context, _ st
 		SiteLogoURL:     update.SiteLogoURL,
 		SiteFaviconURL:  update.SiteFaviconURL,
 	}, nil
+}
+
+func (s *fakeSystemSettingsService) GetEmailSettings(context.Context) (adminsettings.EmailSettings, error) {
+	return s.emailSettings, nil
+}
+
+func (s *fakeSystemSettingsService) UpdateEmailSettings(_ context.Context, _ string, _ adminsettings.EmailSettingsUpdate) (adminsettings.EmailSettings, error) {
+	return s.emailSettings, nil
+}
+
+func (s *fakeSystemSettingsService) TestSMTPConnection(context.Context) error { return nil }
+
+func (s *fakeSystemSettingsService) SendTestEmail(context.Context, string) error { return nil }
+
+func (s *fakeSystemSettingsService) GetFeatureSettings(context.Context) (adminsettings.FeatureSettings, error) {
+	return s.features, nil
+}
+
+func (s *fakeSystemSettingsService) UpdateFeatureSettings(_ context.Context, _ string, _ adminsettings.FeatureSettingsUpdate) (adminsettings.FeatureSettings, error) {
+	return s.features, nil
+}
+
+func (s *fakeSystemSettingsService) ListEmailTemplates(context.Context) ([]adminsettings.EmailTemplate, error) {
+	return s.templates, nil
+}
+
+func (s *fakeSystemSettingsService) CreateEmailTemplate(context.Context, string, adminsettings.EmailTemplateMutation) (adminsettings.EmailTemplate, error) {
+	return adminsettings.EmailTemplate{}, nil
+}
+
+func (s *fakeSystemSettingsService) UpdateEmailTemplate(context.Context, string, string, adminsettings.EmailTemplateMutation) (adminsettings.EmailTemplate, error) {
+	return adminsettings.EmailTemplate{}, nil
+}
+
+func (s *fakeSystemSettingsService) DeleteEmailTemplate(context.Context, string, string) error {
+	return nil
 }
 
 type fakeRelayService struct {
@@ -1349,10 +1657,12 @@ func (s *fakeRegistrationService) Register(_ context.Context, request auth.Regis
 }
 
 type fakeUserAdminService struct {
-	status    string
-	created   users.CreateRequest
-	updated   users.UpdateRequest
-	updatedID string
+	status       string
+	updated      users.UpdateRequest
+	updatedID    string
+	platformRole users.PlatformRole
+	boundUser    string
+	boundRoleIDs []string
 }
 
 func (s *fakeUserAdminService) List(context.Context) ([]users.Summary, error) {
@@ -1361,11 +1671,6 @@ func (s *fakeUserAdminService) List(context.Context) ([]users.Summary, error) {
 
 func (s *fakeUserAdminService) ListTenants(context.Context) ([]users.TenantSummary, error) {
 	return []users.TenantSummary{{ID: "33333333-3333-4333-8333-333333333333", Name: "Acme", Slug: "acme"}}, nil
-}
-
-func (s *fakeUserAdminService) Create(_ context.Context, _ string, request users.CreateRequest) (users.Summary, error) {
-	s.created = request
-	return users.Summary{ID: "22222222-2222-4222-8222-222222222222", Email: request.Email, DisplayName: request.DisplayName, Status: "active"}, nil
 }
 
 func (s *fakeUserAdminService) Update(_ context.Context, _ string, userID string, request users.UpdateRequest) (users.Summary, error) {
@@ -1377,6 +1682,39 @@ func (s *fakeUserAdminService) Update(_ context.Context, _ string, userID string
 func (s *fakeUserAdminService) SetStatus(_ context.Context, _ string, userID, status string) (users.Summary, error) {
 	s.status = status
 	return users.Summary{ID: userID, Email: "user@example.com", Status: status}, nil
+}
+
+func (s *fakeUserAdminService) ListPlatformPermissions(context.Context) ([]users.PlatformPermission, error) {
+	return []users.PlatformPermission{{ID: "44444444-4444-4444-8444-444444444444", Resource: "channel", Action: "read", Name: "channel:read"}}, nil
+}
+
+func (s *fakeUserAdminService) ListPlatformRoles(context.Context) ([]users.PlatformRole, error) {
+	if s.platformRole.ID == "" {
+		s.platformRole = users.PlatformRole{ID: "33333333-3333-4333-8333-333333333333", Code: "platform_owner", Name: "Platform Owner", Status: "active", Permissions: []string{"channel:read"}, CreatedAt: time.Now()}
+	}
+	return []users.PlatformRole{s.platformRole}, nil
+}
+
+func (s *fakeUserAdminService) CreatePlatformRole(_ context.Context, _ string, request users.PlatformRoleMutation) (users.PlatformRole, error) {
+	s.platformRole = users.PlatformRole{ID: "55555555-5555-4555-8555-555555555555", Code: request.Code, Name: request.Name, Status: request.Status, Permissions: request.Permissions, CreatedAt: time.Now()}
+	return s.platformRole, nil
+}
+
+func (s *fakeUserAdminService) UpdatePlatformRole(_ context.Context, _ string, roleID string, request users.PlatformRoleMutation) (users.PlatformRole, error) {
+	s.platformRole.ID = roleID
+	s.platformRole.Code, s.platformRole.Name, s.platformRole.Status, s.platformRole.Permissions = request.Code, request.Name, request.Status, request.Permissions
+	return s.platformRole, nil
+}
+
+func (s *fakeUserAdminService) DisablePlatformRole(context.Context, string, string) error { return nil }
+
+func (s *fakeUserAdminService) GetPlatformUserRoles(context.Context, string) ([]users.PlatformRole, error) {
+	return []users.PlatformRole{}, nil
+}
+
+func (s *fakeUserAdminService) SetPlatformUserRoles(_ context.Context, _ string, userID string, roleIDs []string) ([]users.PlatformRole, error) {
+	s.boundUser, s.boundRoleIDs = userID, roleIDs
+	return []users.PlatformRole{{ID: roleIDs[0], Code: "ops_admin", Name: "Operations Admin", Status: "active", CreatedAt: time.Now()}}, nil
 }
 
 type fakeProfileUserService struct {
@@ -1466,6 +1804,16 @@ type fakePriceSyncService struct {
 	called int
 }
 
+type fakeStepUpVerifier struct {
+	calls int
+	err   error
+}
+
+func (s *fakeStepUpVerifier) Verify(context.Context, string, string) error {
+	s.calls++
+	return s.err
+}
+
 func (s *fakePriceSyncService) Sync(context.Context) (modelprices.SyncResult, error) {
 	s.called++
 	return modelprices.SyncResult{ModelsSeen: 2, ModelsMatched: 1, ModelsUpdated: 1}, nil
@@ -1510,6 +1858,30 @@ type fakeGroupService struct {
 
 func (s *fakeGroupService) List(context.Context) ([]groups.Summary, error) {
 	return []groups.Summary{}, nil
+}
+
+func (*fakeGroupService) ListModelStatuses(context.Context, string) (groups.ModelStatusReport, error) {
+	return groups.ModelStatusReport{
+		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Groups: []groups.ModelStatusGroup{{
+			ID: "group-1", Code: "standard", Name: "Standard", Status: "normal", GroupStatus: "active",
+			Multiplier: "1.000000", BillingType: "prepaid", Models: []groups.ModelStatus{{
+				Model: "gpt-5", Provider: "openai", Status: "normal", TotalRoutes: 1, AvailableRoutes: 1,
+			}},
+		}},
+	}, nil
+}
+
+func (*fakeGroupService) ListAdminModelStatuses(context.Context) (groups.ModelStatusReport, error) {
+	return groups.ModelStatusReport{
+		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Groups: []groups.ModelStatusGroup{{
+			ID: "group-1", Code: "standard", Name: "Standard", Status: "normal", GroupStatus: "active",
+			Multiplier: "1.000000", BillingType: "prepaid", Models: []groups.ModelStatus{{
+				Model: "gpt-5", Provider: "openai", Status: "normal", TotalRoutes: 1, AvailableRoutes: 1,
+			}},
+		}},
+	}, nil
 }
 
 func (*fakeGroupService) ListTokenGroups(context.Context) ([]groups.TokenGroupSummary, error) {

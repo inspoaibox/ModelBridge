@@ -1,14 +1,18 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Check,
   Copy,
   KeyRound,
   Mail,
+  PlugZap,
+  Plus,
   Save,
+  Send,
+  Settings2,
   ShieldCheck,
   ShieldOff,
+  Trash2,
+  ToggleRight,
   UserRound,
-  Settings2,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -21,6 +25,10 @@ import { Switch } from "@/components/ui/switch";
 import {
   ConsoleProfile,
   EmailFormState,
+  EmailSettings,
+  EmailTemplate,
+  EmailTemplateFormState,
+  FeatureSettings,
   Language,
   LoginMessage,
   MFAEnrollment,
@@ -29,6 +37,7 @@ import {
   ProfileFormState,
   SecuritySettings,
   SiteSettings,
+  SMTPSettingsForm,
   TranslationKey,
 } from "@/types";
 import { translations } from "@/locales/translations";
@@ -61,97 +70,114 @@ interface AdminSettingsPanelProps {
   securityMessage: LoginMessage;
   securityBusy: boolean;
   persistSecurity: (nextEnabled: boolean) => Promise<void>;
+  canUpdateSystemSettings: boolean;
   siteForm: SiteSettings;
   setSiteForm: React.Dispatch<React.SetStateAction<SiteSettings>>;
   siteBusy: boolean;
   siteMessage: LoginMessage;
   saveSiteSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  smtpForm: SMTPSettingsForm;
+  setSmtpForm: React.Dispatch<React.SetStateAction<SMTPSettingsForm>>;
+  emailSettings: EmailSettings | null;
+  emailBusy: boolean;
+  emailMessage: LoginMessage;
+  emailTestRecipient: string;
+  setEmailTestRecipient: (value: string) => void;
+  smtpConnectionBusy: boolean;
+  smtpMessageBusy: boolean;
+  saveEmailSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  testSMTPConnection: () => Promise<void>;
+  sendTestEmail: () => Promise<void>;
+  featureSettings: FeatureSettings;
+  featureBusy: boolean;
+  featureMessage: LoginMessage;
+  saveFeatureSettings: (settings: FeatureSettings) => Promise<void>;
+  emailTemplates: EmailTemplate[];
+  emailTemplatesBusy: boolean;
+  emailTemplatesMessage: LoginMessage;
+  saveEmailTemplate: (form: EmailTemplateFormState) => Promise<boolean>;
+  deleteEmailTemplate: (template: EmailTemplate) => Promise<void>;
 }
 
-export function AdminSettingsPanel({
-  language,
-  profile,
-  profileForm,
-  setProfileForm,
-  emailForm,
-  setEmailForm,
-  passwordForm,
-  setPasswordForm,
-  profileBusy,
-  profileMessage,
-  saveProfile,
-  saveEmail,
-  savePassword,
-  mfaStatus,
-  mfaEnrollment,
-  mfaCode,
-  setMfaCode,
-  mfaBusy,
-  beginMFA,
-  confirmMFA,
-  cancelMFA,
-  disableMFA,
-  securitySettings,
-  securityMessage,
-  securityBusy,
-  persistSecurity,
-  siteForm,
-  setSiteForm,
-  siteBusy,
-  siteMessage,
-  saveSiteSettings,
-}: AdminSettingsPanelProps) {
+export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
+  const { language } = props;
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
-  const [tab, setTab] = useState<"admin" | "base">("admin");
-  const [copied, setCopied] = useState(false);
-  const accountBusy = profileBusy || mfaBusy;
-
-  async function copySecret() {
-    if (!mfaEnrollment?.secret) return;
-    try {
-      await navigator.clipboard.writeText(mfaEnrollment.secret);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      setCopied(false);
-    }
-  }
+  const [tab, setTab] = useState<"admin" | "base" | "email" | "features">("admin");
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-200/80 pb-3 dark:border-slate-800/80">
-        <button type="button" onClick={() => setTab("admin")} className={cn("inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors", tab === "admin" ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900")}><UserRound className="h-4 w-4" />{t("systemSettingsAdminTab")}</button>
-        <button type="button" onClick={() => setTab("base")} className={cn("inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors", tab === "base" ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900")}><Settings2 className="h-4 w-4" />{t("systemSettingsBaseTab")}</button>
+        <TabButton active={tab === "admin"} icon={UserRound} label={t("systemSettingsAdminTab")} onClick={() => setTab("admin")} />
+        <TabButton active={tab === "base"} icon={Settings2} label={t("systemSettingsBaseTab")} onClick={() => setTab("base")} />
+        <TabButton active={tab === "email"} icon={Mail} label={t("systemSettingsEmailTab")} onClick={() => setTab("email")} />
+        <TabButton active={tab === "features"} icon={ToggleRight} label={t("systemSettingsFeaturesTab")} onClick={() => setTab("features")} />
       </div>
-
-      {tab === "admin" ? (
-        <div className="space-y-6">
-          <Card className="overflow-hidden border-indigo-500/20 bg-gradient-to-br from-indigo-500/10 via-cyan-500/5 to-white shadow-sm dark:from-indigo-500/15 dark:via-cyan-500/5 dark:to-slate-900/70">
-            <CardContent className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-              <div className="flex min-w-0 items-center gap-4"><div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-cyan-500 text-lg font-bold text-white shadow-lg shadow-indigo-500/20">{(profile?.display_name || profile?.email || "A").slice(0, 2).toUpperCase()}</div><div className="min-w-0"><div className="text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-300">{t("adminCenterTitle")}</div><div className="mt-1 truncate text-xl font-extrabold text-slate-950 dark:text-white">{profile?.display_name || "-"}</div><div className="mt-1 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><Mail className="h-3.5 w-3.5" />{profile?.email || "-"}</div></div></div>
-              <Badge variant="success" className="self-start sm:self-center">{t("adminCenterRole")}: {profile?.roles?.join(", ") || "-"}</Badge>
-            </CardContent>
-          </Card>
-
-          {profileMessage.text ? <Notice message={profileMessage} /> : null}
-
-          <div className="grid gap-6 xl:grid-cols-2">
-            <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><UserRound className="h-5 w-5 text-indigo-600" />{t("adminProfileTitle")}</CardTitle><CardDescription>{t("adminProfileDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={saveProfile}><div className="space-y-2"><Label htmlFor="admin-profile-display-name">{t("profileDisplayName")}</Label><Input id="admin-profile-display-name" value={profileForm.display_name} onChange={(event) => setProfileForm({ display_name: event.target.value })} autoComplete="name" maxLength={100} disabled={accountBusy} required /></div><InfoField label={t("adminCenterAccountID")} value={profile?.id || "-"} mono /><Button type="submit" disabled={accountBusy} className="gap-2"><Save className="h-4 w-4" />{t("profileSave")}</Button></form></CardContent></Card>
-
-            <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Mail className="h-5 w-5 text-cyan-600" />{t("profileEmailTitle")}</CardTitle><CardDescription>{t("adminEmailDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={saveEmail}><div className="space-y-2"><Label htmlFor="admin-profile-email">{t("profileNewEmail")}</Label><Input id="admin-profile-email" type="email" value={emailForm.email} onChange={(event) => setEmailForm((current) => ({ ...current, email: event.target.value }))} autoComplete="email" disabled={accountBusy} required /></div><div className="space-y-2"><Label htmlFor="admin-profile-email-password">{t("profileCurrentPassword")}</Label><Input id="admin-profile-email-password" type="password" value={emailForm.current_password} onChange={(event) => setEmailForm((current) => ({ ...current, current_password: event.target.value }))} autoComplete="current-password" disabled={accountBusy} required /></div><Button type="submit" variant="secondary" disabled={accountBusy} className="gap-2"><Mail className="h-4 w-4" />{t("profileEmailSave")}</Button></form></CardContent></Card>
-
-            <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><KeyRound className="h-5 w-5 text-amber-600" />{t("profilePasswordTitle")}</CardTitle><CardDescription>{t("adminPasswordDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={savePassword}><div className="space-y-2"><Label htmlFor="admin-current-password">{t("profileCurrentPassword")}</Label><Input id="admin-current-password" type="password" value={passwordForm.current_password} onChange={(event) => setPasswordForm((current) => ({ ...current, current_password: event.target.value }))} autoComplete="current-password" disabled={accountBusy} required /></div><div className="space-y-2"><Label htmlFor="admin-new-password">{t("profileNewPassword")}</Label><Input id="admin-new-password" type="password" value={passwordForm.new_password} onChange={(event) => setPasswordForm((current) => ({ ...current, new_password: event.target.value }))} autoComplete="new-password" minLength={12} disabled={accountBusy} required /></div><div className="space-y-2"><Label htmlFor="admin-confirm-password">{t("profileConfirmPassword")}</Label><Input id="admin-confirm-password" type="password" value={passwordForm.confirm_password} onChange={(event) => setPasswordForm((current) => ({ ...current, confirm_password: event.target.value }))} autoComplete="new-password" minLength={12} disabled={accountBusy} required /></div><Button type="submit" variant="secondary" disabled={accountBusy} className="gap-2"><KeyRound className="h-4 w-4" />{t("profilePasswordSave")}</Button></form></CardContent></Card>
-
-            <Card className="border-emerald-500/20 shadow-sm dark:border-emerald-400/20 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="h-5 w-5 text-emerald-600" />{t("adminMFATitle")}</CardTitle><CardDescription>{t("adminMFADescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("adminMFAStatus")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{mfaStatus.enabled ? t("adminMFAEnabledBody") : t("adminMFADisabledBody")}</div></div><Badge variant={mfaStatus.enabled ? "success" : "muted"}>{mfaStatus.enabled ? t("adminMFAEnabled") : t("adminMFADisabled")}</Badge></div>{mfaStatus.enabled ? <form className="space-y-3" onSubmit={disableMFA}><div className="space-y-2"><Label htmlFor="admin-mfa-disable-code">{t("profileMFACode")}</Label><Input id="admin-mfa-disable-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" disabled={accountBusy} required /></div><Button type="submit" variant="destructive" disabled={accountBusy || securitySettings.admin_mfa_enabled} className="gap-2"><ShieldOff className="h-4 w-4" />{t("adminMFADisable")}</Button>{securitySettings.admin_mfa_enabled ? <p className="text-xs text-amber-700 dark:text-amber-300">{t("systemSettingsMFAEnforced")}</p> : null}</form> : mfaEnrollment ? <div className="grid gap-4 sm:grid-cols-[170px_minmax(0,1fr)]"><div className="flex items-start justify-center rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700"><QRCodeSVG value={mfaEnrollment.otpauth_url} size={145} includeMargin /></div><div className="space-y-3"><p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{t("adminMFAEnrollmentHint")}</p><div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40"><div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{t("profileMFASecret")}</div><div className="mt-2 flex items-center gap-2"><code className="min-w-0 flex-1 break-all font-mono text-xs text-slate-800 dark:text-slate-200">{mfaEnrollment.secret}</code><Button type="button" variant="outline" size="icon" onClick={() => void copySecret()} title={t("profileMFACopySecret")} aria-label={t("profileMFACopySecret")}><Check className={cn("h-4 w-4", copied ? "text-emerald-600" : "hidden")} /><Copy className={cn("h-4 w-4", copied ? "hidden" : "")} /></Button></div></div><form className="space-y-3" onSubmit={confirmMFA}><div className="space-y-2"><Label htmlFor="admin-mfa-confirm-code">{t("profileMFACode")}</Label><Input id="admin-mfa-confirm-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" disabled={accountBusy} required /></div><div className="flex flex-wrap gap-2"><Button type="submit" disabled={accountBusy} className="gap-2"><ShieldCheck className="h-4 w-4" />{t("profileMFAConfirm")}</Button><Button type="button" variant="outline" onClick={cancelMFA} disabled={accountBusy}>{t("profileMFACancel")}</Button></div></form></div></div> : <Button type="button" variant="emerald" onClick={() => void beginMFA()} disabled={accountBusy} className="gap-2"><ShieldCheck className="h-4 w-4" />{t("adminMFAEnable")}</Button>}</CardContent></Card>
-          </div>
-
-          <Card className="border-indigo-500/20 shadow-sm dark:border-indigo-400/20 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="h-5 w-5 text-indigo-600" />{t("systemSettingsPolicyTitle")}</CardTitle><CardDescription>{t("systemSettingsPolicyDescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex flex-col gap-4 rounded-xl border border-indigo-500/20 bg-indigo-50/70 p-4 dark:bg-indigo-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("systemSettingsAdminMFA")}</div><p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{t("systemSettingsAdminMFAHint")}</p></div><div className="flex items-center gap-3"><Switch checked={securitySettings.admin_mfa_enabled} disabled={securityBusy || !mfaStatus.enabled} onCheckedChange={(checked) => void persistSecurity(checked)} /><span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{securitySettings.admin_mfa_enabled ? t("securityEnabledText") : t("securityDisabledText")}</span></div></div>{securityMessage.text ? <Notice message={securityMessage} /> : null}</CardContent></Card>
-        </div>
-      ) : (
-        <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Settings2 className="h-5 w-5 text-indigo-600" />{t("systemSettingsBaseTitle")}</CardTitle><CardDescription>{t("systemSettingsBaseDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={saveSiteSettings}><div className="space-y-2"><Label htmlFor="system-site-name">{t("systemSiteName")}</Label><Input id="system-site-name" value={siteForm.site_name} onChange={(event) => setSiteForm((current) => ({ ...current, site_name: event.target.value }))} maxLength={100} disabled={siteBusy} required /></div><div className="space-y-2"><Label htmlFor="system-site-logo">{t("systemSiteLogo")}</Label><Input id="system-site-logo" type="text" inputMode="url" value={siteForm.site_logo_url} onChange={(event) => setSiteForm((current) => ({ ...current, site_logo_url: event.target.value }))} placeholder="https://cdn.example.com/logo.png or /assets/logo.png" disabled={siteBusy} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("systemAssetURLHint")}</p></div><div className="space-y-2"><Label htmlFor="system-site-favicon">{t("systemSiteFavicon")}</Label><Input id="system-site-favicon" type="text" inputMode="url" value={siteForm.site_favicon_url} onChange={(event) => setSiteForm((current) => ({ ...current, site_favicon_url: event.target.value }))} placeholder="https://cdn.example.com/favicon.ico or /favicon.ico" disabled={siteBusy} /></div><div className="grid gap-4 md:grid-cols-2"><AssetPreview label={t("systemSitePreview")} name={siteForm.site_name} source={siteForm.site_logo_url} /><AssetPreview label={t("systemSiteFaviconPreview")} name={siteForm.site_name} source={siteForm.site_favicon_url} compact /></div>{siteMessage.text ? <Notice message={siteMessage} /> : null}<Button type="submit" disabled={siteBusy} className="gap-2"><Save className="h-4 w-4" />{siteBusy ? t("systemSettingsSaving") : t("systemSettingsSave")}</Button></form></CardContent></Card>
-      )}
+      {tab === "admin" ? <AdminTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
+      {tab === "base" ? <BaseTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
+      {tab === "email" ? <EmailTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
+      {tab === "features" ? <FeatureTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
     </div>
   );
+}
+
+type Translator = (key: TranslationKey) => string;
+
+function TabButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof UserRound; label: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className={cn("inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors", active ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900")}><Icon className="h-4 w-4" />{label}</button>;
+}
+
+function AdminTab({ t, profile, profileForm, setProfileForm, emailForm, setEmailForm, passwordForm, setPasswordForm, profileBusy, profileMessage, saveProfile, saveEmail, savePassword, mfaStatus, mfaEnrollment, mfaCode, setMfaCode, mfaBusy, beginMFA, confirmMFA, cancelMFA, disableMFA, securitySettings, securityMessage, securityBusy, persistSecurity, canUpdate }: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean }) {
+  const busy = profileBusy || mfaBusy;
+  return <div className="space-y-6">
+    <Card className="border-indigo-500/20 bg-gradient-to-br from-indigo-500/10 via-cyan-500/5 to-white dark:from-indigo-500/15 dark:via-cyan-500/5 dark:to-slate-900/70"><CardContent className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"><div className="flex min-w-0 items-center gap-4"><div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-cyan-500 text-lg font-bold text-white">{(profile?.display_name || profile?.email || "A").slice(0, 2).toUpperCase()}</div><div className="min-w-0"><div className="text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-300">{t("adminCenterTitle")}</div><div className="mt-1 truncate text-xl font-extrabold text-slate-950 dark:text-white">{profile?.display_name || "-"}</div><div className="mt-1 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><Mail className="h-3.5 w-3.5" />{profile?.email || "-"}</div></div></div><Badge variant="success">{t("adminCenterRole")}: {profile?.roles?.join(", ") || "-"}</Badge></CardContent></Card>
+    {profileMessage.text ? <Notice message={profileMessage} /> : null}
+    <div className="grid gap-6 xl:grid-cols-2">
+      <Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><UserRound className="h-5 w-5 text-indigo-600" />{t("adminProfileTitle")}</CardTitle><CardDescription>{t("adminProfileDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={saveProfile}><InputField id="admin-profile-display-name" label={t("profileDisplayName")} value={profileForm.display_name} onChange={(value) => setProfileForm({ display_name: value })} disabled={busy} /><InfoField label={t("adminCenterAccountID")} value={profile?.id || "-"} mono /><Button type="submit" disabled={busy} className="gap-2"><Save className="h-4 w-4" />{t("profileSave")}</Button></form></CardContent></Card>
+      <Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Mail className="h-5 w-5 text-cyan-600" />{t("profileEmailTitle")}</CardTitle><CardDescription>{t("adminEmailDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={saveEmail}><InputField id="admin-profile-email" label={t("profileNewEmail")} type="email" value={emailForm.email} onChange={(value) => setEmailForm((current) => ({ ...current, email: value }))} disabled={busy} /><InputField id="admin-profile-email-password" label={t("profileCurrentPassword")} type="password" value={emailForm.current_password} onChange={(value) => setEmailForm((current) => ({ ...current, current_password: value }))} disabled={busy} /><Button type="submit" variant="secondary" disabled={busy} className="gap-2"><Mail className="h-4 w-4" />{t("profileEmailSave")}</Button></form></CardContent></Card>
+      <Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><KeyRound className="h-5 w-5 text-amber-600" />{t("profilePasswordTitle")}</CardTitle><CardDescription>{t("adminPasswordDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-4" onSubmit={savePassword}><InputField id="admin-current-password" label={t("profileCurrentPassword")} type="password" value={passwordForm.current_password} onChange={(value) => setPasswordForm((current) => ({ ...current, current_password: value }))} disabled={busy} /><InputField id="admin-new-password" label={t("profileNewPassword")} type="password" value={passwordForm.new_password} onChange={(value) => setPasswordForm((current) => ({ ...current, new_password: value }))} disabled={busy} /><InputField id="admin-confirm-password" label={t("profileConfirmPassword")} type="password" value={passwordForm.confirm_password} onChange={(value) => setPasswordForm((current) => ({ ...current, confirm_password: value }))} disabled={busy} /><Button type="submit" variant="secondary" disabled={busy} className="gap-2"><KeyRound className="h-4 w-4" />{t("profilePasswordSave")}</Button></form></CardContent></Card>
+      <MFAAdminCard t={t} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} mfaCode={mfaCode} setMfaCode={setMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} enforced={securitySettings.admin_mfa_enabled} copySecret={() => navigator.clipboard?.writeText(mfaEnrollment?.secret || "")} />
+    </div>
+    <Card className="border-indigo-500/20"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="h-5 w-5 text-indigo-600" />{t("systemSettingsPolicyTitle")}</CardTitle><CardDescription>{t("systemSettingsPolicyDescription")}</CardDescription></CardHeader><CardContent><div className="flex flex-col gap-4 rounded-xl border border-indigo-500/20 bg-indigo-50/70 p-4 dark:bg-indigo-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("systemSettingsAdminMFA")}</div><p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{t("systemSettingsAdminMFAHint")}</p></div><div className="flex items-center gap-3"><Switch checked={securitySettings.admin_mfa_enabled} disabled={securityBusy || !mfaStatus.enabled || !canUpdate} onCheckedChange={(checked) => void persistSecurity(checked)} /><span className="text-xs font-semibold">{securitySettings.admin_mfa_enabled ? t("securityEnabledText") : t("securityDisabledText")}</span></div></div>{securityMessage.text ? <div className="mt-4"><Notice message={securityMessage} /></div> : null}</CardContent></Card>
+  </div>;
+}
+
+function MFAAdminCard({ t, mfaStatus, mfaEnrollment, mfaCode, setMfaCode, mfaBusy, beginMFA, confirmMFA, cancelMFA, disableMFA, enforced, copySecret }: { t: Translator; mfaStatus: MFAStatus; mfaEnrollment: MFAEnrollment | null; mfaCode: string; setMfaCode: (value: string) => void; mfaBusy: boolean; beginMFA: () => Promise<void>; confirmMFA: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; cancelMFA: () => void; disableMFA: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; enforced: boolean; copySecret: () => Promise<void> }) {
+  return <Card className="border-emerald-500/20"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="h-5 w-5 text-emerald-600" />{t("adminMFATitle")}</CardTitle><CardDescription>{t("adminMFADescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("adminMFAStatus")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{mfaStatus.enabled ? t("adminMFAEnabledBody") : t("adminMFADisabledBody")}</div></div><Badge variant={mfaStatus.enabled ? "success" : "muted"}>{mfaStatus.enabled ? t("adminMFAEnabled") : t("adminMFADisabled")}</Badge></div>{mfaStatus.enabled ? <form className="space-y-3" onSubmit={disableMFA}><InputField id="admin-mfa-disable-code" label={t("profileMFACode")} value={mfaCode} onChange={(value) => setMfaCode(value.replace(/\D/g, "").slice(0, 6))} disabled={mfaBusy} /><Button type="submit" variant="destructive" disabled={mfaBusy || enforced} className="gap-2"><ShieldOff className="h-4 w-4" />{t("adminMFADisable")}</Button></form> : mfaEnrollment ? <div className="space-y-3"><div className="flex justify-center rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700"><QRCodeSVG value={mfaEnrollment.otpauth_url} size={145} includeMargin /></div><div className="flex items-center gap-2"><code className="min-w-0 flex-1 break-all font-mono text-xs">{mfaEnrollment.secret}</code><Button type="button" variant="outline" size="icon" onClick={() => void copySecret()} aria-label={t("profileMFACopySecret")}><Copy className="h-4 w-4" /></Button></div><form className="space-y-3" onSubmit={confirmMFA}><InputField id="admin-mfa-confirm-code" label={t("profileMFACode")} value={mfaCode} onChange={(value) => setMfaCode(value.replace(/\D/g, "").slice(0, 6))} disabled={mfaBusy} /><div className="flex gap-2"><Button type="submit" disabled={mfaBusy}>{t("profileMFAConfirm")}</Button><Button type="button" variant="outline" onClick={cancelMFA} disabled={mfaBusy}>{t("profileMFACancel")}</Button></div></form></div> : <Button type="button" variant="emerald" onClick={() => void beginMFA()} disabled={mfaBusy} className="gap-2"><ShieldCheck className="h-4 w-4" />{t("adminMFAEnable")}</Button>}</CardContent></Card>;
+}
+
+function BaseTab({ t, siteForm, setSiteForm, siteBusy, siteMessage, saveSiteSettings, canUpdate }: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean }) {
+  return <Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Settings2 className="h-5 w-5 text-indigo-600" />{t("systemSettingsBaseTitle")}</CardTitle><CardDescription>{t("systemSettingsBaseDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={saveSiteSettings}><InputField id="system-site-name" label={t("systemSiteName")} value={siteForm.site_name} onChange={(value) => setSiteForm((current) => ({ ...current, site_name: value }))} disabled={siteBusy || !canUpdate} /><InputField id="system-site-logo" label={t("systemSiteLogo")} value={siteForm.site_logo_url} onChange={(value) => setSiteForm((current) => ({ ...current, site_logo_url: value }))} disabled={siteBusy || !canUpdate} /><p className="-mt-3 text-xs text-slate-500 dark:text-slate-400">{t("systemAssetURLHint")}</p><InputField id="system-site-favicon" label={t("systemSiteFavicon")} value={siteForm.site_favicon_url} onChange={(value) => setSiteForm((current) => ({ ...current, site_favicon_url: value }))} disabled={siteBusy || !canUpdate} /><div className="grid gap-4 md:grid-cols-2"><AssetPreview label={t("systemSitePreview")} name={siteForm.site_name} source={siteForm.site_logo_url} /><AssetPreview label={t("systemSiteFaviconPreview")} name={siteForm.site_name} source={siteForm.site_favicon_url} compact /></div>{siteMessage.text ? <Notice message={siteMessage} /> : null}<Button type="submit" disabled={siteBusy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{siteBusy ? t("systemSettingsSaving") : t("systemSettingsSave")}</Button></form></CardContent></Card>;
+}
+
+function EmailTab({ t, emailSettings, smtpForm, setSmtpForm, emailBusy, emailMessage, emailTestRecipient, setEmailTestRecipient, smtpConnectionBusy, smtpMessageBusy, saveEmailSettings, testSMTPConnection, sendTestEmail, emailTemplates, emailTemplatesBusy, emailTemplatesMessage, templateForm, setTemplateForm, openTemplate, submitTemplate, deleteEmailTemplate, canUpdate }: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean; templateForm?: EmailTemplateFormState | null; setTemplateForm?: React.Dispatch<React.SetStateAction<EmailTemplateFormState | null>>; openTemplate?: (template?: EmailTemplate) => void; submitTemplate?: (event: React.FormEvent<HTMLFormElement>) => Promise<void> }) {
+  return <div className="space-y-6"><Card className="border-cyan-500/20"><CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle className="flex items-center gap-2 text-lg"><Mail className="h-5 w-5 text-cyan-600" />{t("emailSettingsTitle")}</CardTitle><CardDescription>{t("emailSettingsDescription")}</CardDescription></div><Badge variant={emailSettings?.email_enabled ? "success" : "muted"}>{emailSettings?.email_enabled ? t("emailSystemEnabled") : t("emailSystemDisabled")}</Badge></CardHeader><CardContent><form className="space-y-5" onSubmit={saveEmailSettings}><div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_150px]"><InputField id="smtp-host" label={t("emailSMTPHost")} value={smtpForm.smtp_host} onChange={(value) => setSmtpForm((current) => ({ ...current, smtp_host: value }))} disabled={emailBusy || !canUpdate} /><InputField id="smtp-port" label={t("emailSMTPPort")} type="number" value={String(smtpForm.smtp_port || "")} onChange={(value) => setSmtpForm((current) => ({ ...current, smtp_port: Number(value) || 0 }))} disabled={emailBusy || !canUpdate} /></div><div className="grid gap-4 sm:grid-cols-2"><InputField id="smtp-username" label={t("emailSMTPUsername")} value={smtpForm.smtp_username} onChange={(value) => setSmtpForm((current) => ({ ...current, smtp_username: value }))} disabled={emailBusy || !canUpdate} /><div className="space-y-2"><Label htmlFor="smtp-password">{t("emailSMTPPassword")}</Label><Input id="smtp-password" type="password" value={smtpForm.smtp_password} onChange={(event) => setSmtpForm((current) => ({ ...current, smtp_password: event.target.value, smtp_password_clear: false }))} placeholder={t("emailSMTPPasswordPlaceholder")} disabled={emailBusy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{emailSettings?.smtp_password_configured ? t("emailSMTPPasswordConfigured") : t("emailSMTPPasswordNotConfigured")}</p></div><InputField id="smtp-from-email" label={t("emailSMTPFromEmail")} type="email" value={smtpForm.smtp_from_email} onChange={(value) => setSmtpForm((current) => ({ ...current, smtp_from_email: value }))} disabled={emailBusy || !canUpdate} /><InputField id="smtp-from-name" label={t("emailSMTPFromName")} value={smtpForm.smtp_from_name} onChange={(value) => setSmtpForm((current) => ({ ...current, smtp_from_name: value }))} disabled={emailBusy || !canUpdate} /></div><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="smtp-public-url">{t("emailPublicBaseURL")}</Label><Input id="smtp-public-url" type="url" value={smtpForm.public_base_url} onChange={(event) => setSmtpForm((current) => ({ ...current, public_base_url: event.target.value }))} disabled={emailBusy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("emailPublicBaseURLHint")}</p></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("emailSMTPTLS")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t("emailSMTPTLSHint")}</div></div><Switch checked={smtpForm.smtp_tls} onCheckedChange={(checked) => setSmtpForm((current) => ({ ...current, smtp_tls: checked }))} disabled={emailBusy || !canUpdate} /></div></div><label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input type="checkbox" checked={smtpForm.smtp_password_clear} onChange={(event) => setSmtpForm((current) => ({ ...current, smtp_password_clear: event.target.checked, smtp_password: "" }))} disabled={emailBusy || !canUpdate} />{t("emailSMTPPasswordClear")}</label>{emailMessage.text ? <Notice message={emailMessage} /> : null}<div className="flex flex-wrap gap-2"><Button type="submit" disabled={emailBusy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{emailBusy ? t("emailSettingsSaving") : t("emailSettingsSave")}</Button><Button type="button" variant="outline" onClick={() => void testSMTPConnection()} disabled={smtpConnectionBusy || emailBusy || !canUpdate} className="gap-2"><PlugZap className="h-4 w-4" />{smtpConnectionBusy ? t("emailSMTPTesting") : t("emailSMTPTestConnection")}</Button></div></form><div className="mt-6 border-t border-slate-200 pt-5 dark:border-slate-800"><div className="mb-3"><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("emailTestMessageTitle")}</div><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t("emailTestMessageHint")}</p></div><div className="flex flex-col gap-2 sm:flex-row"><Input type="email" value={emailTestRecipient} onChange={(event) => setEmailTestRecipient(event.target.value)} placeholder={t("emailTestRecipientPlaceholder")} disabled={smtpMessageBusy || !canUpdate} /><Button type="button" variant="secondary" onClick={() => void sendTestEmail()} disabled={smtpMessageBusy || !canUpdate} className="gap-2"><Send className="h-4 w-4" />{smtpMessageBusy ? t("emailTestSending") : t("emailSendTestMessage")}</Button></div></div></CardContent></Card>{openTemplate && setTemplateForm && submitTemplate ? <EmailTemplates t={t} items={emailTemplates} busy={emailTemplatesBusy} message={emailTemplatesMessage} form={templateForm || null} setForm={setTemplateForm} openTemplate={openTemplate} submitTemplate={submitTemplate} deleteTemplate={deleteEmailTemplate} canUpdate={canUpdate} /> : null}</div>;
+}
+
+function EmailTemplates({ t, items, busy, message, form, setForm, openTemplate, submitTemplate, deleteTemplate, canUpdate }: { t: Translator; items: EmailTemplate[]; busy: boolean; message: LoginMessage; form: EmailTemplateFormState | null; setForm: React.Dispatch<React.SetStateAction<EmailTemplateFormState | null>>; openTemplate: (template?: EmailTemplate) => void; submitTemplate: (event: React.FormEvent<HTMLFormElement>) => Promise<void>; deleteTemplate: (template: EmailTemplate) => Promise<void>; canUpdate: boolean }) {
+  const languageLabel = (value: string) => value === "zh" ? t("languageChinese") : t("languageEnglish");
+  return <Card><CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle className="flex items-center gap-2 text-lg"><Mail className="h-5 w-5 text-indigo-600" />{t("emailTemplatesTitle")}</CardTitle><CardDescription>{t("emailTemplatesDescription")}</CardDescription></div><Button type="button" onClick={() => openTemplate()} disabled={!canUpdate} className="gap-2"><Plus className="h-4 w-4" />{t("emailTemplateNew")}</Button></CardHeader><CardContent className="space-y-4">{message.text ? <Notice message={message} /> : null}{form ? <form className="space-y-4 rounded-xl border border-indigo-500/20 bg-indigo-50/50 p-4 dark:bg-indigo-500/10" onSubmit={(event) => void submitTemplate(event)}><div className="grid gap-4 sm:grid-cols-2"><InputField id="template-event" label={t("emailTemplateEvent")} value={form.event_code} onChange={(value) => setForm((current) => current ? { ...current, event_code: value } : current)} disabled={!canUpdate || busy} /><div className="space-y-2"><Label htmlFor="template-language">{t("emailTemplateLanguage")}</Label><select id="template-language" value={form.language} onChange={(event) => setForm((current) => current ? { ...current, language: event.target.value as "zh" | "en" } : current)} className="flex h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950" disabled={!canUpdate || busy}><option value="zh">{languageLabel("zh")}</option><option value="en">{languageLabel("en")}</option></select></div></div><InputField id="template-subject" label={t("emailTemplateSubject")} value={form.subject} onChange={(value) => setForm((current) => current ? { ...current, subject: value } : current)} disabled={!canUpdate || busy} /><div className="space-y-2"><Label htmlFor="template-html">{t("emailTemplateHTML")}</Label><textarea id="template-html" rows={8} value={form.html_body} onChange={(event) => setForm((current) => current ? { ...current, html_body: event.target.value } : current)} className="min-h-40 w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" disabled={!canUpdate || busy} required /><p className="text-xs text-slate-500 dark:text-slate-400">{t("emailTemplateVariables")}</p></div><label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm((current) => current ? { ...current, enabled: event.target.checked } : current)} disabled={!canUpdate || busy} />{t("emailTemplateEnabled")}</label><div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setForm(null)} disabled={busy}>{t("cancel")}</Button><Button type="submit" disabled={!canUpdate || busy} className="gap-2"><Save className="h-4 w-4" />{t("emailTemplateSave")}</Button></div></form> : null}<div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">{items.length === 0 ? <div className="p-10 text-center text-sm text-slate-500 dark:text-slate-400">{t("emailTemplatesEmpty")}</div> : items.map((item) => <div key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><code className="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-800">{item.event_code}</code><Badge variant="muted">{languageLabel(item.language)}</Badge><Badge variant={item.enabled ? "success" : "muted"}>{item.enabled ? t("emailTemplateEnabled") : t("emailTemplateDisabled")}</Badge></div><div className="mt-2 truncate text-sm font-semibold text-slate-900 dark:text-white">{item.subject}</div></div><div className="flex shrink-0 gap-2"><Button type="button" variant="outline" size="sm" onClick={() => openTemplate(item)} disabled={!canUpdate || busy}>{t("emailTemplateEdit")}</Button><Button type="button" variant="ghost" size="icon" onClick={() => void deleteTemplate(item)} disabled={!canUpdate || busy} title={t("emailTemplateDelete")} aria-label={t("emailTemplateDelete")}><Trash2 className="h-4 w-4 text-rose-600" /></Button></div></div>)}</div></CardContent></Card>;
+}
+
+function FeatureTab({ t, featureSettings: settings, featureBusy: busy, featureMessage: message, saveFeatureSettings: save, canUpdate }: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean }) {
+  const [draft, setDraft] = useState(settings);
+  useEffect(() => setDraft(settings), [settings]);
+  const items: Array<{ key: keyof FeatureSettings; label: TranslationKey; description: TranslationKey }> = [
+    { key: "email_verification_enabled", label: "featureEmailVerification", description: "featureEmailVerificationHint" },
+    { key: "email_password_reset_enabled", label: "featureEmailPasswordReset", description: "featureEmailPasswordResetHint" },
+    { key: "email_subscription_enabled", label: "featureEmailSubscription", description: "featureEmailSubscriptionHint" },
+    { key: "email_low_balance_alert_enabled", label: "featureEmailLowBalance", description: "featureEmailLowBalanceHint" },
+    { key: "email_recharge_success_enabled", label: "featureEmailRecharge", description: "featureEmailRechargeHint" },
+    { key: "email_usage_limit_alert_enabled", label: "featureEmailUsageLimit", description: "featureEmailUsageLimitHint" },
+    { key: "email_content_audit_enabled", label: "featureEmailContentAudit", description: "featureEmailContentAuditHint" },
+    { key: "email_account_disabled_enabled", label: "featureEmailAccountDisabled", description: "featureEmailAccountDisabledHint" },
+    { key: "email_cyber_policy_enabled", label: "featureEmailCyberPolicy", description: "featureEmailCyberPolicyHint" },
+    { key: "email_operations_enabled", label: "featureEmailOperations", description: "featureEmailOperationsHint" },
+  ];
+  return <Card className="border-amber-500/20"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ToggleRight className="h-5 w-5 text-amber-600" />{t("featureSettingsTitle")}</CardTitle><CardDescription>{t("featureSettingsDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={(event) => { event.preventDefault(); void save(draft); }}><div className="flex flex-col gap-4 rounded-xl border border-amber-500/30 bg-amber-50/70 p-4 dark:bg-amber-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureEmailMaster")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureEmailMasterHint")}</p></div><Switch checked={draft.email_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, email_enabled: checked }))} disabled={busy || !canUpdate} /></div><div className="flex flex-col gap-4 rounded-xl border border-indigo-500/30 bg-indigo-50/70 p-4 dark:bg-indigo-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureModelStatus")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureModelStatusHint")}</p></div><Switch checked={draft.model_status_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, model_status_enabled: checked }))} disabled={busy || !canUpdate} /></div><div className="grid gap-3 md:grid-cols-2">{items.map((item) => <div key={item.key} className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/30"><div className="min-w-0"><div className="text-sm font-semibold text-slate-900 dark:text-white">{t(item.label)}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t(item.description)}</p></div><Switch checked={Boolean(draft[item.key])} onCheckedChange={(checked) => setDraft((current) => ({ ...current, [item.key]: checked }))} disabled={busy || !canUpdate} /></div>)}</div><div className="grid gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="balance-threshold">{t("featureBalanceThreshold")}</Label><Input id="balance-threshold" inputMode="decimal" value={draft.balance_threshold} onChange={(event) => setDraft((current) => ({ ...current, balance_threshold: event.target.value }))} disabled={busy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("featureBalanceThresholdHint")}</p></div><div className="space-y-2"><Label htmlFor="recharge-url">{t("featureRechargeURL")}</Label><Input id="recharge-url" type="url" value={draft.recharge_url} onChange={(event) => setDraft((current) => ({ ...current, recharge_url: event.target.value }))} placeholder="https://aokede.com" disabled={busy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("featureRechargeURLHint")}</p></div></div>{message.text ? <Notice message={message} /> : null}<div className="flex justify-end"><Button type="submit" disabled={busy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{busy ? t("featureSettingsSaving") : t("featureSettingsSave")}</Button></div></form></CardContent></Card>;
+}
+
+function InputField({ id, label, value, onChange, type = "text", disabled = false, required = false }: { id: string; label: string; value: string; onChange: (value: string) => void; type?: string; disabled?: boolean; required?: boolean }) {
+  return <div className="space-y-2"><Label htmlFor={id}>{label}</Label><Input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} required={required} /></div>;
 }
 
 function InfoField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {

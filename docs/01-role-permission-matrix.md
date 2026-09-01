@@ -32,14 +32,12 @@ api.example.com      下游模型 API
 
 ## 3. 平台角色
 
+当前版本提供平台角色管理 UI/API。平台角色只能由具备 `platform_owner` 的管理员创建、编辑和停用，也只能由平台所有者把已注册用户绑定为平台管理员；公开注册永远只创建租户用户，不会创建平台角色或管理员。首个 `platform_owner` 由 `bootstrap-admin` 创建。
+
 | 角色 | 典型职责 | 默认不可执行 |
 |---|---|---|
-| `platform_owner` | 平台全局配置、人员授权、紧急处置 | 无；应作为极少数 break-glass 账号 |
-| `security_admin` | 安全策略、MFA、封禁、审计访问 | 修改价格、退款、读取上游密钥明文 |
-| `ops_admin` | 渠道、模型、路由、健康检查 | 账务调整、导出全部用户数据 |
-| `finance_admin` | 价格、套餐、充值、退款、账务对账 | 读取上游密钥、修改安全策略 |
-| `support_admin` | 用户查询、工单、冻结 Token | 改价、退款、授予管理员权限 |
-| `auditor` | 只读查看配置变更和账务流水 | 任何写操作、查看密钥明文 |
+| `platform_owner` | 平台全局配置、角色授权、紧急处置 | 角色定义本身不可编辑；应作为极少数 break-glass 账号 |
+| 自定义平台角色 | 按权限集合分配渠道、账务、审计或用户管理职责 | 未勾选的权限；高风险写操作仍需 Step-up |
 
 原则：
 
@@ -47,6 +45,9 @@ api.example.com      下游模型 API
 - 超级管理员不作为日常运营角色使用。
 - 高风险操作应支持双人审批或至少二次认证。
 - 角色变更本身必须产生审计记录。
+- 停用角色不能导致平台没有任何有效管理员；最后一个管理员或最后一个角色身份会被保护。
+- 具备普通 `user:update` 权限的管理员不能修改 `platform_owner` 账号；只有另一名有效平台所有者可以执行该操作。
+- `pending` 用户必须通过邮箱验证变为 `active`；后台状态修改不能绕过邮箱验证。
 
 ## 4. 租户角色
 
@@ -79,6 +80,7 @@ token:read_secret
 project:update
 model:use
 usage:read
+model:status:read
 billing:read
 billing:refund
 channel:read
@@ -87,6 +89,8 @@ channel:read_secret
 price:publish
 security:read
 security:update
+role:read
+role:update
 user:freeze
 audit:read
 audit:export
@@ -122,7 +126,8 @@ project_id
 created_by
 scopes
 allowed_models
-allowed_ips
+allowed_ips / allowed_domains
+creator account and project membership status
 rate_limit
 expires_at
 last_used_at
@@ -137,17 +142,27 @@ status
 - 支持撤销、过期、轮换和批量冻结。
 - 日志只记录 Token 前缀和内部 ID。
 - `token:read_secret` 不授予任何普通后台角色。
+- 创建者账号停用、锁定、租户成员暂停/移除、项目降为只读或移除项目授权后，相关 Token 不能继续解析；项目权限变更会撤销项目内由该用户创建的 Token。
 
 ## 8. 高风险操作
+
+当前实现对管理端高风险写操作要求实时 TOTP Step-up。请求在已认证的管理员 Session 上增加：
+
+```http
+X-MFA-Code: 123456
+```
+
+缺少验证码返回 `403 STEP_UP_REQUIRED`，验证码错误返回 `401 MFA_CODE_INVALID`；同一管理员的敏感操作 MFA 失败达到阈值后会短时返回 `429 MFA_STEP_UP_THROTTLED`。验证码只在当前请求中校验，不写入数据库或审计日志。生产服务必须为每个执行这些操作的管理员绑定个人 TOTP。
 
 以下操作至少需要重新输入 MFA 或一次性确认码：
 
 - 修改模型价格或费率版本
-- 退款、赠送额度、人工调整余额
+- 充值、赠送额度、人工调整余额
 - 修改渠道上游地址或凭据
-- 授予或撤销平台管理员角色
+- 修改用户状态、撤销/调整 Token 和系统设置
+- 创建、编辑、停用平台角色，绑定或解绑平台管理员
 - 批量删除、批量冻结
-- 导出 Prompt、Response 或用户数据
+- 导出 Prompt、Response 或用户数据（当前导出功能暂不开放）
 - 修改全局限流、风控和审计策略
 
 账务操作不允许直接修改余额字段。充值、消费、退款和人工调整都必须写入不可变流水。

@@ -79,6 +79,9 @@ func TestEnrollmentLifecycleWithPostgres(t *testing.T) {
 	if err != nil || !status.Enabled {
 		t.Fatalf("expected enabled status, got %#v, %v", status, err)
 	}
+	if err := service.Verify(ctx, userID, code); err != nil {
+		t.Fatalf("expected step-up TOTP verification, got %v", err)
+	}
 	if err := service.Disable(ctx, userID, "000000"); !errors.Is(err, ErrMFAInvalidCode) {
 		t.Fatalf("expected invalid disable code, got %v", err)
 	}

@@ -121,7 +121,9 @@ func listSummaries(ctx context.Context, db *sql.DB, predicate string, args ...an
 	rows, err := db.QueryContext(ctx, `
 		SELECT t.id::text, t.name, t.token_prefix, t.tenant_id::text,
 		       t.project_id::text, COALESCE(t.group_id::text, ''),
-		       COALESCE(rg.code, ''), t.status,
+		       COALESCE(rg.code, ''),
+		       CASE WHEN t.status = 'active' AND t.expires_at IS NOT NULL AND t.expires_at <= now()
+		            THEN 'expired' ELSE t.status END,
 		       jsonb_array_length(COALESCE(t.allowed_ips_json, '[]'::jsonb)),
 		       jsonb_array_length(COALESCE(t.allowed_domains_json, '[]'::jsonb)),
 		       t.expires_at,

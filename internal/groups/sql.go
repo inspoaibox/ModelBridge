@@ -36,6 +36,7 @@ func (s *SQLService) List(ctx context.Context) ([]Summary, error) {
 		           JOIN channels c2 ON c2.id = rgc2.channel_id AND c2.status = 'active'
 		             AND (c2.auto_disabled_until IS NULL OR c2.auto_disabled_until <= now()) AND c2.deleted_at IS NULL
 		           JOIN channel_models cm2 ON cm2.channel_id = c2.id AND cm2.enabled = true
+	             AND (cm2.auto_disabled_until IS NULL OR cm2.auto_disabled_until <= now())
 		           JOIN models m ON m.id = cm2.model_id AND m.status = 'active'
 		           WHERE rgc2.group_id = rg.id
 		       ), '[]'::jsonb) AS models_json
@@ -102,7 +103,8 @@ func (s *SQLService) ListTokenGroups(ctx context.Context) ([]TokenGroupSummary, 
 		           FROM routing_group_channels rgc
 		           JOIN channels c ON c.id = rgc.channel_id AND c.status = 'active'
 		             AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now()) AND c.deleted_at IS NULL
-		           JOIN channel_models cm ON cm.channel_id = c.id AND cm.enabled = true
+	           JOIN channel_models cm ON cm.channel_id = c.id AND cm.enabled = true
+	             AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now())
 		           JOIN models m ON m.id = cm.model_id AND m.status = 'active'
 		           WHERE rgc.group_id = rg.id
 		       ), '[]'::jsonb)

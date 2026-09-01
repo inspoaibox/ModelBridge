@@ -167,10 +167,14 @@ type openAIWireUsage struct {
 	PromptTokensDetails struct {
 		CachedTokens int64 `json:"cached_tokens"`
 		AudioTokens  int64 `json:"audio_tokens"`
+		ImageTokens  int64 `json:"image_tokens"`
+		VideoTokens  int64 `json:"video_tokens"`
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
 		AudioTokens     int64 `json:"audio_tokens"`
+		ImageTokens     int64 `json:"image_tokens"`
+		VideoTokens     int64 `json:"video_tokens"`
 	} `json:"completion_tokens_details"`
 }
 
@@ -187,10 +191,20 @@ type openAIWireResponse struct {
 func chatUsageFromWire(value openAIWireUsage) ChatUsage {
 	return ChatUsage{
 		PromptTokens: value.PromptTokens, CompletionTokens: value.CompletionTokens, TotalTokens: value.TotalTokens,
-		PromptTokensDetails:     &ChatPromptTokensDetails{CachedTokens: value.PromptTokensDetails.CachedTokens, AudioTokens: value.PromptTokensDetails.AudioTokens},
-		CompletionTokensDetails: &ChatCompletionTokensDetails{ReasoningTokens: value.CompletionTokensDetails.ReasoningTokens, AudioTokens: value.CompletionTokensDetails.AudioTokens},
-		CacheReadInputTokens:    value.PromptTokensDetails.CachedTokens,
-		UsageProvided:           true,
+		PromptTokensDetails: &ChatPromptTokensDetails{
+			CachedTokens: value.PromptTokensDetails.CachedTokens,
+			AudioTokens:  value.PromptTokensDetails.AudioTokens,
+			ImageTokens:  value.PromptTokensDetails.ImageTokens,
+			VideoTokens:  value.PromptTokensDetails.VideoTokens,
+		},
+		CompletionTokensDetails: &ChatCompletionTokensDetails{
+			ReasoningTokens: value.CompletionTokensDetails.ReasoningTokens,
+			AudioTokens:     value.CompletionTokensDetails.AudioTokens,
+			ImageTokens:     value.CompletionTokensDetails.ImageTokens,
+			VideoTokens:     value.CompletionTokensDetails.VideoTokens,
+		},
+		CacheReadInputTokens: value.PromptTokensDetails.CachedTokens,
+		UsageProvided:        true,
 	}
 }
 

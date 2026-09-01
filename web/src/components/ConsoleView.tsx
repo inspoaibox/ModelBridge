@@ -20,11 +20,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, Language, LoginMessage, MFAEnrollment, MFAStatus, PasswordFormState, Principal, ProfileFormState, TokenSummary, TranslationKey, UsageReport } from "@/types";
+import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, TenantMember, TokenSummary, TranslationKey, UsageReport } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
 import { ProfilePanel } from "@/components/ProfilePanel";
 import { UsageDocsPanel } from "@/components/UsageDocsPanel";
+import { TenantWorkspacePanel } from "@/components/TenantWorkspacePanel";
+import { ModelStatusPanel } from "@/components/ModelStatusPanel";
 
 interface ConsoleViewProps {
   language: Language;
@@ -49,6 +51,11 @@ interface ConsoleViewProps {
   usageMessage: LoginMessage;
   refreshUsage: (showPending?: boolean) => Promise<void>;
   consoleUsageReport: UsageReport | null;
+  modelStatusEnabled: boolean;
+  modelStatusReport: ModelStatusReport | null;
+  modelStatusBusy: boolean;
+  modelStatusMessage: LoginMessage;
+  refreshModelStatus: (showPending?: boolean) => Promise<void>;
   consoleProfile: ConsoleProfile | null;
   profileForm: ProfileFormState;
   setProfileForm: React.Dispatch<React.SetStateAction<ProfileFormState>>;
@@ -71,14 +78,41 @@ interface ConsoleViewProps {
   confirmMFA: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   cancelMFA: () => void;
   disableMFA: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  projects: ProjectSummary[];
+  projectsBusy: boolean;
+  projectsMessage: LoginMessage;
+  refreshProjects: (showPending?: boolean) => Promise<void>;
+  saveProject: (form: ProjectFormState) => Promise<boolean>;
+  deleteProject: (project: ProjectSummary) => Promise<void>;
+  projectActionBusy: string;
+  projectDeleteConfirm: string;
+  members: TenantMember[];
+  membersBusy: boolean;
+  membersMessage: LoginMessage;
+  refreshMembers: (showPending?: boolean) => Promise<void>;
+  addMember: (email: string, role: TenantMember["role"]) => Promise<void>;
+  updateMember: (member: TenantMember, role: TenantMember["role"], status: TenantMember["status"]) => Promise<void>;
+  removeMember: (member: TenantMember) => Promise<void>;
+  memberActionBusy: string;
+  projectMembers: ProjectMember[];
+  projectMembersBusy: boolean;
+  projectMembersMessage: LoginMessage;
+  selectedProjectID: string;
+  selectProject: (projectID: string) => void;
+  refreshProjectMembers: (projectID: string, showPending?: boolean) => Promise<void>;
+  addProjectMember: (email: string, role: ProjectMember["role"]) => Promise<void>;
+  updateProjectMember: (member: ProjectMember, role: ProjectMember["role"]) => Promise<void>;
+  removeProjectMember: (member: ProjectMember) => Promise<void>;
+  projectMemberActionBusy: string;
 }
 
-const consoleSections: Array<{ id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey }> = [
+const consoleSections: Array<{ id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey; permission?: string }> = [
   { id: "dashboard", icon: LayoutDashboard, label: "consoleNavDashboard", title: "consoleDashboardTitle", description: "consoleDashboardDescription" },
-  { id: "usage", icon: Activity, label: "consoleNavUsage", title: "consoleUsageTitle", description: "consoleUsageDescription" },
-  { id: "projects", icon: FolderKanban, label: "consoleNavProjects", title: "consoleProjectsTitle", description: "consoleProjectsDescription" },
-  { id: "tokens", icon: KeyRound, label: "consoleNavTokens", title: "tokensConsoleTitle", description: "tokensConsoleDescription" },
-  { id: "billing", icon: BadgeDollarSign, label: "consoleNavBilling", title: "consoleBillingTitle", description: "consoleBillingDescription" },
+  { id: "model-status", icon: Activity, label: "consoleNavModelStatus", title: "consoleModelStatusTitle", description: "consoleModelStatusDescription", permission: "model:status:read" },
+  { id: "usage", icon: Activity, label: "consoleNavUsage", title: "consoleUsageTitle", description: "consoleUsageDescription", permission: "usage:read" },
+  { id: "projects", icon: FolderKanban, label: "consoleNavProjects", title: "consoleProjectsTitle", description: "consoleProjectsDescription", permission: "project:read" },
+  { id: "tokens", icon: KeyRound, label: "consoleNavTokens", title: "tokensConsoleTitle", description: "tokensConsoleDescription", permission: "token:read" },
+  { id: "billing", icon: BadgeDollarSign, label: "consoleNavBilling", title: "consoleBillingTitle", description: "consoleBillingDescription", permission: "billing:read" },
   { id: "profile", icon: UserRound, label: "consoleNavProfile", title: "consoleProfileTitle", description: "consoleProfileDescription" },
   { id: "docs", icon: BookOpen, label: "consoleNavDocs", title: "consoleDocsTitle", description: "consoleDocsDescription" },
 ];
@@ -106,6 +140,11 @@ export function ConsoleView({
   usageMessage,
   refreshUsage,
   consoleUsageReport,
+  modelStatusEnabled,
+  modelStatusReport,
+  modelStatusBusy,
+  modelStatusMessage,
+  refreshModelStatus,
   consoleProfile,
   profileForm,
   setProfileForm,
@@ -128,22 +167,55 @@ export function ConsoleView({
   confirmMFA,
   cancelMFA,
   disableMFA,
+  projects,
+  projectsBusy,
+  projectsMessage,
+  refreshProjects,
+  saveProject,
+  deleteProject,
+  projectActionBusy,
+  projectDeleteConfirm,
+  members,
+  membersBusy,
+  membersMessage,
+  refreshMembers,
+  addMember,
+  updateMember,
+  removeMember,
+  memberActionBusy,
+  projectMembers,
+  projectMembersBusy,
+  projectMembersMessage,
+  selectedProjectID,
+  selectProject,
+  refreshProjectMembers,
+  addProjectMember,
+  updateProjectMember,
+  removeProjectMember,
+  projectMemberActionBusy,
 }: ConsoleViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
-  const activeSection = consoleSections.find((item) => item.id === section) || consoleSections[0];
+  const hasPermission = (permission?: string) => !permission || principal?.permissions?.includes(permission) === true;
+  const visibleSections = consoleSections.filter((item) => item.id !== "model-status" || modelStatusEnabled).filter((item) => hasPermission(item.permission));
+  const displayedSection = visibleSections.some((item) => item.id === section) ? section : "dashboard";
+  const activeSection = visibleSections.find((item) => item.id === displayedSection) || consoleSections[0];
   const selectSection = (next: ConsoleSection) => {
     setSection(next);
     routeTo(`#console/${next}`);
   };
   const activeTokens = tokens.filter((token) => token.status === "active").length;
-  const projectCount = principal?.project_ids?.length || 0;
+  const projectCount = projects.length;
+  const canManageTenant = hasPermission("member:invite");
+  const canManageProjects = hasPermission("project:update");
+  const canCreateToken = hasPermission("token:create");
+  const canRevokeToken = hasPermission("token:revoke");
 
   return (
     <div className="flex min-h-[calc(100vh-72px)] w-full bg-slate-50 dark:bg-slate-950">
       <aside className="sticky top-[72px] hidden h-[calc(100vh-72px)] w-[272px] shrink-0 flex-col border-r border-slate-200/80 bg-white/90 px-4 py-5 dark:border-slate-800/80 dark:bg-slate-950/90 lg:flex">
         <div className="mb-6 rounded-2xl border border-indigo-500/20 bg-gradient-to-br from-indigo-500/10 via-cyan-500/5 to-transparent p-4 dark:border-indigo-400/20"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"><ShieldCheck className="h-4 w-4" />{t("consoleWorkspaceEyebrow")}</div><div className="mt-3 truncate text-sm font-semibold text-slate-900 dark:text-white">{principal?.tenant_id || t("consoleTenantUnknown")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t("consoleTenantWorkspace")}</div></div>
         <nav className="flex-1 space-y-1" aria-label={t("consoleNavigation")}>
-          {consoleSections.map((item) => { const Icon = item.icon; const active = item.id === section; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-all", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>; })}
+          {visibleSections.map((item) => { const Icon = item.icon; const active = item.id === displayedSection; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-all", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>; })}
         </nav>
         <div className="space-y-3 border-t border-slate-200/80 pt-4 dark:border-slate-800/80"><Button variant="outline" size="sm" onClick={handleSignOut} className="w-full gap-2 text-xs"><LogOut className="h-3.5 w-3.5" />{t("signOut")}</Button></div>
       </aside>
@@ -152,24 +224,25 @@ export function ConsoleView({
         <div className="mx-auto max-w-[1560px] space-y-6">
           <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 dark:border-slate-800/80 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"><span>{t("consoleWorkspaceEyebrow")}</span><span>/</span><span className="text-slate-700 dark:text-slate-300">{t(activeSection.label)}</span></div><h1 className="mt-2 text-2xl font-extrabold tracking-tight text-slate-950 dark:text-white sm:text-3xl">{t(activeSection.title)}</h1><p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">{t(activeSection.description)}</p></div><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/80 px-3.5 py-2 shadow-sm dark:border-slate-800 dark:bg-slate-900/80"><div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-xs font-bold uppercase text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300">{(principal?.id || "U").slice(0, 2)}</div><div><div className="text-[10px] font-bold uppercase text-slate-400">{t("consoleCurrentUser")}</div><div className="max-w-[180px] truncate font-mono text-xs text-slate-800 dark:text-slate-200">{principal?.id || "-"}</div></div></div></div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{consoleSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === section ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}</div>
+          <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{visibleSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === displayedSection ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}</div>
 
-          {section === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} onNavigate={selectSection} /> : null}
-          {section === "usage" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} tokens={tokens} /> : null}
-          {section === "projects" ? <ProjectsPanel t={t} principal={principal} /> : null}
-          {section === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} revokeToken={revokeToken} revokeConfirm={revokeConfirm} openCreateToken={openCreateToken} /> : null}
-          {section === "billing" ? <BillingPanel language={language} t={t} billingAccount={billingAccount} billingBusy={billingBusy} billingMessage={billingMessage} refreshBilling={refreshBilling} /> : null}
-          {section === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
-          {section === "docs" ? <UsageDocsPanel language={language} routeTo={routeTo} /> : null}
+          {displayedSection === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
+          {displayedSection === "model-status" ? <ModelStatusPanel language={language} report={modelStatusReport} busy={modelStatusBusy} message={modelStatusMessage} refresh={refreshModelStatus} /> : null}
+          {displayedSection === "usage" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} tokens={tokens} /> : null}
+          {displayedSection === "projects" ? <TenantWorkspacePanel language={language} canManageTenant={canManageTenant} canManageProjects={canManageProjects} projects={projects} projectsBusy={projectsBusy} projectsMessage={projectsMessage} refreshProjects={refreshProjects} saveProject={saveProject} deleteProject={deleteProject} projectActionBusy={projectActionBusy} projectDeleteConfirm={projectDeleteConfirm} members={members} membersBusy={membersBusy} membersMessage={membersMessage} refreshMembers={refreshMembers} addMember={addMember} updateMember={updateMember} removeMember={removeMember} memberActionBusy={memberActionBusy} projectMembers={projectMembers} projectMembersBusy={projectMembersBusy} projectMembersMessage={projectMembersMessage} selectedProjectID={selectedProjectID} selectProject={selectProject} refreshProjectMembers={refreshProjectMembers} addProjectMember={addProjectMember} updateProjectMember={updateProjectMember} removeProjectMember={removeProjectMember} projectMemberActionBusy={projectMemberActionBusy} /> : null}
+          {displayedSection === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} revokeToken={revokeToken} revokeConfirm={revokeConfirm} openCreateToken={openCreateToken} canCreateToken={canCreateToken} canRevokeToken={canRevokeToken} /> : null}
+          {displayedSection === "billing" ? <BillingPanel language={language} t={t} billingAccount={billingAccount} billingBusy={billingBusy} billingMessage={billingMessage} refreshBilling={refreshBilling} /> : null}
+          {displayedSection === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
+          {displayedSection === "docs" ? <UsageDocsPanel language={language} routeTo={routeTo} /> : null}
         </div>
       </div>
     </div>
   );
 }
 
-function DashboardPanel({ t, tokens, activeTokens, projectCount, principal, usageStatus, usageBusy, onNavigate }: { t: (key: TranslationKey) => string; tokens: TokenSummary[]; activeTokens: number; projectCount: number; principal: Principal | null; usageStatus: ConsoleUsageStatus | null; usageBusy: boolean; onNavigate: (section: ConsoleSection) => void }) {
+function DashboardPanel({ t, tokens, activeTokens, projectCount, principal, usageStatus, usageBusy, canCreateToken, onNavigate }: { t: (key: TranslationKey) => string; tokens: TokenSummary[]; activeTokens: number; projectCount: number; principal: Principal | null; usageStatus: ConsoleUsageStatus | null; usageBusy: boolean; canCreateToken: boolean; onNavigate: (section: ConsoleSection) => void }) {
   const cards = [{ label: t("consoleStatProjects"), value: String(projectCount), icon: FolderKanban, tone: "indigo" }, { label: t("consoleStatTokens"), value: String(tokens.length), icon: KeyRound, tone: "cyan" }, { label: t("consoleStatActiveTokens"), value: String(activeTokens), icon: CheckCircle2, tone: "emerald" }, { label: t("consoleStatUsage"), value: usageBusy ? "..." : usageStatus?.status === "ready" ? t("consoleReady") : "-", icon: Gauge, tone: "amber" }];
-  return <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map((card) => <Card key={card.label} className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardDescription>{card.label}</CardDescription><div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", card.tone === "emerald" ? "bg-emerald-500/10 text-emerald-600" : card.tone === "cyan" ? "bg-cyan-500/10 text-cyan-600" : card.tone === "amber" ? "bg-amber-500/10 text-amber-600" : "bg-indigo-500/10 text-indigo-600")}><card.icon className="h-4 w-4" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-slate-950 dark:text-white">{card.value}</div></CardContent></Card>)}</div><div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]"><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleOverviewTitle")}</CardTitle><CardDescription>{t("consoleOverviewHint")}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleTenantID")}</span><code className="max-w-[65%] truncate text-xs text-slate-700 dark:text-slate-300">{principal?.tenant_id || "-"}</code></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleRoles")}</span><span className="font-medium text-slate-800 dark:text-slate-200">{principal?.roles?.join(", ") || "-"}</span></div></CardContent></Card><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Network className="h-5 w-5 text-cyan-600" />{t("consoleQuickActions")}</CardTitle></CardHeader><CardContent className="space-y-2"><button type="button" onClick={() => onNavigate("tokens")} className="flex w-full items-center gap-3 rounded-xl bg-indigo-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-indigo-500/10 dark:text-slate-300"><KeyRound className="h-4 w-4 text-indigo-600" />{t("consoleQuickToken")}</button><button type="button" onClick={() => onNavigate("usage")} className="flex w-full items-center gap-3 rounded-xl bg-cyan-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-cyan-500/10 dark:text-slate-300"><Activity className="h-4 w-4 text-cyan-600" />{t("consoleQuickUsage")}</button></CardContent></Card></div></div>;
+  return <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map((card) => <Card key={card.label} className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardDescription>{card.label}</CardDescription><div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", card.tone === "emerald" ? "bg-emerald-500/10 text-emerald-600" : card.tone === "cyan" ? "bg-cyan-500/10 text-cyan-600" : card.tone === "amber" ? "bg-amber-500/10 text-amber-600" : "bg-indigo-500/10 text-indigo-600")}><card.icon className="h-4 w-4" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-slate-950 dark:text-white">{card.value}</div></CardContent></Card>)}</div><div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]"><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleOverviewTitle")}</CardTitle><CardDescription>{t("consoleOverviewHint")}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleTenantID")}</span><code className="max-w-[65%] truncate text-xs text-slate-700 dark:text-slate-300">{principal?.tenant_id || "-"}</code></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleRoles")}</span><span className="font-medium text-slate-800 dark:text-slate-200">{principal?.roles?.join(", ") || "-"}</span></div></CardContent></Card><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Network className="h-5 w-5 text-cyan-600" />{t("consoleQuickActions")}</CardTitle></CardHeader><CardContent className="space-y-2">{canCreateToken ? <button type="button" onClick={() => onNavigate("tokens")} className="flex w-full items-center gap-3 rounded-xl bg-indigo-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-indigo-500/10 dark:text-slate-300"><KeyRound className="h-4 w-4 text-indigo-600" />{t("consoleQuickToken")}</button> : null}<button type="button" onClick={() => onNavigate("usage")} className="flex w-full items-center gap-3 rounded-xl bg-cyan-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-cyan-500/10 dark:text-slate-300"><Activity className="h-4 w-4 text-cyan-600" />{t("consoleQuickUsage")}</button></CardContent></Card></div></div>;
 }
 
 function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMessage, refreshUsage, tokens }: { language: Language; t: (key: TranslationKey) => string; usageStatus: ConsoleUsageStatus | null; usageReport: UsageReport | null; usageBusy: boolean; usageMessage: LoginMessage; refreshUsage: (showPending?: boolean) => Promise<void>; tokens: TokenSummary[] }) {
@@ -179,18 +252,18 @@ function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMes
 
 function UsageMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/30"><div className="text-xs text-slate-500">{label}</div><div className="mt-2 text-xl font-bold text-slate-900 dark:text-white">{value}</div></div>; }
 function formatInteger(value: number) { return new Intl.NumberFormat("en-US", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0); }
+function formatMoney(value?: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "0";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(parsed);
+}
 function formatDate(value: string, language: Language) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "-" : new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", { dateStyle: "short", timeStyle: "medium" }).format(date); }
 
-function ProjectsPanel({ t, principal }: { t: (key: TranslationKey) => string; principal: Principal | null }) {
-  const projectIDs = principal?.project_ids || [];
-  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><FolderKanban className="h-5 w-5 text-indigo-600" />{t("consoleProjectsTitle")}</CardTitle><CardDescription>{t("consoleProjectsDescription")}</CardDescription></CardHeader><CardContent><div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"><Table><TableHeader><TableRow><TableHead>{t("consoleProjectID")}</TableHead><TableHead>{t("consoleProjectStatus")}</TableHead><TableHead>{t("consoleProjectAccess")}</TableHead></TableRow></TableHeader><TableBody>{projectIDs.length === 0 ? <TableRow><TableCell colSpan={3} className="py-12 text-center text-sm text-slate-500">{t("consoleNoProjects")}</TableCell></TableRow> : projectIDs.map((projectID) => <TableRow key={projectID}><TableCell className="font-mono text-xs text-slate-700 dark:text-slate-300">{projectID}</TableCell><TableCell><Badge variant="success">{t("consoleProjectActive")}</Badge></TableCell><TableCell><Badge variant="cyan">{t("consoleProjectGranted")}</Badge></TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>;
-}
-
-function TokensPanel({ language, t, tokens, tokensBusy, tokensMessage, refreshTokens, revokeToken, revokeConfirm, openCreateToken }: { language: Language; t: (key: TranslationKey) => string; tokens: TokenSummary[]; tokensBusy: boolean; tokensMessage: LoginMessage; refreshTokens: (showPending?: boolean) => Promise<void>; revokeToken: (token: TokenSummary) => Promise<void>; revokeConfirm: string; openCreateToken: () => void }) {
+function TokensPanel({ language, t, tokens, tokensBusy, tokensMessage, refreshTokens, revokeToken, revokeConfirm, openCreateToken, canCreateToken, canRevokeToken }: { language: Language; t: (key: TranslationKey) => string; tokens: TokenSummary[]; tokensBusy: boolean; tokensMessage: LoginMessage; refreshTokens: (showPending?: boolean) => Promise<void>; revokeToken: (token: TokenSummary) => Promise<void>; revokeConfirm: string; openCreateToken: () => void; canCreateToken: boolean; canRevokeToken: boolean }) {
   const formatTime = (value?: string) => value ? new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "-";
-  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle className="flex items-center gap-2 text-lg"><KeyRound className="h-5 w-5 text-indigo-600" />{t("tokensTableTitle")}</CardTitle><CardDescription>{t("tokensConsoleTableHint")}</CardDescription></div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void refreshTokens(true)} disabled={tokensBusy} className="gap-2"><RefreshCw className={cn("h-4 w-4", tokensBusy ? "animate-spin" : "")} />{t("tokensRefresh")}</Button><Button size="sm" onClick={openCreateToken} className="gap-2"><Plus className="h-4 w-4" />{t("tokensCreateAction")}</Button></div></CardHeader><CardContent className="space-y-4">{tokensMessage.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{tokensMessage.text}</div> : null}<div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"><Table><TableHeader><TableRow><TableHead>{t("tokensName")}</TableHead><TableHead>{t("tokensPrefix")}</TableHead><TableHead>{t("tokensProjectID")}</TableHead><TableHead>{t("tokensGroup")}</TableHead><TableHead>{t("tokensStatus")}</TableHead><TableHead>{t("tokensCreated")}</TableHead><TableHead className="text-right">{t("tokensActions")}</TableHead></TableRow></TableHeader><TableBody>{tokensBusy && tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-indigo-600" />{t("tokensLoading")}</TableCell></TableRow> : tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500">{t("tokensEmpty")}</TableCell></TableRow> : tokens.map((token) => <TableRow key={token.id}><TableCell><div className="font-semibold text-slate-900 dark:text-white">{token.name}</div><div className="mt-1 font-mono text-[10px] text-slate-500">{token.id}</div></TableCell><TableCell><code className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">{token.token_prefix}...</code></TableCell><TableCell className="font-mono text-xs text-slate-600 dark:text-slate-400">{token.project_id}</TableCell><TableCell><Badge variant="muted">{token.group_code || t("tokensNoGroup")}</Badge></TableCell><TableCell><Badge variant={token.status === "active" ? "success" : token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell><TableCell className="whitespace-nowrap text-xs text-slate-500">{formatTime(token.created_at)}</TableCell><TableCell className="text-right"><Button variant={revokeConfirm === token.id ? "destructive" : "ghost"} size="sm" onClick={() => void revokeToken(token)} disabled={token.status !== "active"} className="gap-1.5 text-xs"><Trash2 className="h-3.5 w-3.5" />{revokeConfirm === token.id ? t("tokensRevokeConfirm") : t("tokensRevoke")}</Button></TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>;
+  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle className="flex items-center gap-2 text-lg"><KeyRound className="h-5 w-5 text-indigo-600" />{t("tokensTableTitle")}</CardTitle><CardDescription>{t("tokensConsoleTableHint")}</CardDescription></div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void refreshTokens(true)} disabled={tokensBusy} className="gap-2"><RefreshCw className={cn("h-4 w-4", tokensBusy ? "animate-spin" : "")} />{t("tokensRefresh")}</Button>{canCreateToken ? <Button size="sm" onClick={openCreateToken} className="gap-2"><Plus className="h-4 w-4" />{t("tokensCreateAction")}</Button> : null}</div></CardHeader><CardContent className="space-y-4">{tokensMessage.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{tokensMessage.text}</div> : null}<div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"><Table><TableHeader><TableRow><TableHead>{t("tokensName")}</TableHead><TableHead>{t("tokensPrefix")}</TableHead><TableHead>{t("tokensProjectID")}</TableHead><TableHead>{t("tokensGroup")}</TableHead><TableHead>{t("tokensStatus")}</TableHead><TableHead>{t("tokensCreated")}</TableHead><TableHead className="text-right">{t("tokensActions")}</TableHead></TableRow></TableHeader><TableBody>{tokensBusy && tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-indigo-600" />{t("tokensLoading")}</TableCell></TableRow> : tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500">{t("tokensEmpty")}</TableCell></TableRow> : tokens.map((token) => <TableRow key={token.id}><TableCell><div className="font-semibold text-slate-900 dark:text-white">{token.name}</div><div className="mt-1 font-mono text-[10px] text-slate-500">{token.id}</div></TableCell><TableCell><code className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">{token.token_prefix}...</code></TableCell><TableCell className="font-mono text-xs text-slate-600 dark:text-slate-400">{token.project_id}</TableCell><TableCell><Badge variant="muted">{token.group_code || t("tokensNoGroup")}</Badge></TableCell><TableCell><Badge variant={token.status === "active" ? "success" : token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell><TableCell className="whitespace-nowrap text-xs text-slate-500">{formatTime(token.created_at)}</TableCell><TableCell className="text-right"><Button variant={revokeConfirm === token.id ? "destructive" : "ghost"} size="sm" onClick={() => void revokeToken(token)} disabled={!canRevokeToken || token.status !== "active"} className="gap-1.5 text-xs"><Trash2 className="h-3.5 w-3.5" />{revokeConfirm === token.id ? t("tokensRevokeConfirm") : t("tokensRevoke")}</Button></TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>;
 }
 
 function BillingPanel({ t, billingAccount, billingBusy, billingMessage, refreshBilling }: { language: Language; t: (key: TranslationKey) => string; billingAccount: BillingAccount | null; billingBusy: boolean; billingMessage: LoginMessage; refreshBilling: () => Promise<void> }) {
-  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-start justify-between gap-4"><div><CardTitle className="flex items-center gap-2 text-lg"><BadgeDollarSign className="h-5 w-5 text-emerald-600" />{t("consoleBillingTitle")}</CardTitle><CardDescription>{t("consoleBillingDescription")}</CardDescription></div><Button variant="outline" size="sm" onClick={() => void refreshBilling()} disabled={billingBusy} className="gap-2"><RefreshCw className={cn("h-4 w-4", billingBusy ? "animate-spin" : "")} />{t("consoleRefresh")}</Button></CardHeader><CardContent className="space-y-4">{billingMessage.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{billingMessage.text}</div> : null}{billingAccount ? <div className="grid gap-4 md:grid-cols-3"><div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="text-xs text-slate-500">{t("consoleBillingBalance")}</div><div className="mt-2 text-3xl font-bold text-emerald-700 dark:text-emerald-300">{billingAccount.currency} {billingAccount.balance}</div></div><div className="rounded-xl border border-slate-200 p-5 dark:border-slate-800"><div className="text-xs text-slate-500">{t("consoleBillingStatus")}</div><div className="mt-2"><Badge variant="success">{billingAccount.status}</Badge></div></div><div className="rounded-xl border border-slate-200 p-5 dark:border-slate-800"><div className="text-xs text-slate-500">{t("consoleBillingAccountID")}</div><div className="mt-2 truncate font-mono text-xs text-slate-700 dark:text-slate-300">{billingAccount.id}</div></div></div> : <div className="rounded-xl border border-dashed border-slate-300 py-16 text-center text-sm text-slate-500 dark:border-slate-700">{t("consoleBillingNoAccount")}</div>}</CardContent></Card>;
+  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-start justify-between gap-4"><div><CardTitle className="flex items-center gap-2 text-lg"><BadgeDollarSign className="h-5 w-5 text-emerald-600" />{t("consoleBillingTitle")}</CardTitle><CardDescription>{t("consoleBillingDescription")}</CardDescription></div><Button variant="outline" size="sm" onClick={() => void refreshBilling()} disabled={billingBusy} className="gap-2"><RefreshCw className={cn("h-4 w-4", billingBusy ? "animate-spin" : "")} />{t("consoleRefresh")}</Button></CardHeader><CardContent className="space-y-4">{billingMessage.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{billingMessage.text}</div> : null}{billingAccount ? <div className="grid gap-4 md:grid-cols-3"><div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="text-xs text-slate-500">{t("consoleBillingBalance")}</div><div className="mt-2 text-3xl font-bold text-emerald-700 dark:text-emerald-300">{billingAccount.currency} {formatMoney(billingAccount.balance)}</div></div><div className="rounded-xl border border-slate-200 p-5 dark:border-slate-800"><div className="text-xs text-slate-500">{t("consoleBillingStatus")}</div><div className="mt-2"><Badge variant="success">{billingAccount.status}</Badge></div></div><div className="rounded-xl border border-slate-200 p-5 dark:border-slate-800"><div className="text-xs text-slate-500">{t("consoleBillingAccountID")}</div><div className="mt-2 truncate font-mono text-xs text-slate-700 dark:text-slate-300">{billingAccount.id}</div></div></div> : <div className="rounded-xl border border-dashed border-slate-300 py-16 text-center text-sm text-slate-500 dark:border-slate-700">{t("consoleBillingNoAccount")}</div>}</CardContent></Card>;
 }

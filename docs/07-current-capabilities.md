@@ -10,13 +10,19 @@
 | `/console/*` | `console_session` | 当前租户、成员角色和项目集合 |
 | `/v1/*` | `Authorization: Bearer`、`X-API-Key` 或 Anthropic `x-api-key` | API Token 的租户、项目、模型、网络和速率策略 |
 
-管理员 Session 不能作为下游 Token 使用，租户 Session 不能访问平台管理接口。控制台 Token 列表和撤销操作按 `tenant_id + created_by` 查询，只能看到本人创建的 Token；管理员列表用于平台运营，能看到全平台脱敏摘要。
+管理员 Session 不能作为下游 Token 使用，租户 Session 不能访问平台管理接口。控制台 Token 列表和撤销操作按 `tenant_id + created_by` 查询，只能看到本人创建的 Token；管理员列表用于平台运营，能看到全平台脱敏摘要。平台所有者可以在独立角色页面维护平台角色、权限集合和已注册管理员绑定，普通平台角色不能越权修改这些绑定。
+
+生产公开注册会创建 `pending` 用户，SMTP 发送一次性验证链接；只有 `POST /console/v1/auth/email/verify` 成功后才能登录，后台状态修改也不能绕过邮箱验证。开发环境默认关闭该验证开关以便本机测试。验证码/Captcha 和 WAF 仍由边缘基础设施提供。
 
 ## 路由与兜底
 
 请求先校验 Token、网络白名单、模型白名单、Token 限流和分组 RPM，再从 `models -> channel_models -> channels` 找候选渠道。候选渠道按 priority 从高到低分层；同一优先级按 weight 加权选择。上游返回可重试错误、超时或凭据不可用时，继续尝试其他候选渠道。连续失败达到阈值后，渠道自动进入短时熔断窗口；成功后清零。
 
 分组是渠道集合和计费/资源策略，不是模型本身。一个模型可以由多个分组提供，一个分组也可以拥有多个模型。Token 绑定一个分组后，只能使用该分组实际关联渠道提供的模型。
+
+租户控制台提供 `GET /console/v1/tenants/{tenantID}/model-status`。它按分组聚合当前启用模型映射：活动分组可见，租户已有令牌绑定的停用分组也可见；分组停用显示 `disabled`，没有可用路由显示 `unavailable`，部分路由因渠道或模型映射停用、自动熔断不可用显示 `degraded`，所有路由可用且全部路由有真实请求观测显示 `normal`；尚未完成首次观测显示 `pending`。该页面是基于数据库运行状态的近实时视图，不是主动上游探针，前端默认每 15 秒轮询。
+
+模型状态是可选功能，管理员可在系统设置的“功能开关”中关闭。关闭后租户侧入口、深链和接口均不可用，返回 `MODEL_STATUS_DISABLED`；公开 `GET /public/v1/features` 只返回非敏感的功能标志。管理员运营侧的“模型监控”通过 `GET /admin/v1/model-status` 查看全平台全部非删除分组和有效模型映射，按分组显示路由可用数、渠道模型熔断状态、最近响应延迟、近 7 天已结束请求可用率和最近 60 次请求状态。近 7 天可用率只统计 `settled`、`settlement_pending` 和 `failed` 请求，其中 `settlement_pending` 表示上游已接受但用量仍待对账，不执行主动探针。
 
 ## 计费与记录
 
@@ -47,7 +53,7 @@ Token 价格按 USD / 1M Token 展示；非 Token 组件按自身单位展示，
 - `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`、`POST /v1/audio/speech`
 - `POST /v1/videos`、`GET /v1/videos/{videoID}`、`GET /v1/videos/{videoID}/content`
 
-图片输入、工具调用和结构化输出会按渠道协议转换；具体模型是否支持仍以渠道和上游模型能力为准。OpenAI/Grok 使用 OpenAI 兼容媒体协议，Gemini 使用 Imagen、原生多模态音频和 Veo 协议；Anthropic 不会被错误标记为通用图片或视频生成渠道。视频为异步任务，平台保存任务与账务关联并只向客户返回平台任务 ID。客户端提交不适用能力会得到稳定的 unsupported/invalid 错误，不会静默降级成文本请求。
+图片输入、工具调用和结构化输出会按渠道协议转换；具体模型是否支持仍以渠道和上游模型能力为准。OpenAI 使用官方 OpenAI API；Grok 的文本/Embedding 使用 OpenAI-compatible API，媒体使用 xAI 官方路径；Gemini 使用官方 GenerateContent、EmbedContent、Imagen 和 Veo 协议；Anthropic 仅开放其官方 Messages 能力，不伪装成图片/视频生成或 Embedding 渠道。视频为异步任务，平台保存任务与账务关联并只向客户返回平台任务 ID。客户端提交不适用能力会得到稳定的 unsupported/invalid 错误，不会静默降级成文本请求。
 
 流式和非流式请求在上游明确提供 Usage 时按真实 Usage 结算；OpenAI 的 `prompt_tokens`/`completion_tokens`、Gemini 的 prompt/candidates/thoughts、Anthropic 的 input/output/cache creation/cache read 都按父量与子集关系归一化，缓存、推理和媒体 Token 不会重复计费。媒体优先使用上游 Usage，其次使用能够从请求或文件元数据验证的图片数量、音频时长、视频秒数和语音字符数；无法可靠推导的计量不会伪造为 0，付费请求会返回明确的 Usage 不可用错误。
 
@@ -61,6 +67,8 @@ Token 价格按 USD / 1M Token 展示；非 Token 组件按自身单位展示，
 - 管理员和控制台密码、邮箱、MFA 修改后撤销该用户旧 Session。
 - 管理端 mutation、认证 mutation 和 Relay 请求写入追加式审计日志；请求体、Authorization、API Key、上游密钥不会写入审计。
 - `POST /admin/v1/usage/{requestID}/settle` 允许具备 `billing:update` 的管理员为 `settlement_pending` 请求补录真实 Usage；空计量会被拒绝，补结算操作会进入审计日志。
+- Token 网络白名单支持 IP/CIDR 或浏览器域名来源策略；IP/CIDR 匹配真实对端地址，域名匹配 Origin/Referer。服务端调用应使用 IP/CIDR，域名请求缺少浏览器来源头时会被拒绝；非浏览器客户端可以伪造来源头，因此域名不应作为强 bearer-token 边界。
+- 管理员角色/权限写入和管理员绑定也必须携带实时 `X-MFA-Code`；连续错误会返回 `MFA_STEP_UP_THROTTLED`。`platform_owner` 角色定义不可编辑或停用，最后一个有效平台管理员不能被移除；角色权限/状态改变会立即撤销受影响管理员的后台 Session。普通 `user:update` 管理员不能修改平台所有者账号。
 
 ## 发布前检查
 
@@ -68,5 +76,6 @@ Token 价格按 USD / 1M Token 展示；非 Token 组件按自身单位展示，
 2. 生产设置 `COOKIE_SECURE=true`，通过 TLS 反向代理部署，并配置明确的 `CORS_ALLOWED_ORIGINS`。
 3. 运行 `go test ./...`、`go vet ./...` 和 `cd web; npm run build`。
 4. 用真实管理员完成 TOTP 绑定后再开启全局管理员 MFA，并为所有管理员准备恢复流程。
-5. 验证 Token 白名单、过期、撤销、RPM/TPM/并发限制、分组兜底和账务幂等。
-6. 对 Anthropic 专用 Embeddings、完整 Responses 高级事件和其他未实现能力不要在客户文档或首页承诺为已支持功能。
+5. 开启公开注册前配置 SMTP、HTTPS `PUBLIC_BASE_URL` 和邮箱验证，并在边缘层启用 Captcha/WAF。
+6. 验证 Token 白名单、过期、撤销、RPM/TPM/并发限制、分组兜底和账务幂等。
+7. 对 Anthropic 专用 Embeddings、完整 Responses 高级事件和其他未实现能力不要在客户文档或首页承诺为已支持功能。

@@ -49,19 +49,40 @@ func (r *SQLResolver) Resolve(ctx context.Context, credential string) (*Principa
 		expiresAt      sql.NullTime
 	)
 	err := r.db.QueryRowContext(ctx, `
-		SELECT tok.id::text, tok.tenant_id::text, tok.project_id::text, tok.group_id::text,
+		SELECT tok.id::text, tok.tenant_id::text, tok.project_id::text,
+		       COALESCE(tok.group_id::text, (
+		           SELECT id::text FROM routing_groups
+		           WHERE code = 'default' AND status = 'active' AND deleted_at IS NULL
+		           LIMIT 1
+		       )),
 		       tok.scopes_json, tok.allowed_models_json, tok.allowed_ips_json, tok.allowed_domains_json,
 		       tok.status, tok.expires_at
 		FROM api_tokens tok
+		JOIN users creator ON creator.id = tok.created_by
+		JOIN tenant_members creator_member ON creator_member.tenant_id = tok.tenant_id
+		  AND creator_member.user_id = tok.created_by
+		  AND creator_member.status = 'active'
 		JOIN tenants t ON t.id = tok.tenant_id
 		JOIN projects p ON p.id = tok.project_id AND p.tenant_id = tok.tenant_id
 		WHERE tok.token_hash = $1
 		  AND tok.status = 'active'
+		  AND creator.status = 'active'
+		  AND creator.deleted_at IS NULL
 		  AND (tok.expires_at IS NULL OR tok.expires_at > now())
 		  AND t.status = 'active'
 		  AND t.deleted_at IS NULL
 		  AND p.status = 'active'
 		  AND p.deleted_at IS NULL
+		  AND (
+		      creator_member.role_code IN ('tenant_owner', 'tenant_admin')
+		      OR EXISTS (
+		          SELECT 1
+		          FROM project_members creator_project_member
+		          WHERE creator_project_member.project_id = tok.project_id
+		            AND creator_project_member.user_id = tok.created_by
+		            AND creator_project_member.role_code IN ('project_admin', 'developer')
+		      )
+		  )
 	`, r.tokenHasher.Digest(credential)).Scan(
 		&id, &tenantID, &projectID, &groupID, &tokenScopes, &allowedModels, &allowedIPs, &allowedDomains, &status, &expiresAt,
 	)
@@ -99,6 +120,7 @@ func (r *SQLResolver) Resolve(ctx context.Context, credential string) (*Principa
 		TenantID:       tenantID,
 		GroupID:        groupID.String,
 		ProjectIDs:     map[string]struct{}{projectID: {}},
+		ProjectRoles:   map[string]string{projectID: "developer"},
 		Scopes:         scopes,
 		Permissions:    map[string]struct{}{},
 		AllowedModels:  models,
@@ -243,12 +265,16 @@ func (r *SQLResolver) loadTenantAccess(ctx context.Context, principal *Principal
 				principal.ProjectIDs = map[string]struct{}{}
 			}
 			principal.ProjectIDs[projectID] = struct{}{}
+			if principal.ProjectRoles == nil {
+				principal.ProjectRoles = map[string]string{}
+			}
+			principal.ProjectRoles[projectID] = "project_admin"
 		}
 		return rows.Err()
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT pm.project_id::text
+		SELECT pm.project_id::text, pm.role_code
 		FROM project_members pm
 		JOIN projects p ON p.id = pm.project_id
 		WHERE pm.user_id = $1
@@ -261,14 +287,21 @@ func (r *SQLResolver) loadTenantAccess(ctx context.Context, principal *Principal
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var projectID string
-		if err := rows.Scan(&projectID); err != nil {
+		var projectID, projectRole string
+		if err := rows.Scan(&projectID, &projectRole); err != nil {
 			return err
 		}
 		if principal.ProjectIDs == nil {
 			principal.ProjectIDs = map[string]struct{}{}
 		}
 		principal.ProjectIDs[projectID] = struct{}{}
+		if principal.ProjectRoles == nil {
+			principal.ProjectRoles = map[string]string{}
+		}
+		principal.ProjectRoles[projectID] = projectRole
+		if projectRole == "project_admin" {
+			principal.Permissions["project:update"] = struct{}{}
+		}
 	}
 	return rows.Err()
 }
@@ -276,19 +309,19 @@ func (r *SQLResolver) loadTenantAccess(ctx context.Context, principal *Principal
 var tenantRolePermissions = map[string][]string{
 	"tenant_owner": {
 		"tenant:read", "tenant:update", "member:invite", "member:remove",
-		"project:read", "project:update", "token:read", "token:create", "token:revoke",
-		"usage:read", "billing:read", "model:use",
+	"project:read", "project:update", "token:read", "token:create", "token:revoke",
+		"usage:read", "billing:read", "model:use", "model:status:read",
 	},
 	"tenant_admin": {
 		"tenant:read", "member:invite", "member:remove",
 		"project:read", "project:update", "token:read", "token:create", "token:revoke",
-		"usage:read", "billing:read", "model:use",
+		"usage:read", "billing:read", "model:use", "model:status:read",
 	},
 	"developer": {
-		"project:read", "token:read", "token:create", "token:revoke", "usage:read", "model:use",
+		"project:read", "token:read", "token:create", "token:revoke", "usage:read", "model:use", "model:status:read",
 	},
 	"viewer": {
-		"project:read", "usage:read", "billing:read",
+		"project:read", "usage:read", "billing:read", "model:status:read",
 	},
 }
 

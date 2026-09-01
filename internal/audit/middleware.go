@@ -53,6 +53,12 @@ func HTTPMiddleware(next http.Handler, writer Writer) http.Handler {
 		if resourceID == "" {
 			resourceID = r.PathValue("tokenID")
 		}
+		if resourceID == "" {
+			resourceID = r.PathValue("projectID")
+		}
+		if resourceID == "" {
+			resourceID = r.PathValue("tenantID")
+		}
 		if !looksLikeUUID(resourceID) {
 			resourceID = ""
 		}

@@ -114,6 +114,29 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	if price.Version != 1 || price.ScopeID != "" || price.Status != "active" {
 		t.Fatalf("unexpected published price: %#v", price)
 	}
+	secondPrice, err := service.PublishPrice(ctx, userID, PublishPriceRequest{
+		ScopeType:               "platform_default",
+		ModelID:                 modelID,
+		Currency:                "TST",
+		InputPricePerUnit:       "0.01",
+		OutputPricePerUnit:      "0.02",
+		CachedInputPricePerUnit: "0.03",
+		ReasoningPricePerUnit:   "0.04",
+		MinimumCharge:           "0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondPrice.Version != 2 || secondPrice.Status != "active" {
+		t.Fatalf("unexpected second published price: %#v", secondPrice)
+	}
+	var previousStatus string
+	if err := conn.QueryRowContext(ctx, `SELECT status FROM price_versions WHERE id = $1`, price.ID).Scan(&previousStatus); err != nil {
+		t.Fatal(err)
+	}
+	if previousStatus != "retired" {
+		t.Fatalf("previous price version must be retired, got %s", previousStatus)
+	}
 
 	account, err := service.Credit(ctx, userID, CreditRequest{
 		TenantID:       tenantID,

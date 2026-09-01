@@ -72,7 +72,7 @@ export function Footer({ language, routeTo, siteName, siteLogoURL }: FooterProps
             </div>
             <p className="text-sm text-slate-600 dark:text-slate-400 max-w-sm leading-relaxed">
               {language === "zh"
-                ? "专为高可用生产环境设计的商业级大模型中转网关。为企业与开发者提供统一接入、智能负载、透明记账与多租户安全管控。"
+                ? "面向生产使用的大模型中转网关。为企业与开发者提供统一接入、智能调度、透明记账与多租户安全管控。"
                 : "Enterprise-grade AI model routing gateway designed for mission-critical workloads. Unifying API access, load balancing, ledger billing, and multi-tenant security."}
             </p>
             <div className="flex items-center gap-2 pt-2 text-xs text-emerald-600 dark:text-emerald-400">

@@ -97,7 +97,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		settingsService, err := adminsettings.New(dbConn)
+		settingsService, err := adminsettings.New(dbConn, mfaBox)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -125,20 +125,11 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		var passwordResetNotifier auth.PasswordResetNotifier
-		if cfg.SMTPAddress != "" || cfg.SMTPFrom != "" || cfg.PublicBaseURL != "" {
-			notifier, err := auth.NewSMTPPasswordResetNotifier(
-				cfg.SMTPAddress,
-				cfg.SMTPFrom,
-				cfg.SMTPUsername,
-				cfg.SMTPPassword,
-				cfg.PublicBaseURL,
-			)
-			if err != nil {
-				log.Fatal(err)
-			}
-			passwordResetNotifier = notifier
-		}
+		smtpNotifier := auth.NewDynamicSMTPPasswordResetNotifier(
+			settingsService,
+			auth.SMTPSettings{Address: cfg.SMTPAddress, From: cfg.SMTPFrom, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, BaseURL: cfg.PublicBaseURL},
+		)
+		passwordResetNotifier := auth.PasswordResetNotifier(smtpNotifier)
 		mfaEnrollment, err := mfa.NewEnrollmentService(dbConn, mfaBox, 10*time.Minute)
 		if err != nil {
 			log.Fatal(err)
@@ -189,12 +180,16 @@ func main() {
 		}
 		var registrationService auth.RegistrationProvider
 		if cfg.RegistrationEnabled {
-			registrationService, err = auth.NewSQLRegistrationService(
+			// The database-backed email feature switches are evaluated at request
+			// time. Keeping the dynamic notifier attached here means admins can
+			// enable or disable verification without restarting the service.
+			registrationService, err = auth.NewSQLRegistrationServiceWithNotifier(
 				dbConn,
 				tokenHasher,
 				cfg.LoginMaxFailures,
 				cfg.LoginWindow,
 				cfg.LoginLockDuration,
+				smtpNotifier,
 			)
 			if err != nil {
 				log.Fatal(err)
@@ -224,6 +219,7 @@ func main() {
 			PasswordReset:         passwordReset,
 			PasswordResetNotifier: passwordResetNotifier,
 			MFA:                   mfaEnrollment,
+			StepUpMFA:             mfaEnrollment,
 			SecuritySettings:      settingsService,
 		}
 	}

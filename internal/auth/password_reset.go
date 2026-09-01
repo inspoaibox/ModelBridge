@@ -80,11 +80,14 @@ func (s *SQLPasswordResetService) Request(ctx context.Context, email, ip string)
 		FROM users
 		WHERE lower(email) = $1 AND deleted_at IS NULL
 	`, email).Scan(&userID, &status)
-	if errors.Is(err, sql.ErrNoRows) || status != "active" {
-		return "", false, nil
-	}
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
 		return "", false, err
+	}
+	if status != "active" {
+		return "", false, nil
 	}
 
 	raw := make([]byte, 32)
@@ -112,7 +115,11 @@ func (s *SQLPasswordResetService) Confirm(ctx context.Context, token, newPasswor
 	if s == nil || s.db == nil || s.tokenHasher == nil {
 		return errors.New("password reset service is not configured")
 	}
-	if !strings.HasPrefix(token, "reset_") {
+	token = strings.TrimSpace(token)
+	if !strings.HasPrefix(token, "reset_") || len(token) > 128 {
+		return ErrInvalidResetToken
+	}
+	if len(newPassword) < 12 || len(newPassword) > 1024 {
 		return ErrInvalidResetToken
 	}
 	passwordHash, err := passwords.Hash(newPassword)

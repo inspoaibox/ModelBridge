@@ -11,14 +11,18 @@
 - PostgreSQL 迁移和启动 wiring
 - OpenAI、Anthropic、Grok、Gemini 官方渠道的同步/流式文本对话转发
 - OpenAI Chat Completions、Responses、Models、Embeddings、Images、Audio、Videos 与 Anthropic Messages 兼容入口
-- OpenAI/Grok 的 OpenAI 兼容图片、音频、视频入口，以及 Gemini 的 Imagen、原生音频、Veo 异步任务入口
+- OpenAI 的官方图片、音频、视频入口；Grok Imagine/Voice 的官方图片、视频、TTS、STT 入口；Gemini 的 Imagen、原生音频和 Veo 异步任务入口
 - 工具调用、结构化输出、图片内容块和渠道级协议转换
 - Token 级 RPM、TPM、并发限制；分组 RPM、优先级、权重与故障自动降级
 - 租户个人资料、邮箱/密码自助修改、SMTP 密码重置与会话失效保护
+- 租户成员管理、项目 CRUD、项目成员授权和项目级角色边界
+- 平台角色与权限管理：平台所有者可创建、编辑、停用角色，分配系统权限并绑定已注册管理员
+- 生产公开注册的邮箱验证、一次性验证链接和验证邮件重发（SMTP）
 - 基于 `github.com/pquerna/otp` 的标准 TOTP 绑定、二维码确认、启用登录校验和安全关闭
 - 管理员系统设置：管理员资料、邮箱/密码、个人 TOTP、全站管理员 TOTP 策略与网站品牌配置
+- 管理员高风险操作的实时 TOTP Step-up：改价、充值、渠道写入、用户状态和关键配置变更
 - 不预置任何管理员账号或开发凭据
-- 真实的运营快照、使用记录、财务报表与追加式管理员审计日志
+- 真实的运营快照、使用记录、财务报表与追加式管理员审计日志；计量缺失时进入 `settlement_pending`
 - 渠道出站 SSRF 防护：禁止本机、回环、私网、链路本地和云元数据地址，并在连接时复核 DNS
 - CSRF 来源检查、安全响应头和显式 CORS 来源配置
 
@@ -27,15 +31,18 @@
 需要 Go 1.26.6 或更高版本：
 
 ```powershell
-go run ./cmd/server
+.\scripts\start-dev.ps1
 ```
 
 默认监听 `:8080`，可以通过 `HTTP_ADDR` 修改。
 
 ```powershell
-$env:HTTP_ADDR = ":8090"
-go run ./cmd/server
+.\scripts\start-dev.ps1 -HttpAddr ":8090"
 ```
+
+该脚本会加载未提交的 `.env.local` 后再启动服务。本地直接运行
+`go run ./cmd/server` 时，必须先把 `.env.local` 中的配置导入当前
+PowerShell 进程；否则数据库、认证和业务服务不会初始化。
 
 前端在 `web/` 目录下，基于 `React + Tailwind + shadcn/ui`：
 
@@ -75,6 +82,20 @@ GET  /console/v1/profile/mfa
 POST /console/v1/profile/mfa/enroll
 POST /console/v1/profile/mfa/enroll/{enrollmentID}/confirm
 POST /console/v1/profile/mfa/disable
+POST /console/v1/auth/email/verify
+POST /console/v1/auth/email/resend
+GET  /console/v1/tenants/{tenantID}/members
+POST /console/v1/tenants/{tenantID}/members
+PUT  /console/v1/tenants/{tenantID}/members/{userID}
+DELETE /console/v1/tenants/{tenantID}/members/{userID}
+GET  /console/v1/tenants/{tenantID}/projects
+POST /console/v1/tenants/{tenantID}/projects
+PUT  /console/v1/tenants/{tenantID}/projects/{projectID}
+DELETE /console/v1/tenants/{tenantID}/projects/{projectID}
+GET  /console/v1/tenants/{tenantID}/projects/{projectID}/members
+POST /console/v1/tenants/{tenantID}/projects/{projectID}/members
+PUT  /console/v1/tenants/{tenantID}/projects/{projectID}/members/{userID}
+DELETE /console/v1/tenants/{tenantID}/projects/{projectID}/members/{userID}
 GET  /admin/v1/profile
 PUT  /admin/v1/profile
 PUT  /admin/v1/profile/email
@@ -83,7 +104,19 @@ GET  /admin/v1/auth/mfa/status
 POST /admin/v1/auth/mfa/disable
 GET  /admin/v1/settings
 PUT  /admin/v1/settings
+PUT  /admin/v1/settings/site
+GET  /admin/v1/settings/email
+PUT  /admin/v1/settings/email
+POST /admin/v1/settings/email/test-connection
+POST /admin/v1/settings/email/test-message
+GET  /admin/v1/settings/email/templates
+POST /admin/v1/settings/email/templates
+PUT  /admin/v1/settings/email/templates/{templateID}
+DELETE /admin/v1/settings/email/templates/{templateID}
+GET  /admin/v1/settings/features
+PUT  /admin/v1/settings/features
 GET  /public/v1/settings
+GET  /public/v1/features
 GET  /admin/v1/channels
 POST /admin/v1/channels/discover-models
 POST /admin/v1/channels
@@ -97,11 +130,20 @@ GET  /admin/v1/usage
 GET  /admin/v1/finance
 GET  /admin/v1/overview
 GET  /admin/v1/ops
+GET  /admin/v1/model-status
 GET  /admin/v1/audit
 GET  /admin/v1/tenants/{tenantID}/billing/account
 POST /admin/v1/tenants/{tenantID}/billing/credit
 POST /admin/v1/usage/{requestID}/settle
+GET  /admin/v1/roles
+GET  /admin/v1/permissions
+POST /admin/v1/roles
+PUT  /admin/v1/roles/{roleID}
+POST /admin/v1/roles/{roleID}/disable
+GET  /admin/v1/users/{userID}/roles
+PUT  /admin/v1/users/{userID}/roles
 GET  /console/v1/tenants/{tenantID}/usage
+GET  /console/v1/tenants/{tenantID}/model-status
 GET  /console/v1/tenants/{tenantID}/billing/account
 POST /v1/chat/completions
 POST /v1/embeddings
@@ -119,6 +161,14 @@ GET  /v1/videos/{videoID}/content
 ```
 
 除 `/healthz`、公开模型目录、公开系统设置和认证入口外，接口默认需要管理员 Session、租户 Session 或 Relay API Token。下游接口支持同步/流式文本、工具调用、结构化输出、图片内容块、Embeddings、图片生成/编辑、音频转写/翻译/语音生成和视频异步任务；`GET /v1/models` 会按 Token 的模型白名单过滤。视频任务返回平台任务 ID，调用方通过平台接口查询和下载结果。
+
+管理员“系统设置”中的邮件设置、模板和功能开关独立于网站基础设置。邮件总开关默认关闭；关闭时注册、密码重置和通知流程不会强制依赖 SMTP，开启后再按事件开关和模板配置发送。
+
+租户控制台的“模型状态”页面通过 `GET /console/v1/tenants/{tenantID}/model-status` 按分组展示模型的可用路由数、自动熔断状态、连续失败次数以及最近成功/失败时间。活动分组可见，租户已有令牌绑定的停用分组也会显示；该接口只读取分组映射和渠道运行状态，不主动请求上游；前端进入页面后每 15 秒刷新一次。新建但尚未产生真实请求的路由显示为“待观测”，不能误认为已经完成上游探针验证。
+
+管理员系统设置的“功能开关”可以单独启用或关闭模型状态功能。关闭后，公开配置 `GET /public/v1/features` 返回 `model_status_enabled: false`，租户菜单、深链和 `GET /console/v1/tenants/{tenantID}/model-status` 同时关闭；管理员“模型监控”页面仍用于平台运营查看全部分组和模型，不受租户入口开关影响。管理员监控通过 `GET /admin/v1/model-status` 展示分组模型、路由可用数、最近真实请求、最近延迟、近 7 天可用率和状态条，不执行主动上游探针。
+
+管理员 Token 列表仅用于平台运营查看脱敏记录、调整分组和撤销；`POST /admin/v1/tokens` 和 `POST /admin/v1/users` 保留为明确拒绝的兼容入口，均返回 `403`。用户账号和用户 API Token 必须分别通过公开注册和租户控制台自行创建。
 
 ## 额度与计费
 
@@ -147,14 +197,17 @@ migrations/
 
 - 上游 API Key 只保存为 AES-GCM 加密 Secret，列表接口只返回脱敏预览；不要把 `API_KEY`、Session、Token 或密码写入日志。
 - API Token 只在创建响应中返回完整值，之后只能看到前缀。Token 可绑定项目、模型、分组、IP/CIDR、域名、过期时间和 RPM/TPM/并发限制。
+- API Token 只能由租户用户在控制台创建和撤销；管理员不能代发用户密钥。创建者账号被锁定、停用或移出租户时，相关 Token 立即失效并在账号停用时标记为 revoked。网络白名单支持 IP/CIDR 或浏览器域名来源策略；服务端建议使用 IP/CIDR，域名策略依赖可伪造的 Origin/Referer。
 - 管理员全局 MFA 默认关闭。开启前，所有 active 平台管理员都必须先完成个人 TOTP 绑定；管理员个人资料、密码、邮箱和 MFA 修改会使旧 Session 失效。
+- 改价、充值、渠道新增/编辑/暂停/启用/删除、Token 运营变更、管理员用户状态和系统设置写入都要求当前管理员通过 `X-MFA-Code` 提交一次性 TOTP Step-up。
 - 对于上游成功但没有可靠 Usage 的 `settlement_pending` 请求，管理员可在使用记录中核对真实计量后调用补结算接口；接口拒绝空计量，避免误记为 0 元。
-- 生产必须使用 HTTPS、`COOKIE_SECURE=true`、明确的 `CORS_ALLOWED_ORIGINS`，并配置 `PUBLIC_BASE_URL`、`SMTP_ADDR`、`SMTP_FROM`（可选 SMTP 用户名和密码）以启用密码重置邮件。
-- 生产必须显式设置 `REGISTRATION_ENABLED`；默认建议关闭公开注册，在接入邮件验证、Captcha 或边缘 WAF 策略后再开启。
+- 生产必须使用 HTTPS、`COOKIE_SECURE=true` 和明确的 `CORS_ALLOWED_ORIGINS`。SMTP 地址、发件人、用户名、密码和公开访问地址可由管理员在“系统设置”中配置，敏感密码使用 AES-GCM 保存；环境变量仍可作为首次启动兜底。
+- 生产必须显式设置 `REGISTRATION_ENABLED`。公开注册时必须同时设置 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`，并在系统设置或环境变量中配置 HTTPS 公开地址与 SMTP STARTTLS；注册接口另有 IP/邮箱节流。Captcha、Bot 防护和 WAF 仍应在 Caddy 前的 CDN/WAF 边缘层配置，不能由应用内置节流替代。
+- 平台角色只能由 `platform_owner` 通过角色管理页面和对应 API 维护；角色权限不是管理员绑定权限，服务层会再次校验平台所有者身份，并保护最后一个有效平台管理员。
 - 生产在 Nginx 等反向代理后运行时，必须配置 `TRUSTED_PROXY_CIDRS`，仅信任这些代理追加的 `X-Forwarded-For`；这决定 Token IP 白名单和使用记录中的客户端 IP。
 - 生产应用进程必须监听回环地址（例如 `127.0.0.1:8080`），并按流式与媒体请求配置 `HTTP_READ_TIMEOUT`、`HTTP_WRITE_TIMEOUT`、`HTTP_IDLE_TIMEOUT`；默认写超时为 15 分钟。
 - 审计日志只追加不提供业务删除接口；IP 和 User-Agent 在审计中保存哈希，使用记录中的客户端 IP 用于管理员排障与账务追踪。
-- `migrations/024_security_and_limits.sql` 为 Token 限流表和平台权限补齐迁移，所有环境都应通过应用启动自动执行。
+- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `036_model_status_feature.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。
 
 ## 重要限制
 
@@ -167,6 +220,5 @@ migrations/
 - Responses 的完整高级事件语义和部分服务端工具
 - 套餐、退款、对账、自动充值和财务/使用记录导出
 - Redis 或其他共享存储的分布式限流，以及多实例并发协调
-- 完整的平台自定义角色、租户成员管理和项目 CRUD
 
 接口接入示例见 `docs/08-api-integration.md`；数据表、权限和安全基线的详细说明见 `docs/01-role-permission-matrix.md` 至 `docs/08-api-integration.md`。标准 Caddy + PM2 Linux 部署、生产配置、TLS、SMTP、备份、更新和回滚流程见 `docs/10-linux-caddy-pm2-deployment.md`；Nginx + systemd 备选方案见 `docs/09-linux-deployment.md`。

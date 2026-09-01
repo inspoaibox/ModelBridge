@@ -1,6 +1,6 @@
 # 授权中间件与接口保护
 
-本文是授权设计规范。当前代码已经实现 audience、Session/Token 状态、权限、租户/项目范围、网络白名单和审计基础；`Step-up`、平台角色绑定管理、租户成员管理和项目 CRUD 尚未全部开放，不能仅依据本规范将这些能力视为已实现。
+本文是授权设计与当前实现说明。代码已经实现 audience、Session/Token 状态、权限、租户/项目范围、网络白名单、平台角色管理和审计基础；前端隐藏菜单不属于安全控制，后端会重复校验所有资源边界。
 
 ## 1. 路由分区
 
@@ -86,8 +86,11 @@ audience 是否匹配
 | `POST /admin/v1/channels/{channelID}/enable` | 管理 Session | `channel:update` | 仅变更状态 |
 | `DELETE /admin/v1/channels/{channelID}` | 管理 Session | `channel:update` | 软删除并吊销活跃密钥 |
 | `POST /admin/prices/publish` | 管理 Session | `price:publish` | MFA、价格版本、审计 |
+| `POST /admin/v1/roles` | `platform_owner` 管理 Session | `role:update` | TOTP Step-up、已登记权限、审计 |
+| `PUT /admin/v1/users/{userID}/roles` | `platform_owner` 管理 Session | `role:update` | TOTP Step-up、最后管理员保护 |
 | `POST /admin/billing/refunds` | 管理 Session | `billing:refund` | Step-up、幂等键 |
 | `GET /console/usage` | 用户 Session | `usage:read` | 当前租户和项目范围 |
+| `GET /console/v1/tenants/{tenantID}/model-status` | 用户 Session | `model:status:read` | 当前租户路径；只返回分组、模型和脱敏健康摘要 |
 | `POST /console/tokens` | 用户 Session | `token:create` | 只能创建当前项目 Token |
 | `POST /v1/chat/completions` | API Token | `model:use` | 模型白名单、余额、限流 |
 | `POST /internal/usage-events` | Service Identity | `usage.write` | 只接受可信服务调用 |
@@ -140,10 +143,11 @@ price_version_id
 
 ```text
 RequirePermission(action)
-RequireStepUp(max_age)
-RequireIdempotencyKey()
+RequireStepUp()
 AuditMutation()
 ```
+
+当前 Step-up 采用每次敏感请求的 `X-MFA-Code`，而不是可长期复用的前端布尔值；验证码不会持久化，失败达到阈值后按管理员身份短时锁定。
 
 高风险操作建议包含：
 

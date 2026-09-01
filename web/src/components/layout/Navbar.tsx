@@ -8,6 +8,7 @@ import {
   Moon,
   Sparkles,
   Sun,
+  UserPlus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -134,9 +135,12 @@ export function Navbar({
                 variant="default"
                 size="sm"
                 onClick={() => routeTo("#register")}
-                className="hidden sm:inline-flex text-xs sm:text-sm font-medium h-8.5 px-3"
+                className="h-8.5 gap-1.5 px-2 text-xs font-medium sm:px-3 sm:text-sm"
+                title={t("navRegister")}
+                aria-label={t("navRegister")}
               >
-                <span>{t("navRegister")}</span>
+                <UserPlus className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{t("navRegister")}</span>
               </Button>
             </>
           )}

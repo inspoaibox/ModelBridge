@@ -12,14 +12,15 @@ import (
 )
 
 const (
-	algorithm       = "pbkdf2-sha256"
-	iterations      = 600000
-	saltBytes       = 32
-	derivedKeyBytes = 32
+	algorithm        = "pbkdf2-sha256"
+	iterations       = 600000
+	saltBytes        = 32
+	derivedKeyBytes  = 32
+	maxPasswordBytes = 1024
 )
 
 func Hash(password string) (string, error) {
-	if len(password) < 12 {
+	if len(password) < 12 || len(password) > maxPasswordBytes {
 		return "", errors.New("password must be at least 12 characters")
 	}
 
@@ -38,6 +39,9 @@ func Hash(password string) (string, error) {
 }
 
 func Verify(password, encoded string) bool {
+	if len(password) > maxPasswordBytes {
+		return false
+	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 4 || parts[0] != algorithm {
 		return false

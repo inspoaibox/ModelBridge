@@ -41,28 +41,19 @@ type AdminService interface {
 	SetGroup(context.Context, string, string) (Summary, error)
 }
 
-type AdminCreator interface {
-	Create(context.Context, CreateRequest) (IssuedToken, error)
-}
-
 type AdminRevoker interface {
 	Revoke(context.Context, string) error
 }
 
 type SQLAdminService struct {
-	db     *sql.DB
-	issuer *Issuer
+	db *sql.DB
 }
 
-func NewAdminService(db *sql.DB, issuers ...*Issuer) (*SQLAdminService, error) {
+func NewAdminService(db *sql.DB, _ ...*Issuer) (*SQLAdminService, error) {
 	if db == nil {
 		return nil, errors.New("database is required")
 	}
-	var issuer *Issuer
-	if len(issuers) > 0 {
-		issuer = issuers[0]
-	}
-	return &SQLAdminService{db: db, issuer: issuer}, nil
+	return &SQLAdminService{db: db}, nil
 }
 
 func (s *SQLAdminService) List(ctx context.Context) ([]Summary, error) {
@@ -113,29 +104,6 @@ func (s *SQLAdminService) SetGroup(ctx context.Context, tokenID, groupID string)
 		}
 	}
 	return Summary{}, ErrTokenNotFound
-}
-
-func (s *SQLAdminService) Create(ctx context.Context, request CreateRequest) (IssuedToken, error) {
-	if s == nil || s.db == nil || s.issuer == nil {
-		return IssuedToken{}, ErrAdminUnavailable
-	}
-	if !ids.Valid(request.TenantID) || !ids.Valid(request.ProjectID) || !ids.Valid(request.CreatedBy) || strings.TrimSpace(request.Name) == "" {
-		return IssuedToken{}, ErrAdminInvalid
-	}
-	return s.issuer.IssueInGroup(
-		ctx,
-		request.TenantID,
-		request.ProjectID,
-		request.CreatedBy,
-		request.Name,
-		[]string{"model:use"},
-		request.AllowedModels,
-		request.AllowedIPs,
-		request.AllowedDomains,
-		request.RateLimit,
-		request.ExpiresAt,
-		request.GroupID,
-	)
 }
 
 func (s *SQLAdminService) Revoke(ctx context.Context, tokenID string) error {

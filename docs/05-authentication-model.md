@@ -16,9 +16,9 @@ Service Identity      内部服务之间调用
 admin
 console
 relay
-billing
-audit
 ```
+
+`billing` 和 `audit` 是权限资源，不是当前浏览器可登录的独立 audience。
 
 一个身份只能在允许的 audience 中使用。
 
@@ -57,6 +57,7 @@ console_session
 - 管理端使用较短的空闲超时和绝对超时。
 - 支持查看和撤销当前账号的其他会话。
 - 登录失败、密码重置和 MFA 验证都要限速。
+- 生产公开注册要求邮箱验证；新账号在验证前为 `pending`，不能建立控制台 Session。
 - 统一返回登录失败信息，避免暴露账号是否存在。
 
 ## 3. 管理员 MFA
@@ -69,7 +70,7 @@ TOTP
 一次性恢复码
 ```
 
-高风险操作使用 step-up authentication。Step-up 状态必须绑定当前 Session、操作者和过期时间，不能由前端传入一个布尔值表示“已验证”。
+高风险操作使用实时 TOTP step-up。当前实现要求每次敏感写请求携带 `X-MFA-Code`，验证码不持久化；失败达到阈值后短时锁定。不能由前端传入一个布尔值表示“已验证”。
 
 ## 4. 下游 API Token
 
@@ -102,13 +103,26 @@ status
 expires_at
 tenant_id
 project_id
+creator account and membership status
+creator project role
 scopes
 allowed_models
-allowed_ips
+allowed_ips / allowed_domains
 rate_limit
 ```
 
 不接受 Query 参数中的 Token，也不将 Token 写入 URL。
+
+## 5. 公开注册与邮箱验证
+
+开发环境可以关闭 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED` 以便本机测试。生产只要开启 `REGISTRATION_ENABLED=true`，配置校验就要求 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`。注册流程为：
+
+```text
+注册 -> 创建 pending 用户和租户资源 -> SMTP 发送一次性链接
+     -> POST /console/v1/auth/email/verify -> 用户变为 active -> 允许登录
+```
+
+验证令牌只保存带 pepper 的摘要，30 分钟过期且只能使用一次。SMTP 必须使用 STARTTLS；Captcha、Bot 防护和 WAF 需要在应用前的边缘层部署。
 
 ## 5. Service Identity
 

@@ -9,19 +9,18 @@ import (
 	"strings"
 	"time"
 
-	"ai-token/internal/ids"
 	"ai-token/internal/passwords"
 )
 
 var (
-	ErrUnavailable       = errors.New("user admin service is unavailable")
-	ErrNotFound          = errors.New("user is not found")
-	ErrInvalid           = errors.New("invalid user admin request")
-	ErrSelfUpdate        = errors.New("an administrator cannot change their own account")
-	ErrEmailExists       = errors.New("email is already registered")
-	ErrTenantNotFound    = errors.New("tenant is not found")
-	ErrTenantRoleInvalid = errors.New("tenant role is invalid")
-	ErrLastPlatformAdmin = errors.New("the last active platform administrator cannot be disabled")
+	ErrUnavailable               = errors.New("user admin service is unavailable")
+	ErrNotFound                  = errors.New("user is not found")
+	ErrInvalid                   = errors.New("invalid user admin request")
+	ErrSelfUpdate                = errors.New("an administrator cannot change their own account")
+	ErrEmailExists               = errors.New("email is already registered")
+	ErrLastPlatformAdmin         = errors.New("the last active platform administrator cannot be disabled")
+	ErrEmailVerificationRequired = errors.New("the user email must be verified before activation")
+	ErrPlatformOwnerProtected    = errors.New("the platform owner account can only be changed by another platform owner")
 )
 
 type Summary struct {
@@ -43,14 +42,6 @@ type TenantSummary struct {
 	Slug string `json:"slug"`
 }
 
-type CreateRequest struct {
-	Email       string
-	DisplayName string
-	Password    string
-	TenantID    string
-	TenantRole  string
-}
-
 type UpdateRequest struct {
 	Email       string
 	DisplayName string
@@ -60,7 +51,6 @@ type UpdateRequest struct {
 type AdminService interface {
 	List(context.Context) ([]Summary, error)
 	ListTenants(context.Context) ([]TenantSummary, error)
-	Create(context.Context, string, CreateRequest) (Summary, error)
 	Update(context.Context, string, string, UpdateRequest) (Summary, error)
 	SetStatus(context.Context, string, string, string) (Summary, error)
 }
@@ -183,97 +173,6 @@ func (s *SQLAdminService) ListTenants(ctx context.Context) ([]TenantSummary, err
 	return items, nil
 }
 
-func (s *SQLAdminService) Create(ctx context.Context, actorID string, request CreateRequest) (Summary, error) {
-	if s == nil || s.db == nil {
-		return Summary{}, ErrUnavailable
-	}
-	actorID = strings.TrimSpace(actorID)
-	request.Email = normalizeEmail(request.Email)
-	request.DisplayName = strings.TrimSpace(request.DisplayName)
-	request.Password = strings.TrimSpace(request.Password)
-	request.TenantID = strings.TrimSpace(request.TenantID)
-	request.TenantRole = strings.ToLower(strings.TrimSpace(request.TenantRole))
-	if request.TenantRole == "" {
-		request.TenantRole = "developer"
-	}
-	if !validUUID(actorID) || !validAdminAccountFields(request.Email, request.DisplayName) ||
-		request.Password == "" || !validUUID(request.TenantID) || !validTenantRole(request.TenantRole) {
-		if !validTenantRole(request.TenantRole) && validAdminAccountFields(request.Email, request.DisplayName) {
-			return Summary{}, ErrTenantRoleInvalid
-		}
-		return Summary{}, ErrInvalid
-	}
-	passwordHash, err := passwords.Hash(request.Password)
-	if err != nil {
-		return Summary{}, ErrInvalid
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Summary{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var tenantStatus string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT status FROM tenants WHERE id = $1::uuid AND deleted_at IS NULL
-	`, request.TenantID).Scan(&tenantStatus); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Summary{}, ErrTenantNotFound
-		}
-		return Summary{}, err
-	}
-	if tenantStatus != "active" {
-		return Summary{}, ErrInvalid
-	}
-
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = $1 AND deleted_at IS NULL)
-	`, request.Email).Scan(&exists); err != nil {
-		return Summary{}, err
-	}
-	if exists {
-		return Summary{}, ErrEmailExists
-	}
-
-	userID, err := ids.New()
-	if err != nil {
-		return Summary{}, err
-	}
-	memberID, err := ids.New()
-	if err != nil {
-		return Summary{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO users (id, email, password_hash, display_name, status, password_changed_at)
-		VALUES ($1::uuid, $2, $3, $4, 'active', now())
-	`, userID, request.Email, passwordHash, request.DisplayName); err != nil {
-		return Summary{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tenant_members (id, tenant_id, user_id, role_code, status, created_by)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'active', $5::uuid)
-	`, memberID, request.TenantID, userID, request.TenantRole, actorID); err != nil {
-		return Summary{}, err
-	}
-	if request.TenantRole == "developer" || request.TenantRole == "viewer" {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO project_members (project_id, user_id, role_code)
-			SELECT p.id, $1::uuid, $2
-			FROM projects p
-			WHERE p.tenant_id = $3::uuid AND p.status = 'active' AND p.deleted_at IS NULL
-		ON CONFLICT (project_id, user_id) DO NOTHING
-		`, userID, request.TenantRole, request.TenantID); err != nil {
-			return Summary{}, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return Summary{}, err
-	}
-	return s.findSummary(ctx, userID)
-}
-
 func (s *SQLAdminService) Update(ctx context.Context, actorID, userID string, request UpdateRequest) (Summary, error) {
 	if s == nil || s.db == nil {
 		return Summary{}, ErrUnavailable
@@ -282,7 +181,6 @@ func (s *SQLAdminService) Update(ctx context.Context, actorID, userID string, re
 	userID = strings.TrimSpace(userID)
 	request.Email = normalizeEmail(request.Email)
 	request.DisplayName = strings.TrimSpace(request.DisplayName)
-	request.Password = strings.TrimSpace(request.Password)
 	if !validUUID(actorID) || !validUUID(userID) || actorID == userID {
 		if actorID == userID && validUUID(actorID) {
 			return Summary{}, ErrSelfUpdate
@@ -308,18 +206,20 @@ func (s *SQLAdminService) Update(ctx context.Context, actorID, userID string, re
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var currentEmail string
+	var currentEmail, currentStatus string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT email
+		SELECT email, status
 		FROM users
 		WHERE id = $1::uuid AND deleted_at IS NULL
 		FOR UPDATE
-	`, userID).Scan(&currentEmail); errors.Is(err, sql.ErrNoRows) {
+	`, userID).Scan(&currentEmail, &currentStatus); errors.Is(err, sql.ErrNoRows) {
 		return Summary{}, ErrNotFound
 	} else if err != nil {
 		return Summary{}, err
 	}
-
+	if err := s.ensurePlatformOwnerMutation(ctx, tx, actorID, userID); err != nil {
+		return Summary{}, err
+	}
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
@@ -366,6 +266,17 @@ func (s *SQLAdminService) Update(ctx context.Context, actorID, userID string, re
 			return Summary{}, err
 		}
 	}
+	if currentStatus == "pending" && !strings.EqualFold(currentEmail, request.Email) {
+		// Changing a pending user's address must require verification of the new
+		// address. The old link must not be able to activate the account.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE email_verification_tokens
+			SET used_at = COALESCE(used_at, now())
+			WHERE user_id = $1::uuid AND used_at IS NULL
+		`, userID); err != nil {
+			return Summary{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Summary{}, err
 	}
@@ -394,6 +305,27 @@ func (s *SQLAdminService) SetStatus(ctx context.Context, actorID, userID, status
 	// disable every active platform administrator at once.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('ai-token:platform-admin-status', 0))`); err != nil {
 		return Summary{}, err
+	}
+	if err := s.ensurePlatformOwnerMutation(ctx, tx, actorID, userID); err != nil {
+		return Summary{}, err
+	}
+	var currentStatus string
+	var emailVerifiedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, email_verified_at
+		FROM users
+		WHERE id = $1::uuid AND deleted_at IS NULL
+		FOR UPDATE
+	`, userID).Scan(&currentStatus, &emailVerifiedAt); errors.Is(err, sql.ErrNoRows) {
+		return Summary{}, ErrNotFound
+	} else if err != nil {
+		return Summary{}, err
+	}
+	if status == "active" && currentStatus == "pending" && !emailVerifiedAt.Valid {
+		return Summary{}, ErrEmailVerificationRequired
+	}
+	if currentStatus == "pending" && status != "active" {
+		return Summary{}, ErrEmailVerificationRequired
 	}
 	if status != "active" {
 		var targetIsPlatformAdmin bool
@@ -446,6 +378,13 @@ func (s *SQLAdminService) SetStatus(ctx context.Context, actorID, userID, status
 		`, userID); err != nil {
 			return Summary{}, err
 		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE api_tokens
+			SET status = 'revoked', revoked_at = COALESCE(revoked_at, now())
+			WHERE created_by = $1::uuid AND status = 'active'
+		`, userID); err != nil {
+			return Summary{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Summary{}, err
@@ -475,6 +414,40 @@ func (s *SQLAdminService) findSummary(ctx context.Context, userID string) (Summa
 	return Summary{}, ErrNotFound
 }
 
+func (s *SQLAdminService) ensurePlatformOwnerMutation(ctx context.Context, tx *sql.Tx, actorID, targetID string) error {
+	var targetIsOwner bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM platform_user_roles ur
+			JOIN platform_roles pr ON pr.id = ur.role_id AND pr.code = 'platform_owner' AND pr.status = 'active'
+			JOIN users u ON u.id = ur.user_id AND u.deleted_at IS NULL
+			WHERE ur.user_id = $1::uuid
+		)
+	`, targetID).Scan(&targetIsOwner); err != nil {
+		return err
+	}
+	if !targetIsOwner {
+		return nil
+	}
+	var actorIsOwner bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM platform_user_roles ur
+			JOIN platform_roles pr ON pr.id = ur.role_id AND pr.code = 'platform_owner' AND pr.status = 'active'
+			JOIN users u ON u.id = ur.user_id AND u.status = 'active' AND u.deleted_at IS NULL
+			WHERE ur.user_id = $1::uuid
+		)
+	`, actorID).Scan(&actorIsOwner); err != nil {
+		return err
+	}
+	if !actorIsOwner {
+		return ErrPlatformOwnerProtected
+	}
+	return nil
+}
+
 func validAdminAccountFields(email, displayName string) bool {
 	return validEmail(email) && displayName != "" && len(displayName) <= 100
 }
@@ -489,15 +462,6 @@ func validEmail(value string) bool {
 
 func normalizeEmail(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
-}
-
-func validTenantRole(value string) bool {
-	switch value {
-	case "tenant_admin", "developer", "viewer":
-		return true
-	default:
-		return false
-	}
 }
 
 func validUserStatus(value string) bool {

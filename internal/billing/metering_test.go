@@ -177,3 +177,15 @@ func TestNestedMediaCacheCannotExceedParentPrompt(t *testing.T) {
 		t.Fatalf("nested media cache exceeded its parent: %s", charge.Amount)
 	}
 }
+
+func TestNormalizeUsageProjectsMetricsIntoLegacyColumns(t *testing.T) {
+	usage := normalizeUsage(Usage{Metrics: MeteredUsage{
+		"input_tokens":        "100",
+		"output_tokens":       "40",
+		"cached_input_tokens": "12",
+		"reasoning_tokens":    "8",
+	}, Source: "reconciliation"})
+	if usage.InputTokens != 100 || usage.OutputTokens != 40 || usage.CachedInputTokens != 12 || usage.ReasoningTokens != 8 {
+		t.Fatalf("metrics were not projected into legacy usage columns: %#v", usage)
+	}
+}

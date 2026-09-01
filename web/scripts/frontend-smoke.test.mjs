@@ -20,7 +20,7 @@ test("console documentation route is wired into the application", () => {
   const consoleView = readFileSync(resolve(root, "src", "components", "ConsoleView.tsx"), "utf8");
   assert.match(app, /console_section: normalizeConsoleSection\(section\)/);
   assert.match(consoleView, /UsageDocsPanel/);
-  assert.match(consoleView, /section === "docs"/);
+  assert.match(consoleView, /displayedSection === "docs"/);
 });
 
 test("unknown hash routes render the application not-found view", () => {
@@ -31,4 +31,10 @@ test("unknown hash routes render the application not-found view", () => {
   assert.match(types, /"not-found"/);
   assert.match(types, /"reset"/);
   assert.match(app, /<ResetPasswordView/);
+});
+
+test("home hash route is wired into the application", () => {
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  assert.match(app, /raw === "" \|\| raw === "home"/);
+  assert.match(app, /currentView === "home"/);
 });

@@ -154,7 +154,7 @@ func (s *Service) StreamChatCompletions(
 			if delivered {
 				if gotUsage {
 					_ = s.completeRelayBilling(ctx, reservation, freeRequestID, usage, providerRequestID, channel.ID, "upstream")
-				} else if canEstimateChatUsage(request) {
+				} else if !billingEnabled && canEstimateChatUsage(request) {
 					estimatedInput := estimateInputTokens(request)
 					usage = ChatUsage{PromptTokens: estimatedInput, CompletionTokens: int64(len([]rune(output.String()))), TotalTokens: estimatedInput + int64(len([]rune(output.String())))}
 					_ = s.completeRelayBilling(ctx, reservation, freeRequestID, usage, providerRequestID, channel.ID, "local_estimate")
@@ -174,6 +174,10 @@ func (s *Service) StreamChatCompletions(
 		}
 		source := "upstream"
 		if !gotUsage {
+			if billingEnabled {
+				s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
+				return ErrUsageUnavailable
+			}
 			if !canEstimateChatUsage(request) {
 				if billingEnabled {
 					s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
@@ -187,6 +191,10 @@ func (s *Service) StreamChatCompletions(
 		} else {
 			inputTokens, _, outputTokens, _ := usage.billingBreakdown()
 			if inputTokens <= 0 || (outputTokens <= 0 && output.Len() > 0) {
+				if billingEnabled {
+					s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_incomplete")
+					return ErrUsageUnavailable
+				}
 				if !canEstimateChatUsage(request) {
 					if billingEnabled {
 						s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
@@ -498,6 +506,11 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 		}
 		source := "upstream"
 		if response.Usage.PromptTokens <= 0 {
+			if billingEnabled {
+				s.markRelayBillingPending(ctx, reservation, freeID, "upstream_embedding_usage_unavailable")
+				lastErr = ErrUsageUnavailable
+				break
+			}
 			source = "local_estimate"
 			response.Usage.PromptTokens = estimateEmbeddingTokens(request)
 		}

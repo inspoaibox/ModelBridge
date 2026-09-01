@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"ai-token/internal/mfa"
 )
 
 type testResolver map[string]*Principal
@@ -179,5 +181,49 @@ func TestAuthenticateLeavesPrincipalOnOriginalRequestContext(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if !seen {
 		t.Fatal("authenticated principal must be available on the request passed through middleware")
+	}
+}
+
+type stepUpTestVerifier struct{ err error }
+
+func (v stepUpTestVerifier) Verify(context.Context, string, string) error { return v.err }
+
+func TestRequireStepUpEnforcesCodeAndVerifier(t *testing.T) {
+	principal := &Principal{ID: "admin-1", Type: PrincipalPlatformUser, Audience: AudienceAdmin}
+	called := 0
+	endpoint := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called++; w.WriteHeader(http.StatusNoContent) })
+
+	missing := httptest.NewRequest(http.MethodPost, "/sensitive", nil).WithContext(withPrincipal(context.Background(), principal))
+	missingRec := httptest.NewRecorder()
+	RequireStepUp(stepUpTestVerifier{})(endpoint).ServeHTTP(missingRec, missing)
+	if missingRec.Code != http.StatusForbidden || called != 0 {
+		t.Fatalf("missing step-up code must be rejected: %d %s", missingRec.Code, missingRec.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodPost, "/sensitive", nil).WithContext(withPrincipal(context.Background(), principal))
+	invalid.Header.Set("X-MFA-Code", "123456")
+	invalidRec := httptest.NewRecorder()
+	RequireStepUp(stepUpTestVerifier{err: mfa.ErrMFAInvalidCode})(endpoint).ServeHTTP(invalidRec, invalid)
+	if invalidRec.Code != http.StatusUnauthorized || called != 0 {
+		t.Fatalf("invalid step-up code must be rejected: %d %s", invalidRec.Code, invalidRec.Body.String())
+	}
+
+	ok := httptest.NewRequest(http.MethodPost, "/sensitive", nil).WithContext(withPrincipal(context.Background(), principal))
+	ok.Header.Set("X-MFA-Code", "123456")
+	okRec := httptest.NewRecorder()
+	RequireStepUp(stepUpTestVerifier{})(endpoint).ServeHTTP(okRec, ok)
+	if okRec.Code != http.StatusNoContent || called != 1 {
+		t.Fatalf("valid step-up code must reach endpoint: %d %s", okRec.Code, okRec.Body.String())
+	}
+}
+
+func TestRequireStepUpReturnsRetryableThrottle(t *testing.T) {
+	principal := &Principal{ID: "admin-1", Type: PrincipalPlatformUser, Audience: AudienceAdmin}
+	req := httptest.NewRequest(http.MethodPost, "/sensitive", nil).WithContext(withPrincipal(context.Background(), principal))
+	req.Header.Set("X-MFA-Code", "123456")
+	rec := httptest.NewRecorder()
+	RequireStepUp(stepUpTestVerifier{err: mfa.ErrMFAThrottled})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "900" {
+		t.Fatalf("expected throttled step-up response, got %d %q", rec.Code, rec.Header().Get("Retry-After"))
 	}
 }

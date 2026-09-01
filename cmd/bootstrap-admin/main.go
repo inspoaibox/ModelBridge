@@ -40,6 +40,8 @@ var platformPermissions = []string{
 	"operations:read",
 	"security:read",
 	"security:update",
+	"role:read",
+	"role:update",
 	"user:create",
 	"user:read",
 	"user:update",

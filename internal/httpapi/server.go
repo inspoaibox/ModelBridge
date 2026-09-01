@@ -210,6 +210,12 @@ func newHandler(
 	if len(billers) > 0 {
 		billingService = billers[0]
 	}
+	protectStepUp := func(handler http.Handler, permissions ...string) http.Handler {
+		// Sensitive routes fail closed when the application forgot to wire a
+		// verifier. Tests and alternate embeddings must opt into the same
+		// contract by supplying a verifier explicitly.
+		return authMiddleware.Protect(auth.AudienceAdmin, permissions...)(auth.RequireStepUp(services.StepUpMFA)(handler))
+	}
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -217,10 +223,13 @@ func newHandler(
 
 	mux.Handle("GET /public/v1/models", modelListHandler(modelCatalog))
 	mux.HandleFunc("GET /public/v1/settings", publicSystemSettingsHandler(services.SecuritySettings))
+	mux.HandleFunc("GET /public/v1/features", publicFeatureSettingsHandler(services.SecuritySettings))
 
 	mux.HandleFunc("POST /admin/v1/auth/login", loginHandler(services.Login, auth.AudienceAdmin, secureCookies))
 	mux.HandleFunc("POST /console/v1/auth/login", loginHandler(services.Login, auth.AudienceConsole, secureCookies))
 	mux.HandleFunc("POST /console/v1/auth/register", registrationHandler(services.Registration))
+	mux.HandleFunc("POST /console/v1/auth/email/verify", emailVerificationHandler(services.Registration))
+	mux.HandleFunc("POST /console/v1/auth/email/resend", emailVerificationResendHandler(services.Registration))
 	mux.HandleFunc("POST /admin/v1/auth/password-reset/request", passwordResetRequestHandler(
 		services.PasswordReset,
 		services.PasswordResetNotifier,
@@ -252,11 +261,17 @@ func newHandler(
 		auth.AudienceAdmin,
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := auth.PrincipalFromContext(r.Context())
+		permissions := make([]string, 0, len(principal.Permissions))
+		for permission := range principal.Permissions {
+			permissions = append(permissions, permission)
+		}
+		sort.Strings(permissions)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id":       principal.ID,
-			"type":     principal.Type,
-			"audience": principal.Audience,
-			"roles":    principal.Roles,
+			"id":          principal.ID,
+			"type":        principal.Type,
+			"audience":    principal.Audience,
+			"roles":       principal.Roles,
+			"permissions": permissions,
 		})
 	})))
 
@@ -325,95 +340,119 @@ func newHandler(
 		"security:read",
 	)(securitySettingsReadHandler(services.SecuritySettings)))
 
-	mux.Handle("PUT /admin/v1/security/settings", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"security:update",
-	)(securitySettingsUpdateHandler(services.SecuritySettings)))
+	mux.Handle("PUT /admin/v1/security/settings", protectStepUp(securitySettingsUpdateHandler(services.SecuritySettings), "security:update"))
 
 	mux.Handle("GET /admin/v1/settings", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
 	)(systemSettingsReadHandler(services.SecuritySettings)))
 
-	mux.Handle("PUT /admin/v1/settings", authMiddleware.Protect(
+	mux.Handle("PUT /admin/v1/settings", protectStepUp(systemSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+
+	mux.Handle("PUT /admin/v1/settings/site", protectStepUp(siteSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("GET /admin/v1/settings/email", authMiddleware.Protect(
 		auth.AudienceAdmin,
-		"security:update",
-	)(systemSettingsUpdateHandler(services.SecuritySettings)))
+		"security:read",
+	)(emailSettingsReadHandler(services.SecuritySettings)))
+	mux.Handle("PUT /admin/v1/settings/email", protectStepUp(emailSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("POST /admin/v1/settings/email/test-connection", protectStepUp(emailSMTPConnectionTestHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("POST /admin/v1/settings/email/test-message", protectStepUp(emailTestMessageHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("GET /admin/v1/settings/email/templates", authMiddleware.Protect(
+		auth.AudienceAdmin,
+		"security:read",
+	)(emailTemplateListHandler(services.SecuritySettings)))
+	mux.Handle("POST /admin/v1/settings/email/templates", protectStepUp(emailTemplateCreateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings/email/templates/{templateID}", protectStepUp(emailTemplateUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("DELETE /admin/v1/settings/email/templates/{templateID}", protectStepUp(emailTemplateDeleteHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("GET /admin/v1/settings/features", authMiddleware.Protect(
+		auth.AudienceAdmin,
+		"security:read",
+	)(featureSettingsReadHandler(services.SecuritySettings)))
+	mux.Handle("PUT /admin/v1/settings/features", protectStepUp(featureSettingsUpdateHandler(services.SecuritySettings), "security:update"))
 
 	mux.Handle("GET /admin/v1/channels", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"channel:read",
 	)(relayChannelsHandler(relayService)))
 
-	mux.Handle("POST /admin/v1/channels/discover-models", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"channel:update",
-	)(relayChannelModelDiscoveryHandler(relayService)))
+	mux.Handle("POST /admin/v1/channels/discover-models", protectStepUp(relayChannelModelDiscoveryHandler(relayService), "channel:update"))
 
-	mux.Handle("POST /admin/v1/channels", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"channel:update",
-	)(relayChannelCreateHandler(relayService)))
+	mux.Handle("POST /admin/v1/channels", protectStepUp(relayChannelCreateHandler(relayService), "channel:update"))
 
-	mux.Handle("PUT /admin/v1/channels/{channelID}", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"channel:update",
-	)(relayChannelUpdateHandler(relayService)))
+	mux.Handle("PUT /admin/v1/channels/{channelID}", protectStepUp(relayChannelUpdateHandler(relayService), "channel:update"))
 
-	mux.Handle("POST /admin/v1/channels/{channelID}/pause", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"channel:update",
-	)(relayChannelStatusHandler(relayService, "disabled")))
+	mux.Handle("POST /admin/v1/channels/{channelID}/pause", protectStepUp(relayChannelStatusHandler(relayService, "disabled"), "channel:update"))
 
-	mux.Handle("POST /admin/v1/channels/{channelID}/enable", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"channel:update",
-	)(relayChannelStatusHandler(relayService, "active")))
+	mux.Handle("POST /admin/v1/channels/{channelID}/enable", protectStepUp(relayChannelStatusHandler(relayService, "active"), "channel:update"))
 
-	mux.Handle("DELETE /admin/v1/channels/{channelID}", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"channel:update",
-	)(relayChannelDeleteHandler(relayService)))
+	mux.Handle("DELETE /admin/v1/channels/{channelID}", protectStepUp(relayChannelDeleteHandler(relayService), "channel:update"))
 
 	mux.Handle("GET /admin/v1/groups", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"group:read",
 	)(groupListHandler(groupService)))
 
-	mux.Handle("POST /admin/v1/groups", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"group:update",
-	)(groupCreateHandler(groupService)))
+	mux.Handle("POST /admin/v1/groups", protectStepUp(groupCreateHandler(groupService), "group:update"))
 
-	mux.Handle("PUT /admin/v1/groups/{groupID}", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"group:update",
-	)(groupUpdateHandler(groupService)))
+	mux.Handle("PUT /admin/v1/groups/{groupID}", protectStepUp(groupUpdateHandler(groupService), "group:update"))
 
-	mux.Handle("DELETE /admin/v1/groups/{groupID}", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"group:update",
-	)(groupDeleteHandler(groupService)))
+	mux.Handle("DELETE /admin/v1/groups/{groupID}", protectStepUp(groupDeleteHandler(groupService), "group:update"))
 
 	mux.Handle("GET /admin/v1/tokens", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"token:read",
 	)(tokenListHandler(tokenService)))
 
-	mux.Handle("PUT /admin/v1/tokens/{tokenID}/group", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"token:update",
-	)(tokenGroupUpdateHandler(tokenService)))
+	mux.Handle("PUT /admin/v1/tokens/{tokenID}/group", protectStepUp(tokenGroupUpdateHandler(tokenService), "token:update"))
 
 	mux.Handle("POST /admin/v1/tokens", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"token:create",
-	)(tokenCreateHandler(tokenService, auth.AudienceAdmin)))
+	)(adminTokenCreationDisabledHandler()))
 
-	mux.Handle("DELETE /admin/v1/tokens/{tokenID}", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"token:revoke",
-	)(tokenRevokeHandler(tokenService)))
+	mux.Handle("DELETE /admin/v1/tokens/{tokenID}", protectStepUp(tokenRevokeHandler(tokenService), "token:revoke"))
+
+	// Tenant members and projects are managed by the tenant owner/admin. The
+	// tenant path guard prevents a valid console session from crossing tenants;
+	// the service repeats the role and ownership checks for every mutation.
+	if tenantService, ok := userService.(users.TenantService); ok && tenantService != nil {
+		mux.Handle("GET /console/v1/tenants/{tenantID}/members", authMiddleware.Protect(
+			auth.AudienceConsole, "member:invite",
+		)(auth.RequireTenantPath("tenantID")(tenantMembersListHandler(tenantService))))
+		mux.Handle("POST /console/v1/tenants/{tenantID}/members", authMiddleware.Protect(
+			auth.AudienceConsole, "member:invite",
+		)(auth.RequireTenantPath("tenantID")(tenantMemberAddHandler(tenantService))))
+		mux.Handle("PUT /console/v1/tenants/{tenantID}/members/{userID}", authMiddleware.Protect(
+			auth.AudienceConsole, "member:invite",
+		)(auth.RequireTenantPath("tenantID")(tenantMemberUpdateHandler(tenantService))))
+		mux.Handle("DELETE /console/v1/tenants/{tenantID}/members/{userID}", authMiddleware.Protect(
+			auth.AudienceConsole, "member:remove",
+		)(auth.RequireTenantPath("tenantID")(tenantMemberRemoveHandler(tenantService))))
+		mux.Handle("GET /console/v1/tenants/{tenantID}/projects", authMiddleware.Protect(
+			auth.AudienceConsole, "project:read",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectsListHandler(tenantService))))
+		mux.Handle("POST /console/v1/tenants/{tenantID}/projects", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectCreateHandler(tenantService))))
+		mux.Handle("PUT /console/v1/tenants/{tenantID}/projects/{projectID}", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectUpdateHandler(tenantService))))
+		mux.Handle("DELETE /console/v1/tenants/{tenantID}/projects/{projectID}", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectDeleteHandler(tenantService))))
+		mux.Handle("GET /console/v1/tenants/{tenantID}/projects/{projectID}/members", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectMembersListHandler(tenantService))))
+		mux.Handle("POST /console/v1/tenants/{tenantID}/projects/{projectID}/members", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectMemberAddHandler(tenantService))))
+		mux.Handle("PUT /console/v1/tenants/{tenantID}/projects/{projectID}/members/{userID}", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectMemberUpdateHandler(tenantService))))
+		mux.Handle("DELETE /console/v1/tenants/{tenantID}/projects/{projectID}/members/{userID}", authMiddleware.Protect(
+			auth.AudienceConsole, "project:update",
+		)(auth.RequireTenantPath("tenantID")(tenantProjectMemberRemoveHandler(tenantService))))
+	}
 
 	mux.Handle("GET /admin/v1/users", authMiddleware.Protect(
 		auth.AudienceAdmin,
@@ -428,32 +467,39 @@ func newHandler(
 	mux.Handle("POST /admin/v1/users", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"user:create",
-	)(userCreateHandler(userService)))
+	)(adminUserCreationDisabledHandler()))
 
-	mux.Handle("PUT /admin/v1/users/{userID}", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"user:update",
-	)(userUpdateHandler(userService)))
+	mux.Handle("PUT /admin/v1/users/{userID}", protectStepUp(userUpdateHandler(userService), "user:update"))
 
-	mux.Handle("PUT /admin/v1/users/{userID}/status", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"user:update",
-	)(userStatusUpdateHandler(userService)))
+	mux.Handle("PUT /admin/v1/users/{userID}/status", protectStepUp(userStatusUpdateHandler(userService), "user:update"))
+
+	// Platform role definitions and administrator bindings are separate from
+	// customer registration. The service additionally requires platform_owner,
+	// so a role permission alone cannot grant privilege-management authority.
+	if roleService, ok := userService.(users.PlatformRoleService); ok && roleService != nil {
+		mux.Handle("GET /admin/v1/roles", authMiddleware.Protect(
+			auth.AudienceAdmin, "role:read",
+		)(platformRolesHandler(roleService)))
+		mux.Handle("GET /admin/v1/permissions", authMiddleware.Protect(
+			auth.AudienceAdmin, "role:read",
+		)(platformPermissionsHandler(roleService)))
+		mux.Handle("POST /admin/v1/roles", protectStepUp(platformRoleCreateHandler(roleService), "role:update"))
+		mux.Handle("PUT /admin/v1/roles/{roleID}", protectStepUp(platformRoleUpdateHandler(roleService), "role:update"))
+		mux.Handle("POST /admin/v1/roles/{roleID}/disable", protectStepUp(platformRoleDisableHandler(roleService), "role:update"))
+		mux.Handle("GET /admin/v1/users/{userID}/roles", authMiddleware.Protect(
+			auth.AudienceAdmin, "role:read",
+		)(platformUserRolesHandler(roleService)))
+		mux.Handle("PUT /admin/v1/users/{userID}/roles", protectStepUp(platformUserRolesUpdateHandler(roleService), "role:update"))
+	}
 
 	mux.Handle("GET /admin/v1/prices", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"price:read",
 	)(billingPriceListHandler(billingService)))
 
-	mux.Handle("POST /admin/v1/prices/publish", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"price:publish",
-	)(billingPricePublishHandler(billingService)))
+	mux.Handle("POST /admin/v1/prices/publish", protectStepUp(billingPricePublishHandler(billingService), "price:publish"))
 
-	mux.Handle("POST /admin/v1/prices/sync-official", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"price:publish",
-	)(officialPriceSyncHandler(priceSyncService)))
+	mux.Handle("POST /admin/v1/prices/sync-official", protectStepUp(officialPriceSyncHandler(priceSyncService), "price:publish"))
 
 	mux.Handle("GET /admin/v1/usage", authMiddleware.Protect(
 		auth.AudienceAdmin,
@@ -464,6 +510,10 @@ func newHandler(
 		auth.AudienceAdmin,
 		"operations:read",
 	)(operationsSnapshotHandler(billingService)))
+	mux.Handle("GET /admin/v1/model-status", authMiddleware.Protect(
+		auth.AudienceAdmin,
+		"operations:read",
+	)(adminModelStatusHandler(groupService)))
 	mux.Handle("GET /admin/v1/ops", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"operations:read",
@@ -484,15 +534,9 @@ func newHandler(
 		"billing:read",
 	)(billingAccountReadHandler(billingService)))
 
-	mux.Handle("POST /admin/v1/tenants/{tenantID}/billing/credit", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"billing:update",
-	)(billingAccountCreditHandler(billingService)))
+	mux.Handle("POST /admin/v1/tenants/{tenantID}/billing/credit", protectStepUp(billingAccountCreditHandler(billingService), "billing:update"))
 
-	mux.Handle("POST /admin/v1/usage/{requestID}/settle", authMiddleware.Protect(
-		auth.AudienceAdmin,
-		"billing:update",
-	)(billingSettlementHandler(billingService)))
+	mux.Handle("POST /admin/v1/usage/{requestID}/settle", protectStepUp(billingSettlementHandler(billingService), "billing:update"))
 
 	mux.Handle("GET /console/v1/tenants/{tenantID}/usage", authMiddleware.Protect(
 		auth.AudienceConsole,
@@ -527,6 +571,15 @@ func newHandler(
 	)(
 		auth.RequireTenantPath("tenantID")(
 			tokenGroupListHandler(groupService),
+		),
+	))
+
+	mux.Handle("GET /console/v1/tenants/{tenantID}/model-status", authMiddleware.Protect(
+		auth.AudienceConsole,
+		"model:status:read",
+	)(
+		auth.RequireTenantPath("tenantID")(
+			modelStatusHandler(groupService, services.SecuritySettings),
 		),
 	))
 
@@ -671,6 +724,11 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if isAPIPath(r.URL.Path) {
+			// API responses may contain one-time token or TOTP enrollment
+			// material. Never allow a browser or intermediary to cache them.
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		// Brand assets may be hosted on an administrator-approved HTTPS CDN;
 		// keep every executable resource and connection same-origin.
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
@@ -679,7 +737,7 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-API-Key")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-API-Key, X-MFA-Code")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
@@ -776,6 +834,11 @@ type registrationPayload struct {
 	ProjectName string `json:"project_name"`
 }
 
+type emailVerificationPayload struct {
+	Token string `json:"token"`
+	Email string `json:"email"`
+}
+
 func registrationHandler(service auth.RegistrationProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
@@ -817,6 +880,59 @@ func writeRegistrationError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "REGISTRATION_THROTTLED"})
 	default:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "REGISTRATION_UNAVAILABLE"})
+	}
+}
+
+func emailVerificationHandler(service auth.RegistrationProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		verifier, ok := service.(auth.EmailVerificationService)
+		if !ok || verifier == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "EMAIL_VERIFICATION_NOT_REQUIRED"})
+			return
+		}
+		var payload emailVerificationPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		if err := verifier.ConfirmEmail(r.Context(), payload.Token); err != nil {
+			if errors.Is(err, auth.ErrEmailVerificationRequired) {
+				writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "EMAIL_VERIFICATION_NOT_REQUIRED"})
+				return
+			}
+			if errors.Is(err, auth.ErrEmailVerificationInvalid) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "EMAIL_VERIFICATION_INVALID"})
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_VERIFICATION_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "email_verified"})
+	}
+}
+
+func emailVerificationResendHandler(service auth.RegistrationProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		verifier, ok := service.(auth.EmailVerificationService)
+		if !ok || verifier == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "EMAIL_VERIFICATION_NOT_REQUIRED"})
+			return
+		}
+		var payload emailVerificationPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		if err := verifier.RequestEmailVerification(r.Context(), payload.Email, clientIP(r)); err != nil {
+			if errors.Is(err, auth.ErrEmailVerificationRequired) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_VERIFICATION_UNAVAILABLE"})
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_VERIFICATION_UNAVAILABLE"})
+			return
+		}
+		// Do not reveal whether an email exists or is already verified.
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 	}
 }
 
@@ -1023,6 +1139,9 @@ func mfaEnrollmentConfirmHandler(service auth.MFAEnrollmentProvider) http.Handle
 			switch {
 			case errors.Is(err, mfa.ErrMFAInvalidCode):
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "MFA_CODE_INVALID"})
+			case errors.Is(err, mfa.ErrMFAThrottled):
+				w.Header().Set("Retry-After", "900")
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "MFA_STEP_UP_THROTTLED"})
 			case errors.Is(err, mfa.ErrEnrollmentExpired):
 				writeJSON(w, http.StatusGone, map[string]string{"error": "MFA_ENROLLMENT_EXPIRED"})
 			default:
@@ -1123,10 +1242,34 @@ func publicSystemSettingsHandler(service auth.SecuritySettingsProvider) http.Han
 	}
 }
 
+// publicFeatureSettingsHandler intentionally exposes only customer-facing
+// feature flags. SMTP settings and internal operations switches stay private.
+func publicFeatureSettingsHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		settings := map[string]bool{"model_status_enabled": true}
+		provider, ok := service.(adminsettings.FeatureSettingsProvider)
+		if ok && provider != nil {
+			features, err := provider.GetFeatureSettings(r.Context())
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PUBLIC_FEATURES_UNAVAILABLE"})
+				return
+			}
+			settings["model_status_enabled"] = features.ModelStatusEnabled
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+}
+
 type systemSettingsPayload struct {
-	SiteName       string `json:"site_name"`
-	SiteLogoURL    string `json:"site_logo_url"`
-	SiteFaviconURL string `json:"site_favicon_url"`
+	SiteName          string `json:"site_name"`
+	SiteLogoURL       string `json:"site_logo_url"`
+	SiteFaviconURL    string `json:"site_favicon_url"`
+	SMTPAddress       string `json:"smtp_addr"`
+	SMTPFrom          string `json:"smtp_from"`
+	SMTPUsername      string `json:"smtp_username"`
+	SMTPPassword      string `json:"smtp_password"`
+	SMTPPasswordClear bool   `json:"smtp_password_clear"`
+	PublicBaseURL     string `json:"public_base_url"`
 }
 
 func systemSettingsReadHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
@@ -1152,6 +1295,31 @@ func systemSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Han
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "SYSTEM_SETTINGS_UNAVAILABLE"})
 			return
 		}
+		// Keep the legacy endpoint safe for older clients: with the real
+		// settings service it updates only branding. SMTP must use the separate
+		// email settings endpoint so a stale client cannot overwrite it.
+		if siteProvider, siteOK := service.(adminsettings.SiteSettingsProvider); siteOK && siteProvider != nil {
+			var sitePayload struct {
+				SiteName       string `json:"site_name"`
+				SiteLogoURL    string `json:"site_logo_url"`
+				SiteFaviconURL string `json:"site_favicon_url"`
+			}
+			if err := decodeJSON(w, r, &sitePayload); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_SYSTEM_SETTINGS"})
+				return
+			}
+			settings, err := siteProvider.UpdateSiteSettings(r.Context(), principalID(r), adminsettings.SiteSettingsUpdate{SiteName: sitePayload.SiteName, SiteLogoURL: sitePayload.SiteLogoURL, SiteFaviconURL: sitePayload.SiteFaviconURL})
+			if err != nil {
+				if errors.Is(err, adminsettings.ErrInvalidSystemSettings) {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_SYSTEM_SETTINGS"})
+					return
+				}
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "SYSTEM_SETTINGS_UNAVAILABLE"})
+				return
+			}
+			writeJSON(w, http.StatusOK, settings)
+			return
+		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
@@ -1163,9 +1331,15 @@ func systemSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Han
 			return
 		}
 		settings, err := provider.UpdateSystemSettings(r.Context(), principal.ID, adminsettings.SystemSettingsUpdate{
-			SiteName:       payload.SiteName,
-			SiteLogoURL:    payload.SiteLogoURL,
-			SiteFaviconURL: payload.SiteFaviconURL,
+			SiteName:          payload.SiteName,
+			SiteLogoURL:       payload.SiteLogoURL,
+			SiteFaviconURL:    payload.SiteFaviconURL,
+			SMTPAddress:       payload.SMTPAddress,
+			SMTPFrom:          payload.SMTPFrom,
+			SMTPUsername:      payload.SMTPUsername,
+			SMTPPassword:      payload.SMTPPassword,
+			SMTPPasswordClear: payload.SMTPPasswordClear,
+			PublicBaseURL:     payload.PublicBaseURL,
 		})
 		if err != nil {
 			if errors.Is(err, adminsettings.ErrInvalidSystemSettings) {
@@ -1176,6 +1350,277 @@ func systemSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Han
 			return
 		}
 		writeJSON(w, http.StatusOK, settings)
+	}
+}
+
+func siteSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.SiteSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "SYSTEM_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		var payload struct {
+			SiteName       string `json:"site_name"`
+			SiteLogoURL    string `json:"site_logo_url"`
+			SiteFaviconURL string `json:"site_favicon_url"`
+		}
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_SYSTEM_SETTINGS"})
+			return
+		}
+		settings, err := provider.UpdateSiteSettings(r.Context(), principalID(r), adminsettings.SiteSettingsUpdate{
+			SiteName: payload.SiteName, SiteLogoURL: payload.SiteLogoURL, SiteFaviconURL: payload.SiteFaviconURL,
+		})
+		if err != nil {
+			if errors.Is(err, adminsettings.ErrInvalidSystemSettings) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_SYSTEM_SETTINGS"})
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "SYSTEM_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+}
+
+type emailSettingsPayload struct {
+	SMTPHost          string `json:"smtp_host"`
+	SMTPPort          int    `json:"smtp_port"`
+	SMTPUsername      string `json:"smtp_username"`
+	SMTPPassword      string `json:"smtp_password"`
+	SMTPPasswordClear bool   `json:"smtp_password_clear"`
+	SMTPFromEmail     string `json:"smtp_from_email"`
+	SMTPFromName      string `json:"smtp_from_name"`
+	SMTPTLS           bool   `json:"smtp_tls"`
+	PublicBaseURL     string `json:"public_base_url"`
+}
+
+type emailTestMessagePayload struct {
+	Recipient string `json:"recipient"`
+}
+
+func emailSettingsReadHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		settings, err := provider.GetEmailSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+}
+
+func emailSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		var payload emailSettingsPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_SETTINGS"})
+			return
+		}
+		settings, err := provider.UpdateEmailSettings(r.Context(), principal.ID, adminsettings.EmailSettingsUpdate{
+			SMTPHost: payload.SMTPHost, SMTPPort: payload.SMTPPort, SMTPUsername: payload.SMTPUsername,
+			SMTPPassword: payload.SMTPPassword, SMTPPasswordClear: payload.SMTPPasswordClear,
+			SMTPFromEmail: payload.SMTPFromEmail, SMTPFromName: payload.SMTPFromName,
+			SMTPTLS: payload.SMTPTLS, PublicBaseURL: payload.PublicBaseURL,
+		})
+		if err != nil {
+			if errors.Is(err, adminsettings.ErrInvalidEmailSettings) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_SETTINGS"})
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+}
+
+func emailSMTPConnectionTestHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		if err := provider.TestSMTPConnection(r.Context()); err != nil {
+			if errors.Is(err, adminsettings.ErrInvalidEmailSettings) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_SETTINGS"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "SMTP_CONNECTION_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+	})
+}
+
+func emailTestMessageHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		var payload emailTestMessagePayload
+		if err := decodeJSON(w, r, &payload); err != nil || strings.TrimSpace(payload.Recipient) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_RECIPIENT"})
+			return
+		}
+		if err := provider.SendTestEmail(r.Context(), strings.TrimSpace(payload.Recipient)); err != nil {
+			if errors.Is(err, adminsettings.ErrInvalidEmailSettings) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_SETTINGS"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "TEST_EMAIL_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+	})
+}
+
+func featureSettingsReadHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.FeatureSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FEATURE_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		settings, err := provider.GetFeatureSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FEATURE_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+}
+
+func featureSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.FeatureSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FEATURE_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		var payload adminsettings.FeatureSettingsUpdate
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_FEATURE_SETTINGS"})
+			return
+		}
+		settings, err := provider.UpdateFeatureSettings(r.Context(), principal.ID, payload)
+		if err != nil {
+			if errors.Is(err, adminsettings.ErrInvalidEmailSettings) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_FEATURE_SETTINGS"})
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "FEATURE_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+}
+
+func emailTemplateListHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailTemplateService)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_TEMPLATES_UNAVAILABLE"})
+			return
+		}
+		items, err := provider.ListEmailTemplates(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_TEMPLATES_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"templates": items})
+	})
+}
+
+func emailTemplateCreateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailTemplateService)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_TEMPLATES_UNAVAILABLE"})
+			return
+		}
+		var payload adminsettings.EmailTemplateMutation
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_TEMPLATE"})
+			return
+		}
+		item, err := provider.CreateEmailTemplate(r.Context(), principalID(r), payload)
+		if err != nil {
+			writeEmailTemplateError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+}
+
+func emailTemplateUpdateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailTemplateService)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_TEMPLATES_UNAVAILABLE"})
+			return
+		}
+		var payload adminsettings.EmailTemplateMutation
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_TEMPLATE"})
+			return
+		}
+		item, err := provider.UpdateEmailTemplate(r.Context(), principalID(r), r.PathValue("templateID"), payload)
+		if err != nil {
+			writeEmailTemplateError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func emailTemplateDeleteHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.EmailTemplateService)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_TEMPLATES_UNAVAILABLE"})
+			return
+		}
+		if err := provider.DeleteEmailTemplate(r.Context(), principalID(r), r.PathValue("templateID")); err != nil {
+			writeEmailTemplateError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})
+}
+
+func writeEmailTemplateError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, adminsettings.ErrInvalidEmailSettings):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_EMAIL_TEMPLATE"})
+	case errors.Is(err, adminsettings.ErrEmailTemplateNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "EMAIL_TEMPLATE_NOT_FOUND"})
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "EMAIL_TEMPLATES_UNAVAILABLE"})
 	}
 }
 
@@ -1648,12 +2093,15 @@ type userStatusPayload struct {
 	Status string `json:"status"`
 }
 
-type userCreatePayload struct {
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
-	TenantID    string `json:"tenant_id"`
-	TenantRole  string `json:"tenant_role"`
+type platformRolePayload struct {
+	Code        string   `json:"code"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Permissions []string `json:"permissions"`
+}
+
+type platformUserRolesPayload struct {
+	RoleIDs []string `json:"role_ids"`
 }
 
 type userUpdatePayload struct {
@@ -1692,34 +2140,9 @@ func userTenantListHandler(service users.AdminService) http.Handler {
 	})
 }
 
-func userCreateHandler(service users.AdminService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if service == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "USERS_UNAVAILABLE"})
-			return
-		}
-		var payload userCreatePayload
-		if err := decodeJSON(w, r, &payload); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
-			return
-		}
-		principal, ok := auth.PrincipalFromContext(r.Context())
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
-			return
-		}
-		item, err := service.Create(r.Context(), principal.ID, users.CreateRequest{
-			Email:       payload.Email,
-			DisplayName: payload.DisplayName,
-			Password:    payload.Password,
-			TenantID:    payload.TenantID,
-			TenantRole:  payload.TenantRole,
-		})
-		if err != nil {
-			writeUserAdminError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusCreated, item)
+func adminUserCreationDisabledHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "ADMIN_USER_CREATION_DISABLED"})
 	})
 }
 
@@ -1781,14 +2204,14 @@ func writeUserAdminError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, users.ErrInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_USER_REQUEST"})
-	case errors.Is(err, users.ErrTenantRoleInvalid):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TENANT_ROLE"})
 	case errors.Is(err, users.ErrEmailExists):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "EMAIL_ALREADY_EXISTS"})
-	case errors.Is(err, users.ErrTenantNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TENANT_NOT_FOUND"})
 	case errors.Is(err, users.ErrLastPlatformAdmin):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "LAST_PLATFORM_ADMIN_PROTECTED"})
+	case errors.Is(err, users.ErrPlatformOwnerProtected):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "PLATFORM_OWNER_PROTECTED"})
+	case errors.Is(err, users.ErrEmailVerificationRequired):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "USER_EMAIL_NOT_VERIFIED"})
 	case errors.Is(err, users.ErrSelfUpdate):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "SELF_ACCOUNT_CHANGE_NOT_ALLOWED"})
 	case errors.Is(err, users.ErrNotFound):
@@ -1797,6 +2220,403 @@ func writeUserAdminError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "USERS_UNAVAILABLE"})
 	default:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "USERS_UNAVAILABLE"})
+	}
+}
+
+func platformRolesHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		roles, err := service.ListPlatformRoles(r.Context())
+		if err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+	})
+}
+
+func platformPermissionsHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		permissions, err := service.ListPlatformPermissions(r.Context())
+		if err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"permissions": permissions})
+	})
+}
+
+func platformRoleCreateHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload platformRolePayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PLATFORM_ROLE_REQUEST"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		role, err := service.CreatePlatformRole(r.Context(), principal.ID, users.PlatformRoleMutation{
+			Code: payload.Code, Name: payload.Name, Status: payload.Status, Permissions: payload.Permissions,
+		})
+		if err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, role)
+	})
+}
+
+func platformRoleUpdateHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload platformRolePayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PLATFORM_ROLE_REQUEST"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		role, err := service.UpdatePlatformRole(r.Context(), principal.ID, r.PathValue("roleID"), users.PlatformRoleMutation{
+			Code: payload.Code, Name: payload.Name, Status: payload.Status, Permissions: payload.Permissions,
+		})
+		if err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, role)
+	})
+}
+
+func platformRoleDisableHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		if err := service.DisablePlatformRole(r.Context(), principal.ID, r.PathValue("roleID")); err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
+	})
+}
+
+func platformUserRolesHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		roles, err := service.GetPlatformUserRoles(r.Context(), r.PathValue("userID"))
+		if err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+	})
+}
+
+func platformUserRolesUpdateHandler(service users.PlatformRoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload platformUserRolesPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PLATFORM_ROLE_REQUEST"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		roles, err := service.SetPlatformUserRoles(r.Context(), principal.ID, r.PathValue("userID"), payload.RoleIDs)
+		if err != nil {
+			writePlatformRoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+	})
+}
+
+func writePlatformRoleError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, users.ErrPlatformRoleAccessDenied):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "PLATFORM_ROLE_ACCESS_DENIED"})
+	case errors.Is(err, users.ErrPlatformRoleInvalid), errors.Is(err, users.ErrPlatformPermissionUnknown):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PLATFORM_ROLE_REQUEST"})
+	case errors.Is(err, users.ErrPlatformRoleExists):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "PLATFORM_ROLE_EXISTS"})
+	case errors.Is(err, users.ErrPlatformRoleProtected):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "PLATFORM_OWNER_ROLE_PROTECTED"})
+	case errors.Is(err, users.ErrLastPlatformRoleAdmin):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "LAST_PLATFORM_ADMIN_PROTECTED"})
+	case errors.Is(err, users.ErrPlatformMFARequired):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "PLATFORM_ADMIN_MFA_REQUIRED"})
+	case errors.Is(err, users.ErrPlatformRoleNotFound), errors.Is(err, users.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "PLATFORM_ROLE_RESOURCE_NOT_FOUND"})
+	case errors.Is(err, users.ErrUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PLATFORM_ROLE_UNAVAILABLE"})
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PLATFORM_ROLE_UNAVAILABLE"})
+	}
+}
+
+type tenantMemberPayload struct {
+	Email  string `json:"email"`
+	Role   string `json:"role"`
+	Status string `json:"status"`
+}
+
+type projectPayload struct {
+	Name   string `json:"name"`
+	Slug   string `json:"slug"`
+	Status string `json:"status"`
+}
+
+type projectMemberPayload struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	Role   string `json:"role"`
+}
+
+func tenantServiceFromRequest(w http.ResponseWriter, r *http.Request, service users.TenantService) (*auth.Principal, bool) {
+	if service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TENANT_MANAGEMENT_UNAVAILABLE"})
+		return nil, false
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+		return nil, false
+	}
+	return principal, true
+}
+
+func tenantMembersListHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		items, err := service.ListMembers(r.Context(), r.PathValue("tenantID"), principal.ID)
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"members": items})
+	})
+}
+
+func tenantMemberAddHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		var payload tenantMemberPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		item, err := service.AddMember(r.Context(), principal.ID, r.PathValue("tenantID"), users.MemberMutation{Email: payload.Email, Role: payload.Role})
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+}
+
+func tenantMemberUpdateHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		var payload tenantMemberPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		item, err := service.UpdateMember(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("userID"), users.MemberMutation{Role: payload.Role, Status: payload.Status})
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func tenantMemberRemoveHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		if err := service.RemoveMember(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("userID")); err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	})
+}
+
+func tenantProjectsListHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		items, err := service.ListProjects(r.Context(), r.PathValue("tenantID"), principal.ID)
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"projects": items})
+	})
+}
+
+func tenantProjectCreateHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		var payload projectPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		item, err := service.CreateProject(r.Context(), principal.ID, r.PathValue("tenantID"), users.ProjectMutation{Name: payload.Name, Slug: payload.Slug, Status: payload.Status})
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+}
+
+func tenantProjectUpdateHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		var payload projectPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		item, err := service.UpdateProject(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("projectID"), users.ProjectMutation{Name: payload.Name, Slug: payload.Slug, Status: payload.Status})
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func tenantProjectDeleteHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		if err := service.DeleteProject(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("projectID")); err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})
+}
+
+func tenantProjectMembersListHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		items, err := service.ListProjectMembers(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("projectID"))
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"members": items})
+	})
+}
+
+func tenantProjectMemberAddHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		var payload projectMemberPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		item, err := service.AddProjectMember(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("projectID"), users.ProjectMemberMutation{UserID: payload.UserID, Email: payload.Email, Role: payload.Role})
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+}
+
+func tenantProjectMemberUpdateHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		var payload projectMemberPayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		item, err := service.UpdateProjectMember(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("projectID"), r.PathValue("userID"), users.ProjectMemberMutation{Role: payload.Role})
+		if err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func tenantProjectMemberRemoveHandler(service users.TenantService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := tenantServiceFromRequest(w, r, service)
+		if !ok {
+			return
+		}
+		if err := service.RemoveProjectMember(r.Context(), principal.ID, r.PathValue("tenantID"), r.PathValue("projectID"), r.PathValue("userID")); err != nil {
+			writeTenantManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	})
+}
+
+func writeTenantManagementError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, users.ErrTenantAccessDenied):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "TENANT_MANAGEMENT_FORBIDDEN"})
+	case errors.Is(err, users.ErrMemberNotFound), errors.Is(err, users.ErrProjectNotFound), errors.Is(err, users.ErrProjectMemberNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TENANT_RESOURCE_NOT_FOUND"})
+	case errors.Is(err, users.ErrMemberExists), errors.Is(err, users.ErrProjectExists), errors.Is(err, users.ErrProjectMemberExists):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "TENANT_RESOURCE_EXISTS"})
+	case errors.Is(err, users.ErrLastTenantOwner):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "LAST_TENANT_OWNER_PROTECTED"})
+	case errors.Is(err, users.ErrLastProjectAdmin):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "LAST_PROJECT_ADMIN_PROTECTED"})
+	case errors.Is(err, users.ErrMemberInvalid), errors.Is(err, users.ErrProjectInvalid):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TENANT_REQUEST"})
+	case errors.Is(err, users.ErrUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TENANT_MANAGEMENT_UNAVAILABLE"})
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TENANT_MANAGEMENT_UNAVAILABLE"})
 	}
 }
 
@@ -1858,6 +2678,11 @@ func consoleProfileResponse(principal *auth.Principal, profile users.Profile) ma
 		projectIDs = append(projectIDs, projectID)
 	}
 	sort.Strings(projectIDs)
+	permissions := make([]string, 0, len(principal.Permissions))
+	for permission := range principal.Permissions {
+		permissions = append(permissions, permission)
+	}
+	sort.Strings(permissions)
 	return map[string]any{
 		"id":            profile.ID,
 		"type":          principal.Type,
@@ -1869,6 +2694,8 @@ func consoleProfileResponse(principal *auth.Principal, profile users.Profile) ma
 		"last_login_at": profile.LastLoginAt,
 		"tenant_id":     principal.TenantID,
 		"roles":         principal.Roles,
+		"permissions":   permissions,
+		"project_roles": principal.ProjectRoles,
 		"project_ids":   projectIDs,
 	}
 }
@@ -1964,44 +2791,9 @@ func consoleProfilePasswordHandler(service users.AdminService) http.HandlerFunc 
 	}
 }
 
-func tokenCreateHandler(service tokens.AdminService, _ auth.Audience) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		creator, ok := service.(tokens.AdminCreator)
-		if !ok || creator == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})
-			return
-		}
-		principal, ok := auth.PrincipalFromContext(r.Context())
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
-			return
-		}
-		var payload tokenCreatePayload
-		if err := decodeJSON(w, r, &payload); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
-			return
-		}
-		if strings.TrimSpace(payload.TenantID) == "" || strings.TrimSpace(payload.ProjectID) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_REQUEST"})
-			return
-		}
-		issued, err := creator.Create(r.Context(), tokens.CreateRequest{
-			TenantID:       payload.TenantID,
-			ProjectID:      payload.ProjectID,
-			CreatedBy:      principal.ID,
-			Name:           payload.Name,
-			AllowedModels:  payload.AllowedModels,
-			AllowedIPs:     payload.AllowedIPs,
-			AllowedDomains: payload.AllowedDomains,
-			RateLimit:      payload.RateLimit,
-			ExpiresAt:      payload.ExpiresAt,
-			GroupID:        payload.GroupID,
-		})
-		if err != nil {
-			writeTokenAdminError(w, err)
-			return
-		}
-		writeIssuedToken(w, issued)
+func adminTokenCreationDisabledHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "ADMIN_TOKEN_CREATION_DISABLED"})
 	})
 }
 
@@ -2038,6 +2830,70 @@ func tokenGroupListHandler(service groups.Service) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"groups": items})
+	})
+}
+
+func modelStatusFeatureEnabled(ctx context.Context, service auth.SecuritySettingsProvider) (bool, error) {
+	provider, ok := service.(adminsettings.FeatureSettingsProvider)
+	if !ok || provider == nil {
+		// Keep lightweight embeddings and unit-test handlers compatible. The
+		// production server always wires the database-backed settings service.
+		return true, nil
+	}
+	settings, err := provider.GetFeatureSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	return settings.ModelStatusEnabled, nil
+}
+
+func modelStatusHandler(service groups.Service, featureService auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enabled, err := modelStatusFeatureEnabled(r.Context(), featureService)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
+			return
+		}
+		if !enabled {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "MODEL_STATUS_DISABLED"})
+			return
+		}
+		lister, ok := service.(groups.ModelStatusLister)
+		if !ok || lister == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok || strings.TrimSpace(principal.TenantID) == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		report, err := lister.ListModelStatuses(r.Context(), principal.TenantID)
+		if err != nil {
+			if errors.Is(err, groups.ErrUnavailable) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
+	})
+}
+
+func adminModelStatusHandler(service groups.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lister, ok := service.(groups.AdminModelStatusLister)
+		if !ok || lister == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
+			return
+		}
+		report, err := lister.ListAdminModelStatuses(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	})
 }
 
@@ -2629,6 +3485,8 @@ func writeModelDiscoveryError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CHANNEL_CREDENTIAL_REQUIRED"})
 	case errors.Is(err, relay.ErrCredentialUnavailable):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CHANNEL_CREDENTIAL_INVALID"})
+	case errors.Is(err, relay.ErrChannelNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "CHANNEL_NOT_FOUND"})
 	case errors.Is(err, relay.ErrProviderUnsupported):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "PROVIDER_UNSUPPORTED"})
 	case errors.Is(err, relay.ErrModelDiscoveryFailed):
@@ -2695,6 +3553,8 @@ func writeLoginError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "AUTH_THROTTLED"})
 	case errors.Is(err, auth.ErrMFARequired):
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "MFA_REQUIRED"})
+	case errors.Is(err, auth.ErrEmailVerificationRequired):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "EMAIL_VERIFICATION_REQUIRED"})
 	case errors.Is(err, auth.ErrMFAUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MFA_UNAVAILABLE"})
 	default:

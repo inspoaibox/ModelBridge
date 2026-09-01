@@ -148,6 +148,14 @@ func TestSetStatusProtectsLastPlatformAdministrator(t *testing.T) {
 	if _, err := conn.ExecContext(ctx, `INSERT INTO platform_user_roles (user_id, role_id) VALUES ($1, $3), ($2, $3)`, ownerID, actorID, roleID); err != nil {
 		t.Fatal(err)
 	}
+	pendingID, err := ids.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO users (id, email, password_hash, display_name, status) VALUES ($1, $2, $3, 'Pending user', 'pending')`, pendingID, "pending-"+strings.ReplaceAll(pendingID, "-", "")+"@example.invalid", passwordHash); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, pendingID) })
 	// The fixture must be the only active platform-admin population in the
 	// assertion. Existing bootstrap data is preserved and restored below.
 	var existingAdminIDs []string
@@ -189,6 +197,9 @@ func TestSetStatusProtectsLastPlatformAdministrator(t *testing.T) {
 	service, err := NewAdminService(conn)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := service.SetStatus(ctx, actorID, pendingID, "active"); !errors.Is(err, ErrEmailVerificationRequired) {
+		t.Fatalf("an unverified pending user must not be activated by an administrator: %v", err)
 	}
 	if _, err := service.SetStatus(ctx, actorID, ownerID, "disabled"); err != nil {
 		t.Fatalf("expected one of two platform administrators to be disabled: %v", err)

@@ -21,6 +21,7 @@ email
 phone
 password_hash
 status                 active | locked | disabled | pending
+email_verified_at
 last_login_at
 password_changed_at
 created_at
@@ -42,6 +43,8 @@ platform_permissions(id, resource, action, name)
 platform_role_permissions(role_id, permission_id)
 platform_user_roles(user_id, role_id)
 ```
+
+平台角色由后台角色管理 API 维护；角色权限关系使用 `platform_role_permissions`，管理员绑定使用 `platform_user_roles`。公开注册只写入租户成员关系，不写入平台角色关系。
 
 平台角色与租户角色使用不同表或至少不同的作用域字段，避免角色混用。
 
@@ -149,6 +152,7 @@ token_hash
 scopes_json
 allowed_models_json
 allowed_ips_json
+allowed_domains_json
 rate_limit_json
 expires_at
 last_used_at
@@ -162,7 +166,8 @@ revoked_at
 - `token_hash` 唯一。
 - 完整 Token 只在创建响应中返回一次。
 - 撤销只改变状态，不复用原 Token。
-- Token 只允许访问其所属租户和项目。
+- Token 只允许访问其所属租户和项目；解析时还要求创建者账号、租户成员状态和项目角色仍然有效。
+- 创建者被锁定/停用、租户成员被暂停/移除、项目成员被降为只读或移除时，相关 Token 会失效或被撤销。
 
 ## 4. 模型、渠道与价格
 
@@ -208,6 +213,11 @@ model_id
 upstream_model_name
 enabled
 health_status
+consecutive_failures
+auto_disabled_until
+last_failure_status
+last_failure_at
+last_success_at
 created_at
 updated_at
 ```
@@ -251,7 +261,7 @@ project_id
 token_id
 model_id
 channel_id
-status                  started | streaming | succeeded | failed | settled
+status                  started | settlement_pending | failed | settled
 provider_request_id
 input_tokens            上游报告的输入 token 总数
 output_tokens
@@ -330,6 +340,26 @@ created_at / updated_at / completed_at
 ```
 
 任务查询必须同时匹配 `tenant_id + token_id`。任务创建时产生的预占一直保持到上游完成或失败；成功任务按实际用量结算，失败任务释放预占。上游成功但缺少可靠计量时进入 `pending`，由管理员补录真实用量后结算，防止异步轮询造成重复扣费、漏账或遗留余额占用。
+
+### `email_verification_tokens`
+
+生产公开注册时使用该表保存邮箱验证令牌摘要：
+
+```text
+id
+user_id
+token_hash
+requested_ip_hash
+expires_at
+used_at
+created_at
+```
+
+令牌只返回到注册邮箱，30 分钟过期且只能使用一次；应用不保存明文令牌。
+
+### Token 限流和 Step-up 失败记录
+
+`api_token_rate_windows`、`api_token_concurrency` 分别保存 Token 的 RPM/TPM/并发窗口。管理员 Step-up 失败复用 `login_throttles` 的独立哈希命名空间，不保存 TOTP 码；达到阈值后短时锁定。
 
 ### `ledger_accounts`
 
@@ -420,3 +450,8 @@ published_at
 - 余额缓存可以重建，不能成为唯一事实来源。
 - 数据库账号按服务拆分，Relay 不拥有用户和价格表写权限。
 - 跨租户查询在测试中默认失败。
+- 最新迁移版本为 `036_model_status_feature.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
+
+### `email_templates` 与邮件功能设置
+
+`platform_settings` 保存邮件总开关、模型状态开关、事件开关、SMTP 主机/端口/TLS、发件人信息、余额提醒阈值和充值地址；SMTP 密码只保存应用加密后的密文。`email_templates` 按 `event_code + language` 保存可启用的主题和 HTML 内容，035 迁移预置邮箱验证、密码重置、订阅、余额、限额、内容审计和运维等中英文模板，036 迁移初始化模型状态开关。

@@ -67,7 +67,8 @@ func (i *Issuer) IssueInGroup(
 	if i == nil || i.db == nil || i.hasher == nil {
 		return IssuedToken{}, errors.New("token issuer is not configured")
 	}
-	if !ids.Valid(tenantID) || !ids.Valid(projectID) || !ids.Valid(createdBy) || name == "" {
+	name = strings.TrimSpace(name)
+	if !ids.Valid(tenantID) || !ids.Valid(projectID) || !ids.Valid(createdBy) || name == "" || len(name) > 100 {
 		return IssuedToken{}, errors.New("token scope and name are required")
 	}
 	if expiresAt != nil && !expiresAt.After(time.Now()) {
@@ -114,6 +115,28 @@ func (i *Issuer) IssueInGroup(
 	if !projectExists {
 		return IssuedToken{}, errors.New("token project is not available")
 	}
+	var creatorCanIssue bool
+	if err := i.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users u
+			JOIN tenant_members tm ON tm.user_id = u.id
+			JOIN projects p ON p.tenant_id = tm.tenant_id
+			WHERE u.id = $1::uuid
+			  AND u.status = 'active' AND u.deleted_at IS NULL
+			  AND tm.tenant_id = $2::uuid AND tm.status = 'active'
+			  AND p.id = $3::uuid AND p.status = 'active' AND p.deleted_at IS NULL
+			  AND (tm.role_code IN ('tenant_owner', 'tenant_admin') OR EXISTS (
+				  SELECT 1 FROM project_members pm
+				  WHERE pm.project_id = p.id AND pm.user_id = u.id
+				    AND pm.role_code IN ('project_admin', 'developer')
+				))
+		)
+	`, createdBy, tenantID, projectID).Scan(&creatorCanIssue); err != nil {
+		return IssuedToken{}, err
+	}
+	if !creatorCanIssue {
+		return IssuedToken{}, errors.New("token creator is not an active tenant member")
+	}
 
 	plain, prefix, digest, err := i.hasher.Generate()
 	if err != nil {
@@ -151,14 +174,21 @@ func (i *Issuer) IssueInGroup(
 	var groupValue any
 	if strings.TrimSpace(groupID) != "" {
 		groupValue = strings.TrimSpace(groupID)
+	} else {
+		var defaultGroupID string
+		if err := i.db.QueryRowContext(ctx, `SELECT id::text FROM routing_groups WHERE code = 'default' AND status = 'active' AND deleted_at IS NULL LIMIT 1`).Scan(&defaultGroupID); errors.Is(err, sql.ErrNoRows) {
+			return IssuedToken{}, ErrGroupNotFound
+		} else if err != nil {
+			return IssuedToken{}, err
+		}
+		groupValue = defaultGroupID
 	}
 	_, err = i.db.ExecContext(ctx, `
 		INSERT INTO api_tokens (
 			id, tenant_id, project_id, created_by, name, token_prefix,
 			 token_hash, scopes_json, allowed_models_json, allowed_ips_json,
 			allowed_domains_json, rate_limit_json, expires_at, group_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-		          COALESCE($15::uuid, (SELECT id FROM routing_groups WHERE code = 'default' AND deleted_at IS NULL LIMIT 1)))
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::uuid)
 	`, tokenID, tenantID, projectID, createdBy, name, prefix, digest,
 		scopesJSON, modelsJSON, ipsJSON, domainsJSON, rateLimitJSON, expiresAt, groupValue)
 	if err != nil {

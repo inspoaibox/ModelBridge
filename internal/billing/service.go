@@ -804,7 +804,7 @@ func (s *SQLService) PublishPrice(
 	if request.ScopeID == "" {
 		_, err = tx.ExecContext(ctx, `
 			UPDATE price_versions
-			SET effective_to = $4
+			SET effective_to = $4, status = 'retired'
 			WHERE scope_type = $1
 			  AND scope_id IS NULL
 			  AND model_id = $2
@@ -816,7 +816,7 @@ func (s *SQLService) PublishPrice(
 	} else {
 		_, err = tx.ExecContext(ctx, `
 			UPDATE price_versions
-			SET effective_to = $5
+			SET effective_to = $5, status = 'retired'
 			WHERE scope_type = $1
 			  AND scope_id = $2::uuid
 			  AND model_id = $3
@@ -1276,13 +1276,26 @@ func (s *SQLService) SettleByModelRequestID(ctx context.Context, modelRequestID 
 	if status != "pending" {
 		return ErrSettlementPending
 	}
-	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 && len(usage.Metrics) == 0 {
+	if !usageHasPositiveQuantity(usage) {
 		return ErrInvalidRequest
 	}
 	if strings.TrimSpace(usage.Source) == "" {
 		usage.Source = "reconciliation"
 	}
 	return s.Settle(ctx, reservationID, usage, providerRequestID)
+}
+
+func usageHasPositiveQuantity(usage Usage) bool {
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.CachedInputTokens > 0 || usage.ReasoningTokens > 0 {
+		return true
+	}
+	for _, value := range usage.Metrics {
+		quantity, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+		if ok && quantity.Sign() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SQLService) FailFreeRequest(ctx context.Context, modelRequestID, reason string) error {
@@ -2062,6 +2075,23 @@ func normalizeUsage(usage Usage) Usage {
 	if strings.TrimSpace(usage.Source) == "" {
 		usage.Source = "upstream"
 	}
+	if len(usage.Metrics) > 0 {
+		if normalized, err := normalizeMeteredUsage(usage.Metrics); err == nil {
+			usage.Metrics = normalized
+			if usage.InputTokens == 0 {
+				usage.InputTokens = usageMetricInt(normalized, "input_tokens")
+			}
+			if usage.OutputTokens == 0 {
+				usage.OutputTokens = usageMetricInt(normalized, "output_tokens")
+			}
+			if usage.CachedInputTokens == 0 {
+				usage.CachedInputTokens = usageMetricInt(normalized, "cached_input_tokens")
+			}
+			if usage.ReasoningTokens == 0 {
+				usage.ReasoningTokens = usageMetricInt(normalized, "reasoning_tokens")
+			}
+		}
+	}
 	if usage.CachedInputTokens > usage.InputTokens {
 		usage.CachedInputTokens = usage.InputTokens
 	}
@@ -2069,6 +2099,14 @@ func normalizeUsage(usage Usage) Usage {
 		usage.ReasoningTokens = usage.OutputTokens
 	}
 	return usage
+}
+
+func usageMetricInt(metrics MeteredUsage, code string) int64 {
+	value, ok := new(big.Rat).SetString(strings.TrimSpace(metrics[code]))
+	if !ok || value.Sign() < 0 || value.Denom().Cmp(big.NewInt(1)) != 0 || !value.Num().IsInt64() {
+		return 0
+	}
+	return value.Num().Int64()
 }
 
 func validUsageSource(source string) bool {

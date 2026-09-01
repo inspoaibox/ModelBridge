@@ -1,6 +1,6 @@
 # Linux Caddy + PM2 标准部署手册
 
-本文是 AI Token Gateway 的标准 Linux 生产部署流程，使用 Caddy 自动 HTTPS 反向代理和 PM2 守护 Go 网关进程。适用于全新 Ubuntu 24.04 LTS 或 Debian 12 服务器。
+本文是 AI Token Gateway 的标准 Linux 生产部署流程，使用 Caddy 自动 HTTPS 反向代理和 PM2 守护 Go 网关进程。适用于全新 Ubuntu 24.04 LTS 或 Debian 12 服务器。当前迁移目录最高版本为 `036_model_status_feature.sql`。
 
 相关模板已随代码提供：
 
@@ -197,7 +197,7 @@ npm ci
 npm run lint
 npm run typecheck
 npm test
-npm audit --omit=dev
+npm audit --omit=dev --registry=https://registry.npmjs.org
 cd ..
 
 mkdir -p bin
@@ -243,6 +243,8 @@ CORS_ALLOWED_ORIGINS=https://gateway.example.com
 TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 
 REGISTRATION_ENABLED=false
+# Must be true when REGISTRATION_ENABLED=true in production.
+REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
 PUBLIC_BASE_URL=https://gateway.example.com
 SMTP_ADDR=smtp.example.com:587
 SMTP_FROM=no-reply@example.com
@@ -266,11 +268,14 @@ openssl rand -hex 32
 | CORS_ALLOWED_ORIGINS | 精确 HTTPS 来源，不使用通配符。 |
 | TRUSTED_PROXY_CIDRS | 同机 Caddy 使用 127.0.0.1/32,::1/128；绝不填写 0.0.0.0/0。 |
 | REGISTRATION_ENABLED | 必须显式设置，建议 false。开启公开注册前部署邮箱验证、Captcha 和 WAF。 |
-| PUBLIC_BASE_URL | HTTPS 站点地址，用于重置密码链接。 |
-| SMTP | 必须支持 STARTTLS，应用拒绝明文 SMTP。 |
+| REGISTRATION_EMAIL_VERIFICATION_REQUIRED | 生产公开注册必须为 `true`；否则应用拒绝启动。开发环境可按本机测试需要关闭。 |
+| PUBLIC_BASE_URL | HTTPS 站点地址，用于密码重置和邮箱验证链接；必须与实际访问域名一致。 |
+| SMTP | 必须同时配置地址、发件人并支持 STARTTLS；应用拒绝明文 SMTP。公开注册开启时必须可投递测试邮件。 |
 | HTTP_WRITE_TIMEOUT | 默认 15 分钟，覆盖长响应和视频创建；不得设置为无限时长。 |
 
 生产模式缺少上述关键变量会拒绝启动。
+
+SMTP 也可以在管理员登录后通过“系统设置”写入数据库。环境变量适合作为首次启动兜底，但公开注册上线前仍必须在真实域名下完成一次注册、验证链接、重发邮件和登录验收。系统设置只返回 SMTP 密码是否已配置，不返回密码明文。
 
 ## 7. Caddy 配置
 
@@ -353,7 +358,34 @@ exit
 
 若工具输出 TOTP Secret，只能在安全终端中导入认证器并保存恢复方案。
 
-## 10. 上线验收
+## 10. 管理员角色与公开注册
+
+首个管理员由 `bootstrap-admin` 创建为受保护的 `platform_owner`。客户用户不能由管理员后台创建，统一从前端公开注册；公开注册只建立租户所有者、默认项目和预付账户，不会自动授予平台管理员角色。
+
+登录后进入“用户与组织管理”可以查看用户及组织 ID；进入“平台角色与权限”可以：
+
+1. 由 `platform_owner` 创建、编辑和停用自定义平台角色，并从系统已登记权限中选择权限。
+2. 将已经注册、状态为正常的用户绑定为一个或多个平台角色。
+3. 通过 TOTP Step-up 确认角色写入、角色停用和管理员绑定。
+
+`platform_owner` 定义不可编辑或停用，最后一个有效平台管理员不能被移除。自定义角色的权限或状态改变后，受影响管理员的旧后台 Session 会立即失效，必须重新登录。
+
+当需要开放客户注册时，先在“系统设置”填写 `PUBLIC_BASE_URL`、SMTP 地址、发件人、SMTP 用户名和密码并保存，然后在环境文件中设置：
+
+~~~dotenv
+REGISTRATION_ENABLED=true
+REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
+~~~
+
+重载应用后执行以下验收：
+
+1. 使用未注册邮箱注册，确认返回待验证提示，不能直接登录。
+2. 使用真实邮件中的一次性链接验证，确认账号变为可登录状态。
+3. 使用“验证邮箱”页面输入邮箱请求重发，确认旧链接失效、新链接可用且接口不泄露邮箱是否存在。
+4. 为测试账号绑定和解除自定义平台角色，确认旧管理员 Session 被拒绝，重新登录后权限与角色一致。
+5. 关闭公开注册时确认注册接口不可用；不要把关闭注册误认为 SMTP 故障。
+
+## 11. 上线验收
 
 ~~~bash
 curl -fsS https://gateway.example.com/healthz
@@ -366,6 +398,8 @@ sudo -u postgres psql -d ai_token -c \
   'SELECT max(version), count(*) FROM schema_migrations;'
 ~~~
 
+数据库验收结果应包含最新迁移 `036_model_status_feature.sql`；如果版本低于 036，不得开启公开注册、模型状态或邮件功能。
+
 验收至少包含：
 
 1. 首页、模型广场、登录、密码重置、404 和移动端。
@@ -377,7 +411,7 @@ sudo -u postgres psql -d ai_token -c \
 
 对于使用记录中状态为 `settlement_pending` 的请求，必须核对上游账单或 Usage 后，通过 `POST /admin/v1/usage/{requestID}/settle` 补录真实计量；不可直接按空用量提交。
 
-## 11. 日常操作
+## 12. 日常操作
 
 查看状态：
 
@@ -406,7 +440,7 @@ sudo -u postgres psql -d ai_token_restore -c 'SELECT count(*) FROM schema_migrat
 sudo -u postgres dropdb ai_token_restore
 ~~~
 
-## 12. 更新和回滚
+## 13. 更新和回滚
 
 更新：
 
@@ -437,7 +471,7 @@ curl -fsS https://gateway.example.com/healthz
 
 若迁移不兼容，停止 PM2，恢复已验证的数据库备份，切回旧版本，再完成验收。不要手工删除 schema_migrations。
 
-## 13. 常见故障
+## 14. 常见故障
 
 | 症状 | 处理 |
 | --- | --- |
@@ -445,7 +479,8 @@ curl -fsS https://gateway.example.com/healthz
 | PM2 反复重启 | 查看 pm2 logs 和环境文件权限；确认 current/bin/ai-token 存在。 |
 | Token IP 白名单失败 | 检查 TRUSTED_PROXY_CIDRS、Caddy header_up 和应用是否只监听 127.0.0.1。 |
 | 密码重置 503 | 检查 SMTP STARTTLS、PUBLIC_BASE_URL、SMTP_FROM 和环境变量。 |
-| 注册不可用 | 检查 REGISTRATION_ENABLED；生产关闭公开注册是预期行为。 |
+| 注册不可用 | 检查 REGISTRATION_ENABLED、REGISTRATION_EMAIL_VERIFICATION_REQUIRED、数据库迁移版本和系统设置；生产关闭公开注册是预期行为。 |
+| 注册后无法登录 | 检查账号是否仍为 `pending`，重新发送验证邮件并检查 SMTP 投递、PUBLIC_BASE_URL 和链接有效期。 |
 | 页面 502 | 检查 pm2 status、127.0.0.1:8080 healthz、Caddy 日志。 |
 | 迁移失败 | 停止 PM2、查看 PostgreSQL 日志、从备份恢复，不要修改迁移记录。 |
 

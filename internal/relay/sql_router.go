@@ -159,6 +159,67 @@ func (r *SQLChannelRouter) RecordChannelSuccess(ctx context.Context, channelID s
 	return err
 }
 
+func (r *SQLChannelRouter) RecordChannelModelFailure(ctx context.Context, channelID, model string, statusCode int) error {
+	if r == nil || r.db == nil {
+		return ErrUnavailable
+	}
+	channelID = strings.TrimSpace(channelID)
+	model = strings.TrimSpace(model)
+	if channelID == "" || !ids.Valid(channelID) || model == "" || statusCode < 0 || statusCode > 599 {
+		return ErrInvalidRequest
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE channel_models cm
+		SET consecutive_failures = cm.consecutive_failures + 1,
+		    last_failure_status = NULLIF($3, 0),
+		    last_failure_at = now(),
+		    health_status = CASE
+		        WHEN cm.consecutive_failures + 1 >= $4 THEN 'unavailable'
+		        ELSE 'degraded'
+		    END,
+		    auto_disabled_until = CASE
+		        WHEN cm.consecutive_failures + 1 >= $4
+		        THEN now() + $5::interval
+		        ELSE cm.auto_disabled_until
+		    END,
+		    updated_at = now()
+		FROM models m, channels c
+		WHERE cm.channel_id = $1::uuid
+		  AND cm.model_id = m.id
+		  AND c.id = cm.channel_id
+		  AND m.provider = c.provider
+		  AND m.model_name = $2
+	`, channelID, model, statusCode, channelFailureThreshold, channelCircuitDuration.String())
+	return err
+}
+
+func (r *SQLChannelRouter) RecordChannelModelSuccess(ctx context.Context, channelID, model string) error {
+	if r == nil || r.db == nil {
+		return ErrUnavailable
+	}
+	channelID = strings.TrimSpace(channelID)
+	model = strings.TrimSpace(model)
+	if channelID == "" || !ids.Valid(channelID) || model == "" {
+		return ErrInvalidRequest
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE channel_models cm
+		SET consecutive_failures = 0,
+		    auto_disabled_until = NULL,
+		    last_failure_status = NULL,
+		    last_success_at = now(),
+		    health_status = 'normal',
+		    updated_at = now()
+		FROM models m, channels c
+		WHERE cm.channel_id = $1::uuid
+		  AND cm.model_id = m.id
+		  AND c.id = cm.channel_id
+		  AND m.provider = c.provider
+		  AND m.model_name = $2
+	`, channelID, model)
+	return err
+}
+
 func (r *SQLChannelRouter) selectCandidates(ctx context.Context, model, groupID string) ([]Channel, error) {
 	if r == nil || r.db == nil {
 		return nil, ErrUnavailable
@@ -169,7 +230,7 @@ func (r *SQLChannelRouter) selectCandidates(ctx context.Context, model, groupID 
 	}
 	query := `
 		SELECT c.id::text, c.name, c.provider, c.base_url, c.credential_ref,
-		       cm.upstream_model_name, c.priority, c.weight
+		       m.model_name, cm.upstream_model_name, c.priority, c.weight
 		FROM models m
 		JOIN channel_models cm ON cm.model_id = m.id
 		JOIN channels c ON c.id = cm.channel_id
@@ -178,6 +239,7 @@ func (r *SQLChannelRouter) selectCandidates(ctx context.Context, model, groupID 
 		  AND cm.enabled = true
 		  AND c.status = 'active'
 		  AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
+		  AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now())
 		  AND c.deleted_at IS NULL
 	`
 	args := []any{model}
@@ -211,6 +273,7 @@ func (r *SQLChannelRouter) selectCandidates(ctx context.Context, model, groupID 
 			&channel.Provider,
 			&channel.BaseURL,
 			&channel.CredentialRef,
+			&channel.ModelName,
 			&channel.UpstreamModelName,
 			&channel.Priority,
 			&channel.Weight,
@@ -244,32 +307,28 @@ func (r *SQLChannelRouter) GetChannel(ctx context.Context, channelID string) (Ch
 	return channels[0], nil
 }
 
-func (r *SQLChannelRouter) CredentialRef(ctx context.Context, channelID string) (string, error) {
+func (r *SQLChannelRouter) DiscoveryConfig(ctx context.Context, channelID string) (ChannelDiscoveryConfig, error) {
 	if r == nil || r.db == nil {
-		return "", ErrUnavailable
+		return ChannelDiscoveryConfig{}, ErrUnavailable
 	}
 	channelID = strings.TrimSpace(channelID)
 	if channelID == "" || !ids.Valid(channelID) {
-		return "", ErrInvalidRequest
+		return ChannelDiscoveryConfig{}, ErrInvalidRequest
 	}
-
-	var credentialRef string
+	var config ChannelDiscoveryConfig
 	err := r.db.QueryRowContext(ctx, `
-		SELECT credential_ref
+		SELECT provider, base_url, credential_ref
 		FROM channels
-		WHERE id = $1
+		WHERE id = $1::uuid
 		  AND deleted_at IS NULL
-	`, channelID).Scan(&credentialRef)
+	`, channelID).Scan(&config.Provider, &config.BaseURL, &config.CredentialRef)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrChannelNotFound
+		return ChannelDiscoveryConfig{}, ErrChannelNotFound
 	}
 	if err != nil {
-		return "", err
+		return ChannelDiscoveryConfig{}, err
 	}
-	if strings.TrimSpace(credentialRef) == "" {
-		return "", ErrCredentialUnavailable
-	}
-	return credentialRef, nil
+	return config, nil
 }
 
 func (r *SQLChannelRouter) CreateChannel(
@@ -398,6 +457,7 @@ func (r *SQLChannelRouter) UpdateChannel(
 		    consecutive_failures = CASE WHEN $6 = 'active' THEN 0 ELSE consecutive_failures END,
 		    auto_disabled_until = CASE WHEN $6 = 'active' THEN NULL ELSE auto_disabled_until END,
 		    last_failure_status = CASE WHEN $6 = 'active' THEN NULL ELSE last_failure_status END,
+		    last_success_at = CASE WHEN $6 = 'active' THEN NULL ELSE last_success_at END,
 		    priority = $7,
 		    weight = $8,
 		    updated_by = NULLIF($9, '')::uuid,
@@ -444,6 +504,7 @@ func (r *SQLChannelRouter) SetChannelStatus(
 		    consecutive_failures = CASE WHEN $2 = 'active' THEN 0 ELSE consecutive_failures END,
 		    auto_disabled_until = CASE WHEN $2 = 'active' THEN NULL ELSE auto_disabled_until END,
 		    last_failure_status = CASE WHEN $2 = 'active' THEN NULL ELSE last_failure_status END,
+		    last_success_at = CASE WHEN $2 = 'active' THEN NULL ELSE last_success_at END,
 		    updated_by = NULLIF($3, '')::uuid,
 		    updated_at = now()
 		WHERE id = $1
@@ -457,6 +518,21 @@ func (r *SQLChannelRouter) SetChannelStatus(
 			return ChannelSummary{}, err
 		}
 		return ChannelSummary{}, ErrChannelNotFound
+	}
+	if status == "active" {
+		if _, err := r.db.ExecContext(ctx, `
+		UPDATE channel_models
+		SET consecutive_failures = 0,
+		    auto_disabled_until = NULL,
+		    last_failure_status = NULL,
+		    last_failure_at = NULL,
+		    last_success_at = NULL,
+		    health_status = 'unknown',
+		    updated_at = now()
+			WHERE channel_id = $1::uuid
+		`, channelID); err != nil {
+			return ChannelSummary{}, err
+		}
 	}
 	return r.GetChannel(ctx, channelID)
 }

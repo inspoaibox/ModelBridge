@@ -50,6 +50,7 @@ type Services struct {
 	PasswordReset         PasswordResetProvider
 	PasswordResetNotifier PasswordResetNotifier
 	MFA                   MFAEnrollmentProvider
+	StepUpMFA             MFAVerifier
 	SecuritySettings      SecuritySettingsProvider
 }
 
@@ -133,19 +134,38 @@ func (s *SQLLoginService) Login(ctx context.Context, request LoginRequest, audie
 		FROM users
 		WHERE lower(email) = $1 AND deleted_at IS NULL
 	`, email).Scan(&userID, &passwordHash, &status)
-	if err != nil || status != "active" || !passwords.Verify(request.Password, passwordHash) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return IssuedSession{}, err
+	}
+	if errors.Is(err, sql.ErrNoRows) || !passwords.Verify(request.Password, passwordHash) {
 		if throttleErr := s.recordLoginFailure(ctx, subjectHash, ipHash); throttleErr != nil {
 			return IssuedSession{}, throttleErr
 		}
 		return IssuedSession{}, ErrInvalidCredentials
 	}
+	if status != "active" {
+		if status == "pending" {
+			return IssuedSession{}, ErrEmailVerificationRequired
+		}
+		return IssuedSession{}, ErrInvalidCredentials
+	}
 
 	if audience == AudienceAdmin {
-		if request.TenantID != "" || !s.hasPlatformRole(ctx, userID) {
+		hasRole, roleErr := s.hasPlatformRole(ctx, userID)
+		if roleErr != nil {
+			return IssuedSession{}, roleErr
+		}
+		if request.TenantID != "" || !hasRole {
 			return IssuedSession{}, ErrInvalidCredentials
 		}
-	} else if !s.hasTenantMembership(ctx, userID, request.TenantID) {
-		return IssuedSession{}, ErrInvalidCredentials
+	} else {
+		hasMembership, membershipErr := s.hasTenantMembership(ctx, userID, request.TenantID)
+		if membershipErr != nil {
+			return IssuedSession{}, membershipErr
+		}
+		if !hasMembership {
+			return IssuedSession{}, ErrInvalidCredentials
+		}
 	}
 
 	mfaSubjectHash := s.subjectHasher.Digest("mfa:" + email)
@@ -252,7 +272,7 @@ func (s *SQLLoginService) verifyConfiguredMFA(
 		LIMIT 1
 	`, userID).Scan(&encryptedSecret)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, ErrMFAUnavailable
+		return false, ErrMFARequired
 	}
 	if err != nil {
 		return false, err
@@ -289,7 +309,7 @@ func (s *SQLLoginService) hasConfiguredMFA(ctx context.Context, userID string) (
 	return exists, err
 }
 
-func (s *SQLLoginService) hasPlatformRole(ctx context.Context, userID string) bool {
+func (s *SQLLoginService) hasPlatformRole(ctx context.Context, userID string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT EXISTS (
@@ -299,12 +319,12 @@ func (s *SQLLoginService) hasPlatformRole(ctx context.Context, userID string) bo
 			WHERE ur.user_id = $1 AND r.status = 'active'
 		)
 	`, userID).Scan(&exists)
-	return err == nil && exists
+	return exists, err
 }
 
-func (s *SQLLoginService) hasTenantMembership(ctx context.Context, userID, tenantID string) bool {
+func (s *SQLLoginService) hasTenantMembership(ctx context.Context, userID, tenantID string) (bool, error) {
 	if tenantID == "" {
-		return false
+		return false, nil
 	}
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `
@@ -319,7 +339,7 @@ func (s *SQLLoginService) hasTenantMembership(ctx context.Context, userID, tenan
 			  AND t.deleted_at IS NULL
 		)
 	`, userID, tenantID).Scan(&exists)
-	return err == nil && exists
+	return exists, err
 }
 
 func (s *SQLLoginService) isThrottled(ctx context.Context, subjectHash string) (bool, error) {

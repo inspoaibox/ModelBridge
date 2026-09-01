@@ -120,9 +120,9 @@ func main() {
     <div className="space-y-16 lg:space-y-24 py-6 sm:py-10">
       {/* 1. Hero Section */}
       <section className="relative">
-        <div className="grid gap-12 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-center">
+        <div className="grid min-w-0 gap-12 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-center">
           {/* Left Column: Hero Copy & Actions */}
-          <div className="space-y-7">
+          <div className="min-w-0 space-y-7">
             <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 px-4 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 shadow-sm shadow-indigo-500/10">
               <Sparkles className="h-4 w-4 text-indigo-500 dark:text-indigo-400 animate-pulse" />
               <span>{t("homeEyebrow")}</span>
@@ -133,7 +133,7 @@ func main() {
                 {language === "zh" ? (
                   <>
                     统一大模型路由 <br />
-                    <span className="text-gradient-primary">毫秒级调度 · 透明记账</span>
+                    <span className="text-gradient-primary">统一接入 · 透明记账</span>
                   </>
                 ) : (
                   <>
@@ -184,7 +184,7 @@ func main() {
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
-                <span>{language === "zh" ? "支持双重记账无缝对账" : "Double-Entry Ledger"}</span>
+                <span>{language === "zh" ? "双重记账与使用记录" : "Double-entry usage records"}</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
@@ -194,7 +194,7 @@ func main() {
           </div>
 
           {/* Right Column: High-Tech Gateway Request Dispatch Simulator Card */}
-          <div className="relative">
+          <div className="relative min-w-0 overflow-hidden">
             <div className="absolute -inset-1 rounded-3xl bg-gradient-to-r from-indigo-500 via-cyan-500 to-emerald-500 opacity-20 blur-xl dark:opacity-30" />
             <div className="relative rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 p-5 shadow-2xl backdrop-blur-xl space-y-4">
               {/* Header simulator */}
@@ -319,9 +319,9 @@ func main() {
             },
             {
               title: language === "zh" ? "智能权重与故障容灾" : "Dynamic Routing & Failover",
-              desc: language === "zh" ? "支持配置渠道优先级与权重分配，上游限流或熔断时毫秒级自动重试切换。" : "Automated failover and weighted dispatching across multiple upstream providers.",
+              desc: language === "zh" ? "支持配置渠道优先级与权重分配，在上游返回可重试错误时自动切换备用渠道。" : "Configure priority and weight, then retry eligible upstream failures on a fallback channel.",
               icon: Waypoints,
-              tag: "High Availability",
+               tag: "Failover Routing",
             },
             {
               title: language === "zh" ? "多维度分词高精计费" : "Granular Token Pricing",
@@ -363,7 +363,7 @@ func main() {
               <span>{t("integrationEyebrow")}</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-              {language === "zh" ? "零成本迁移，无缝兼容现有代码" : "Zero-Code Changes Migration"}
+              {language === "zh" ? "低改造成本，兼容主流 SDK" : "Low-friction SDK integration"}
             </h2>
             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-xl">
               直接使用官方 OpenAI SDK 或任一兼容框架，只需替换 <code className="text-indigo-600 dark:text-indigo-300 font-mono">baseURL</code> 与网关 Token。
@@ -467,7 +467,7 @@ func main() {
             {language === "zh" ? "只需 3 步，立即接入网关" : "Get Started in 3 Steps"}
           </h2>
           <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-            无需复杂部署，登录控制台即可创建租户密钥并完成渠道配置。
+            注册租户后，在控制台选择项目和分组创建自己的 API Token，再按公开模型目录发起调用。
           </p>
         </div>
 
@@ -475,18 +475,18 @@ func main() {
           {[
             {
               step: "01",
-              title: language === "zh" ? "登录管理后台" : "Sign In",
-              desc: language === "zh" ? "使用管理员身份登录控制台，进入渠道与计费管理面板。" : "Access the administrative management panel.",
+              title: language === "zh" ? "注册并登录控制台" : "Register and sign in",
+              desc: language === "zh" ? "使用自己的账号创建租户空间，并进入租户控制台。" : "Create your tenant workspace with your own account.",
             },
             {
               step: "02",
               title: language === "zh" ? "配置上游渠道" : "Add Channels",
-              desc: language === "zh" ? "一键探测上游模型列表，配置优先级、权重与模型映射。" : "Auto-discover upstream models and map routes.",
+              desc: language === "zh" ? "由平台管理员维护上游渠道和模型映射，并发布可用模型。" : "Platform administrators maintain upstream channels and publish model mappings.",
             },
             {
               step: "03",
-              title: language === "zh" ? "发放 Token 即刻调用" : "Issue Tokens",
-              desc: language === "zh" ? "为项目或下游客户生成 API Key，使用 OpenAI 标准库直接请求。" : "Issue project keys and start routing traffic.",
+              title: language === "zh" ? "创建自己的 API Token" : "Create your API Token",
+              desc: language === "zh" ? "为项目选择分组和安全限制，保存一次性显示的密钥后开始调用。" : "Choose a project, group, and security limits, then use the one-time secret to call the API.",
             },
           ].map((step) => (
             <div key={step.step} className="rounded-2xl border border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 p-6 space-y-3 relative">

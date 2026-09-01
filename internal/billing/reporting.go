@@ -49,16 +49,16 @@ type UsageRecord struct {
 }
 
 type UsageQuery struct {
-	Limit    int
-	Offset   int
-	TenantID string
+	Limit      int
+	Offset     int
+	TenantID   string
 	ProjectIDs []string
-	Model    string
-	GroupID  string
-	Status   string
-	Search   string
-	From     *time.Time
-	To       *time.Time
+	Model      string
+	GroupID    string
+	Status     string
+	Search     string
+	From       *time.Time
+	To         *time.Time
 }
 
 type UsageSummary struct {

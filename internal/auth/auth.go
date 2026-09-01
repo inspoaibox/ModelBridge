@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"ai-token/internal/mfa"
 )
 
 type Audience string
@@ -33,6 +35,7 @@ type Principal struct {
 	TenantID       string
 	GroupID        string
 	ProjectIDs     map[string]struct{}
+	ProjectRoles   map[string]string
 	Roles          []string
 	Permissions    map[string]struct{}
 	Scopes         map[string]struct{}
@@ -66,6 +69,13 @@ type Resolver interface {
 
 type SessionResolver interface {
 	ResolveSession(ctx context.Context, sessionID string, audience Audience) (*Principal, error)
+}
+
+// MFAVerifier is used for one-time step-up checks on sensitive operations.
+// It intentionally verifies against the credential store on every request;
+// a caller cannot assert a trusted MFA state by setting a request field.
+type MFAVerifier interface {
+	Verify(context.Context, string, string) error
 }
 
 type ResolverFunc func(context.Context, string) (*Principal, error)
@@ -248,6 +258,42 @@ func RequireTenantPath(pathValueName string) func(http.Handler) http.Handler {
 			}
 			if target := r.PathValue(pathValueName); target == "" || target != principal.TenantID {
 				writeError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func RequireStepUp(verifier MFAVerifier) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := PrincipalFromContext(r.Context())
+			if !ok || principal.Audience != AudienceAdmin {
+				writeError(w, http.StatusForbidden, "PERMISSION_DENIED")
+				return
+			}
+			code := strings.TrimSpace(r.Header.Get("X-MFA-Code"))
+			if code == "" {
+				writeError(w, http.StatusForbidden, "STEP_UP_REQUIRED")
+				return
+			}
+			if verifier == nil {
+				writeError(w, http.StatusServiceUnavailable, "MFA_UNAVAILABLE")
+				return
+			}
+			if err := verifier.Verify(r.Context(), principal.ID, code); err != nil {
+				switch {
+				case errors.Is(err, mfa.ErrMFAThrottled):
+					w.Header().Set("Retry-After", "900")
+					writeError(w, http.StatusTooManyRequests, "MFA_STEP_UP_THROTTLED")
+				case errors.Is(err, mfa.ErrMFAInvalidCode):
+					writeError(w, http.StatusUnauthorized, "MFA_CODE_INVALID")
+				case errors.Is(err, mfa.ErrMFANotEnabled):
+					writeError(w, http.StatusForbidden, "STEP_UP_REQUIRED")
+				default:
+					writeError(w, http.StatusServiceUnavailable, "MFA_UNAVAILABLE")
+				}
 				return
 			}
 			next.ServeHTTP(w, r)

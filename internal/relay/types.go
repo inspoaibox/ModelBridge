@@ -124,10 +124,25 @@ type ChannelHealthRecorder interface {
 	RecordChannelSuccess(context.Context, string) error
 }
 
-// ChannelCredentialRefReader exposes only the stored credential reference to
-// the relay service. The secret itself is resolved through CredentialResolver.
-type ChannelCredentialRefReader interface {
-	CredentialRef(context.Context, string) (string, error)
+// ChannelModelHealthRecorder records health for the concrete public-model to
+// channel mapping. A channel can expose several models, so channel-level
+// health alone is not sufficient for routing or status reporting.
+type ChannelModelHealthRecorder interface {
+	RecordChannelModelFailure(context.Context, string, string, int) error
+	RecordChannelModelSuccess(context.Context, string, string) error
+}
+
+// ChannelDiscoveryConfigReader returns the persisted provider and endpoint for
+// an existing channel. Discovery must use this configuration when a channel ID
+// is supplied so a caller cannot redirect the channel credential elsewhere.
+type ChannelDiscoveryConfigReader interface {
+	DiscoveryConfig(context.Context, string) (ChannelDiscoveryConfig, error)
+}
+
+type ChannelDiscoveryConfig struct {
+	Provider      string
+	BaseURL       string
+	CredentialRef string
 }
 
 type CredentialResolver interface {
@@ -192,6 +207,7 @@ type Channel struct {
 	Provider          string
 	BaseURL           string
 	CredentialRef     string
+	ModelName         string
 	UpstreamModelName string
 	Priority          int
 	Weight            int
@@ -388,6 +404,37 @@ func (s *Service) DiscoverModels(ctx context.Context, request ModelDiscoveryRequ
 	request.Provider = canonicalProvider(request.Provider)
 	request.BaseURL = strings.TrimSpace(request.BaseURL)
 	request.APIKey = strings.TrimSpace(request.APIKey)
+	if request.ChannelID != "" {
+		reader, ok := s.router.(ChannelDiscoveryConfigReader)
+		if !ok {
+			return nil, ErrCredentialUnavailable
+		}
+		config, err := reader.DiscoveryConfig(ctx, request.ChannelID)
+		if err != nil {
+			return nil, err
+		}
+		configuredProvider := canonicalProvider(config.Provider)
+		if configuredProvider == "" || !supportedProvider(configuredProvider) {
+			return nil, ErrProviderUnsupported
+		}
+		if request.Provider != "" && request.Provider != configuredProvider {
+			return nil, ErrInvalidRequest
+		}
+		request.Provider = configuredProvider
+		// When the form supplies a replacement key, the submitted endpoint is
+		// intentional and is validated below. If it relies on the stored key,
+		// the persisted endpoint is authoritative so that key cannot be sent to
+		// an arbitrary host from stale request data.
+		if request.APIKey == "" {
+			request.BaseURL = strings.TrimSpace(config.BaseURL)
+		}
+		if request.APIKey == "" {
+			request.APIKey, err = s.credentials.Resolve(ctx, strings.TrimSpace(config.CredentialRef))
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	if !supportedProvider(request.Provider) {
 		return nil, ErrProviderUnsupported
 	}
@@ -395,21 +442,7 @@ func (s *Service) DiscoverModels(ctx context.Context, request ModelDiscoveryRequ
 		return nil, ErrInvalidRequest
 	}
 	if request.APIKey == "" {
-		if request.ChannelID == "" {
-			return nil, ErrCredentialRequired
-		}
-		reader, ok := s.router.(ChannelCredentialRefReader)
-		if !ok {
-			return nil, ErrCredentialUnavailable
-		}
-		credentialRef, err := reader.CredentialRef(ctx, request.ChannelID)
-		if err != nil {
-			return nil, err
-		}
-		request.APIKey, err = s.credentials.Resolve(ctx, credentialRef)
-		if err != nil {
-			return nil, err
-		}
+		return nil, ErrCredentialRequired
 	}
 	if request.APIKey == "" {
 		return nil, ErrCredentialRequired
@@ -693,7 +726,7 @@ func (s *Service) ChatCompletions(
 		}
 		source := "upstream"
 		hadUpstreamUsage := chatUsageHasValues(response.Usage)
-		if !hadUpstreamUsage && !canEstimateChatUsage(request) {
+		if !hadUpstreamUsage && (billingEnabled || !canEstimateChatUsage(request)) {
 			if billingEnabled {
 				s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
 			} else {
@@ -806,14 +839,27 @@ func (s *Service) resolveGroupPolicy(ctx context.Context, principal *auth.Princi
 }
 
 func (s *Service) recordChannelFailure(ctx context.Context, channel Channel, err error) {
-	if recorder, ok := s.router.(ChannelHealthRecorder); ok && retryableUpstreamError(err) {
-		_ = recorder.RecordChannelFailure(ctx, channel.ID, upstreamStatusCode(err))
+	if !retryableUpstreamError(err) {
+		return
+	}
+	statusCode := upstreamStatusCode(err)
+	if recorder, ok := s.router.(ChannelModelHealthRecorder); ok && strings.TrimSpace(channel.ModelName) != "" {
+		_ = recorder.RecordChannelModelFailure(ctx, channel.ID, channel.ModelName, statusCode)
+	}
+	// Per-model failures must not disable unrelated models on the same channel.
+	// Channel-wide health is reserved for credential and connection failures,
+	// which make every mapping on the channel unavailable.
+	if recorder, ok := s.router.(ChannelHealthRecorder); ok && (strings.TrimSpace(channel.ModelName) == "" || channelWideFailure(err)) {
+		_ = recorder.RecordChannelFailure(ctx, channel.ID, statusCode)
 	}
 }
 
 func (s *Service) recordChannelSuccess(ctx context.Context, channel Channel) {
 	if recorder, ok := s.router.(ChannelHealthRecorder); ok {
 		_ = recorder.RecordChannelSuccess(ctx, channel.ID)
+	}
+	if recorder, ok := s.router.(ChannelModelHealthRecorder); ok && strings.TrimSpace(channel.ModelName) != "" {
+		_ = recorder.RecordChannelModelSuccess(ctx, channel.ID, channel.ModelName)
 	}
 }
 
@@ -921,6 +967,20 @@ func upstreamStatusCode(err error) int {
 		return upstreamErr.StatusCode
 	}
 	return 0
+}
+
+func channelWideFailure(err error) bool {
+	if errors.Is(err, ErrCredentialUnavailable) {
+		return true
+	}
+	var upstreamErr *UpstreamError
+	if !errors.As(err, &upstreamErr) {
+		// ErrUpstream without a response status denotes a transport-level
+		// failure, so retrying another model on the same endpoint is unlikely
+		// to help.
+		return errors.Is(err, ErrUpstream)
+	}
+	return upstreamErr.StatusCode == http.StatusUnauthorized || upstreamErr.StatusCode == http.StatusForbidden
 }
 
 type ChatCompletionRequest struct {
@@ -1144,7 +1204,7 @@ func (u ChatUsage) meteredUsage() billing.MeteredUsage {
 }
 
 func chatUsageHasValues(usage ChatUsage) bool {
-	if usage.UsageProvided || usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.CacheCreationInputTokens > 0 || usage.CacheCreation1HInputTokens > 0 || usage.CacheReadInputTokens > 0 {
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.CacheCreationInputTokens > 0 || usage.CacheCreation1HInputTokens > 0 || usage.CacheReadInputTokens > 0 {
 		return true
 	}
 	if usage.PromptTokensDetails != nil && (usage.PromptTokensDetails.CachedTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0 || usage.PromptTokensDetails.ImageTokens > 0 || usage.PromptTokensDetails.VideoTokens > 0) {

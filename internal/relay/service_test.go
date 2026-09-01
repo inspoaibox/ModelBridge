@@ -173,6 +173,53 @@ func TestServiceReservesBeforeUpstreamAndSettlesAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestServiceDoesNotEstimatePaidChatUsageWhenUpstreamOmitsUsage(t *testing.T) {
+	provider := &recordingProvider{
+		response: ChatCompletionResponse{
+			Choices: []ChatCompletionChoice{{Message: ChatCompletionReply{Role: "assistant", Content: "ok"}}},
+		},
+	}
+	biller := &fakeBillingService{reservation: billing.Reservation{ID: "reservation-1"}}
+	service, err := NewService(
+		&fakeChannelRouter{channel: Channel{
+			ID:            "channel-1",
+			Provider:      ProviderOpenAI,
+			CredentialRef: "env:OPENAI_API_KEY",
+		}},
+		EnvCredentialResolver{Lookup: func(string) string { return "sk-test" }},
+		map[string]Provider{ProviderOpenAI: provider},
+		biller,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.ChatCompletions(context.Background(), &auth.Principal{
+		ID:            "token-1",
+		TokenID:       "token-1",
+		Audience:      auth.AudienceRelay,
+		TenantID:      "tenant-1",
+		AllowedModels: map[string]struct{}{"gpt-5": {}},
+	}, ChatCompletionRequest{
+		Model:          "gpt-5",
+		RequestID:      "request-1",
+		IdempotencyKey: "idempotency-1",
+		Messages:       []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if !errors.Is(err, ErrUsageUnavailable) {
+		t.Fatalf("paid request without upstream usage must require reconciliation, got %v", err)
+	}
+	if len(biller.events) != 1 || biller.events[0] != "reserve" {
+		t.Fatalf("paid request must retain its reservation for reconciliation: %#v", biller.events)
+	}
+}
+
+func TestChatUsageProvidedFlagWithoutQuantitiesIsNotBillableUsage(t *testing.T) {
+	if chatUsageHasValues(ChatUsage{UsageProvided: true}) {
+		t.Fatal("an empty usage object must not count as reliable usage")
+	}
+}
+
 func TestServiceReleasesReservationOnUpstreamFailure(t *testing.T) {
 	provider := &recordingProvider{err: ErrUpstream}
 	biller := &fakeBillingService{
@@ -494,16 +541,16 @@ func TestAnthropicMessageParamsMoveSystemToTopLevel(t *testing.T) {
 }
 
 type fakeChannelRouter struct {
-	channel        Channel
-	candidates     []Channel
-	err            error
-	selectedModel  string
-	credentialRef  string
-	credentialErr  error
-	groupPolicy    GroupPolicy
-	groupPolicyErr error
-	rpmAllowed     *bool
-	rpmCalls       int
+	channel         Channel
+	candidates      []Channel
+	err             error
+	selectedModel   string
+	discoveryConfig ChannelDiscoveryConfig
+	credentialErr   error
+	groupPolicy     GroupPolicy
+	groupPolicyErr  error
+	rpmAllowed      *bool
+	rpmCalls        int
 }
 
 func (r *fakeChannelRouter) Select(_ context.Context, model string) (Channel, error) {
@@ -576,6 +623,27 @@ func TestServiceFailsOverAcrossPriorityTiers(t *testing.T) {
 	}
 	if response.Choices[0].Message.Content != "from fallback" {
 		t.Fatalf("unexpected fallback response: %#v", response)
+	}
+}
+
+func TestChannelWideFailureClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "model not found is mapping specific", err: &UpstreamError{StatusCode: http.StatusNotFound, Err: ErrUpstream}, want: false},
+		{name: "rate limit is mapping specific", err: &UpstreamError{StatusCode: http.StatusTooManyRequests, Err: ErrUpstream}, want: false},
+		{name: "authentication failure affects channel", err: &UpstreamError{StatusCode: http.StatusUnauthorized, Err: ErrUpstream}, want: true},
+		{name: "transport failure affects channel", err: ErrUpstream, want: true},
+		{name: "credential failure affects channel", err: ErrCredentialUnavailable, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := channelWideFailure(test.err); got != test.want {
+				t.Fatalf("channelWideFailure() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -666,15 +734,25 @@ func TestServiceFreeGroupSkipsBilling(t *testing.T) {
 	}
 }
 
-func (r *fakeChannelRouter) CredentialRef(_ context.Context, _ string) (string, error) {
-	if r.credentialErr != nil {
-		return "", r.credentialErr
+func (r *fakeChannelRouter) DiscoveryConfig(_ context.Context, _ string) (ChannelDiscoveryConfig, error) {
+	if r.discoveryConfig.Provider == "" {
+		return ChannelDiscoveryConfig{
+			Provider:      ProviderOpenAI,
+			BaseURL:       "https://api.openai.com/v1",
+			CredentialRef: "secret:channel-1",
+		}, nil
 	}
-	return r.credentialRef, nil
+	return r.discoveryConfig, nil
 }
 
 func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.T) {
-	router := &fakeChannelRouter{credentialRef: "secret:channel-1"}
+	router := &fakeChannelRouter{
+		discoveryConfig: ChannelDiscoveryConfig{
+			Provider:      ProviderOpenAI,
+			BaseURL:       "https://api.openai.com/v1",
+			CredentialRef: "secret:channel-1",
+		},
+	}
 	provider := &recordingProvider{
 		models: []DiscoveredModel{{ID: "gpt-5", DisplayName: "gpt-5"}},
 	}
@@ -702,6 +780,42 @@ func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.
 	}
 	if len(models) != 1 || models[0].ID != "gpt-5" {
 		t.Fatalf("unexpected discovered models: %#v", models)
+	}
+	if provider.modelAPIKey != "sk-stored" {
+		t.Fatalf("stored credential was not used: %q", provider.modelAPIKey)
+	}
+}
+
+func TestServiceDiscoverModelsIgnoresExistingChannelEndpointFromRequest(t *testing.T) {
+	router := &fakeChannelRouter{
+		discoveryConfig: ChannelDiscoveryConfig{
+			Provider:      ProviderOpenAI,
+			BaseURL:       "https://api.openai.com/v1",
+			CredentialRef: "secret:channel-1",
+		},
+	}
+	provider := &recordingProvider{models: []DiscoveredModel{{ID: "gpt-5"}}}
+	service, err := NewService(
+		router,
+		credentialResolverFunc(func(_ context.Context, ref string) (string, error) {
+			if ref != "secret:channel-1" {
+				t.Fatalf("unexpected credential ref: %q", ref)
+			}
+			return "sk-stored", nil
+		}),
+		map[string]Provider{ProviderOpenAI: provider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
+		ChannelID: "channel-1",
+		Provider:  ProviderOpenAI,
+		BaseURL:   "https://attacker.example.invalid/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if provider.modelAPIKey != "sk-stored" {
 		t.Fatalf("stored credential was not used: %q", provider.modelAPIKey)

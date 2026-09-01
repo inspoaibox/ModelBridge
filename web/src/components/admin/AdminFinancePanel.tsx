@@ -51,8 +51,8 @@ function FinanceMetric({ label, value, icon: Icon, tone }: { label: string; valu
 
 function formatMoney(value?: string) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return "0.000000";
-  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 6, maximumFractionDigits: 6 }).format(parsed);
+  if (!Number.isFinite(parsed)) return "0";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(parsed);
 }
 
 function formatInteger(value: number) {

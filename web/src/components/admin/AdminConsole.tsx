@@ -41,6 +41,10 @@ import {
   ConsoleProfile,
   CreditFormState,
   EmailFormState,
+	EmailSettings,
+	FeatureSettings,
+	EmailTemplate,
+	EmailTemplateFormState,
   FinanceReport,
   GroupSummary,
   Language,
@@ -50,14 +54,19 @@ import {
   PasswordFormState,
   PriceMatrixSummary,
   OperationsSnapshot,
+  ModelStatusReport,
   AuditReport,
   Principal,
   ProfileFormState,
   SecuritySettings,
   SiteSettings,
+  SMTPSettingsForm,
   TokenSummary,
   TranslationKey,
   UsageReport,
+  PlatformPermission,
+  PlatformRole,
+  PlatformRoleFormState,
   UserSummary,
 } from "@/types";
 import { translations } from "@/locales/translations";
@@ -66,6 +75,8 @@ import { AdminSettingsPanel } from "@/components/admin/AdminSettingsPanel";
 import { AdminFinancePanel } from "@/components/admin/AdminFinancePanel";
 import { AdminUsagePanel } from "@/components/admin/AdminUsagePanel";
 import { AdminAuditPanel } from "@/components/admin/AdminAuditPanel";
+import { AdminRoleManagementPanel } from "@/components/admin/AdminRoleManagementPanel";
+import { AdminModelStatusPanel } from "@/components/admin/AdminModelStatusPanel";
 
 interface AdminConsoleProps {
   language: Language;
@@ -100,7 +111,6 @@ interface AdminConsoleProps {
   tokensMessage: LoginMessage;
   refreshTokens: (showPending?: boolean) => Promise<void>;
   updateTokenGroup: (token: TokenSummary, groupID: string) => Promise<void>;
-  openCreateToken: () => void;
   revokeToken: (token: TokenSummary) => Promise<void>;
   tokenRevokeConfirm: string;
   tokenActionBusy: string;
@@ -108,10 +118,18 @@ interface AdminConsoleProps {
   usersBusy: boolean;
   usersMessage: LoginMessage;
   refreshUsers: (showPending?: boolean) => Promise<void>;
-  openCreateUser: () => void;
   openEditUser: (user: UserSummary) => void;
   updateUserStatus: (user: UserSummary, status: "active" | "locked" | "disabled") => Promise<void>;
   userActionBusy: string;
+  platformRoles: PlatformRole[];
+  platformPermissions: PlatformPermission[];
+  platformRolesBusy: boolean;
+  platformRolesMessage: LoginMessage;
+  refreshPlatformRoles: (showPending?: boolean) => Promise<void>;
+  savePlatformRole: (form: PlatformRoleFormState) => Promise<boolean>;
+  disablePlatformRole: (role: PlatformRole) => Promise<void>;
+  loadPlatformUserRoles: (userID: string) => Promise<PlatformRole[]>;
+  savePlatformUserRoles: (user: UserSummary, roleIDs: string[]) => Promise<boolean>;
   prices: PriceMatrixSummary[];
   billingAccount: BillingAccount | null;
   billingMessage: LoginMessage;
@@ -153,6 +171,27 @@ interface AdminConsoleProps {
   siteBusy: boolean;
   siteMessage: LoginMessage;
   saveSiteSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  smtpForm: SMTPSettingsForm;
+  setSmtpForm: React.Dispatch<React.SetStateAction<SMTPSettingsForm>>;
+	emailSettings: EmailSettings | null;
+	emailBusy: boolean;
+	emailMessage: LoginMessage;
+	emailTestRecipient: string;
+	setEmailTestRecipient: (value: string) => void;
+	smtpConnectionBusy: boolean;
+	smtpMessageBusy: boolean;
+	saveEmailSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+	testSMTPConnection: () => Promise<void>;
+	sendTestEmail: () => Promise<void>;
+	featureSettings: FeatureSettings;
+	featureBusy: boolean;
+	featureMessage: LoginMessage;
+	saveFeatureSettings: (settings: FeatureSettings) => Promise<void>;
+	emailTemplates: EmailTemplate[];
+	emailTemplatesBusy: boolean;
+	emailTemplatesMessage: LoginMessage;
+	saveEmailTemplate: (form: EmailTemplateFormState) => Promise<boolean>;
+	deleteEmailTemplate: (template: EmailTemplate) => Promise<void>;
   usageReport: UsageReport | null;
   usageReportBusy: boolean;
   usageReportMessage: LoginMessage;
@@ -187,6 +226,10 @@ interface AdminConsoleProps {
   operationsSnapshot: OperationsSnapshot | null;
   operationsBusy: boolean;
   refreshOperations: (showPending?: boolean) => Promise<void>;
+  adminModelStatusReport: ModelStatusReport | null;
+  adminModelStatusBusy: boolean;
+  adminModelStatusMessage: LoginMessage;
+  refreshAdminModelStatus: (showPending?: boolean) => Promise<void>;
   auditReport: AuditReport | null;
   auditBusy: boolean;
   auditMessage: LoginMessage;
@@ -226,7 +269,6 @@ export function AdminConsole({
   tokensMessage,
   refreshTokens,
   updateTokenGroup,
-  openCreateToken,
   revokeToken,
   tokenRevokeConfirm,
   tokenActionBusy,
@@ -234,10 +276,18 @@ export function AdminConsole({
   usersBusy,
   usersMessage,
   refreshUsers,
-  openCreateUser,
   openEditUser,
   updateUserStatus,
   userActionBusy,
+  platformRoles,
+  platformPermissions,
+  platformRolesBusy,
+  platformRolesMessage,
+  refreshPlatformRoles,
+  savePlatformRole,
+  disablePlatformRole,
+  loadPlatformUserRoles,
+  savePlatformUserRoles,
   prices,
   billingAccount,
   billingMessage,
@@ -279,6 +329,27 @@ export function AdminConsole({
   siteBusy,
   siteMessage,
   saveSiteSettings,
+  smtpForm,
+  setSmtpForm,
+	emailSettings,
+	emailBusy,
+	emailMessage,
+	emailTestRecipient,
+	setEmailTestRecipient,
+	smtpConnectionBusy,
+	smtpMessageBusy,
+	saveEmailSettings,
+	testSMTPConnection,
+	sendTestEmail,
+	featureSettings,
+	featureBusy,
+	featureMessage,
+	saveFeatureSettings,
+	emailTemplates,
+	emailTemplatesBusy,
+	emailTemplatesMessage,
+	saveEmailTemplate,
+	deleteEmailTemplate,
   usageReport,
   usageReportBusy,
   usageReportMessage,
@@ -313,6 +384,10 @@ export function AdminConsole({
   operationsSnapshot,
   operationsBusy,
   refreshOperations,
+  adminModelStatusReport,
+  adminModelStatusBusy,
+  adminModelStatusMessage,
+  refreshAdminModelStatus,
   auditReport,
   auditBusy,
   auditMessage,
@@ -365,39 +440,45 @@ export function AdminConsole({
       c.models.some((m) => m.model.toLowerCase().includes(channelSearch.toLowerCase()))
   );
 
-  const navMenuItems = [
+  const navMenuItems: Array<{ group: string; items: Array<{ id: AdminSection; label: string; icon: React.ComponentType<{ className?: string }>; permission: string }> }> = [
     {
       group: language === "zh" ? "核心概览" : "Overview",
       items: [
-        { id: "dashboard" as const, label: t("adminNavDashboard"), icon: LayoutDashboard },
-        { id: "ops" as const, label: t("adminNavOps"), icon: MonitorCog },
+        { id: "dashboard" as const, label: t("adminNavDashboard"), icon: LayoutDashboard, permission: "operations:read" },
+        { id: "ops" as const, label: t("adminNavOps"), icon: MonitorCog, permission: "operations:read" },
+        { id: "model-status" as const, label: t("adminNavModelStatus"), icon: Activity, permission: "operations:read" },
       ],
     },
     {
       group: language === "zh" ? "模型与资产" : "Assets & Routing",
       items: [
-        { id: "groups" as const, label: t("adminNavGroups"), icon: Layers },
-        { id: "tokens" as const, label: t("adminNavTokens"), icon: KeyRound },
-        { id: "channels" as const, label: t("adminNavChannels"), icon: Waypoints },
-        { id: "billing" as const, label: t("adminNavBilling"), icon: CircleDollarSign },
+        { id: "groups" as const, label: t("adminNavGroups"), icon: Layers, permission: "group:read" },
+        { id: "tokens" as const, label: t("adminNavTokens"), icon: KeyRound, permission: "token:read" },
+        { id: "channels" as const, label: t("adminNavChannels"), icon: Waypoints, permission: "channel:read" },
+        { id: "billing" as const, label: t("adminNavBilling"), icon: CircleDollarSign, permission: "price:read" },
       ],
     },
     {
       group: language === "zh" ? "财务与审计" : "Finance & Audit",
       items: [
-        { id: "finance" as const, label: t("adminNavFinance"), icon: Receipt },
-        { id: "usage" as const, label: t("adminNavUsage"), icon: ClipboardList },
-        { id: "audit" as const, label: t("adminNavAudit"), icon: ShieldAlert },
+        { id: "finance" as const, label: t("adminNavFinance"), icon: Receipt, permission: "finance:read" },
+        { id: "usage" as const, label: t("adminNavUsage"), icon: ClipboardList, permission: "usage:read" },
+        { id: "audit" as const, label: t("adminNavAudit"), icon: ShieldAlert, permission: "audit:read" },
       ],
     },
     {
       group: language === "zh" ? "组织与安全" : "Governance & Security",
       items: [
-        { id: "users" as const, label: t("adminNavUsers"), icon: Users },
-        { id: "settings" as const, label: t("adminNavSettings"), icon: Settings2 },
+        { id: "users" as const, label: t("adminNavUsers"), icon: Users, permission: "user:read" },
+        { id: "roles" as const, label: t("adminNavRoles"), icon: ShieldCheck, permission: "role:read" },
+        { id: "settings" as const, label: t("adminNavSettings"), icon: Settings2, permission: "security:read" },
       ],
     },
   ];
+  const knownPermissions = principal?.permissions;
+  const canSeeAdminPermission = (permission: string) => knownPermissions?.includes(permission) === true;
+  const currentMenuItem = navMenuItems.flatMap((group) => group.items).find((item) => item.id === adminSection);
+  const currentSectionAllowed = currentMenuItem ? canSeeAdminPermission(currentMenuItem.permission) : false;
 
   return (
     <div className="w-full flex-1 flex flex-col xl:flex-row bg-slate-50/60 dark:bg-slate-950/80 transition-colors duration-200">
@@ -422,7 +503,7 @@ export function AdminConsole({
                   {grp.group}
                 </div>
                 <div className="space-y-1">
-                  {grp.items.map((item) => {
+                  {grp.items.filter((item) => canSeeAdminPermission(item.permission)).map((item) => {
                     const Icon = item.icon;
                     const active = adminSection === item.id;
                     return (
@@ -477,8 +558,12 @@ export function AdminConsole({
               <span className="text-slate-800 dark:text-slate-200">
                 {adminSection === "ops"
                   ? t("adminNavOps")
+                  : adminSection === "model-status"
+                  ? t("adminNavModelStatus")
                   : adminSection === "users"
                   ? t("adminNavUsers")
+                  : adminSection === "roles"
+                  ? t("adminNavRoles")
                   : adminSection === "groups"
                   ? t("adminNavGroups")
                   : adminSection === "tokens"
@@ -501,8 +586,12 @@ export function AdminConsole({
             <h1 className="mt-1 text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
               {adminSection === "ops"
                 ? t("opsTitle")
+                : adminSection === "model-status"
+                ? t("adminModelStatusTitle")
                 : adminSection === "users"
                 ? t("usersTitle")
+                : adminSection === "roles"
+                ? t("rolesTitle")
                 : adminSection === "groups"
                 ? t("groupsTitle")
                 : adminSection === "tokens"
@@ -532,13 +621,21 @@ export function AdminConsole({
               <div className="text-left">
                 <div className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500">{t("currentUser")}</div>
                 <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 font-mono truncate max-w-[140px]">
-                  {principal?.id || "admin"}
+                  {principal?.id || "-"}
                 </div>
               </div>
             </div>
           </div>
         </div>
 
+        {!currentSectionAllowed ? (
+          <Card className="glass-panel">
+            <CardHeader>
+              <CardTitle className="text-xl text-slate-900 dark:text-white">{t("adminAccessDeniedTitle")}</CardTitle>
+              <CardDescription>{t("adminAccessDeniedDescription")}</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : <>
         {/* Section 1: Dashboard View */}
         {adminSection === "dashboard" && (
           <div className="space-y-6">
@@ -715,6 +812,16 @@ export function AdminConsole({
           </div>
         )}
 
+        {adminSection === "model-status" && (
+          <AdminModelStatusPanel
+            language={language}
+            report={adminModelStatusReport}
+            busy={adminModelStatusBusy}
+            message={adminModelStatusMessage}
+            refresh={refreshAdminModelStatus}
+          />
+        )}
+
         {/* Section 3: Users & Tenants View */}
         {adminSection === "users" && (
           <Card className="glass-panel space-y-4">
@@ -723,7 +830,6 @@ export function AdminConsole({
                 <div><CardTitle className="text-xl font-bold text-slate-900 dark:text-white">{t("usersTableTitle")}</CardTitle><CardDescription>{t("usersTableHint")}</CardDescription></div>
                 <div className="flex flex-wrap items-center gap-2.5">
                   <Button variant="outline" size="sm" onClick={() => void refreshUsers(true)} disabled={usersBusy || Boolean(userActionBusy)} className="h-9 gap-1.5 text-xs"><RefreshCw className={cn("h-3.5 w-3.5", usersBusy ? "animate-spin" : "")} />{t("usersRefresh")}</Button>
-                  <Button size="sm" onClick={openCreateUser} disabled={Boolean(userActionBusy)} className="h-9 gap-1.5 text-xs shadow-lg shadow-indigo-500/20"><Plus className="h-3.5 w-3.5" />{t("usersNew")}</Button>
                 </div>
               </div>
             </CardHeader>
@@ -742,12 +848,38 @@ export function AdminConsole({
                         <TableCell className="min-w-[230px]"><div className="text-sm text-slate-700 dark:text-slate-300">{user.tenant_count} {t("usersTenantUnit")}</div><div className="mt-1 max-w-[230px] truncate text-xs text-slate-500" title={user.tenant_names.join(", ")}>{user.tenant_names.join(", ") || "-"}</div>{user.tenant_ids.length > 0 ? <div className="mt-1.5 space-y-0.5"><div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{t("usersTenantID")}</div>{user.tenant_ids.map((tenantID) => <div key={tenantID} className="max-w-[230px] break-all font-mono text-[10px] leading-4 text-indigo-600 dark:text-indigo-300" title={`${t("usersTenantID")}: ${tenantID}`}>{tenantID}</div>)}</div> : null}</TableCell>
                         <TableCell><Badge variant={isActive ? "success" : user.status === "locked" ? "warning" : "muted"}>{isActive ? t("usersStatusActive") : user.status === "locked" ? t("usersStatusLocked") : user.status === "pending" ? t("usersStatusPending") : t("usersStatusDisabled")}</Badge></TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-slate-500">{formatTime(user.created_at)}</TableCell>
-                        <TableCell className="whitespace-nowrap text-right"><div className="flex items-center justify-end gap-2"><Button variant="ghost" size="icon" onClick={() => openEditUser(user)} disabled={isSelf || Boolean(userActionBusy)} aria-label={isSelf ? t("usersSelfDisabled") : t("usersEdit")} title={isSelf ? t("usersSelfDisabled") : t("usersEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button><select value={user.status} onChange={(event) => void updateUserStatus(user, event.target.value as "active" | "locked" | "disabled")} disabled={isSelf || Boolean(userActionBusy)} aria-label={t("usersChangeStatus")} title={isSelf ? t("usersSelfDisabled") : undefined} className="h-9 min-w-[112px] rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="active">{t("usersStatusActive")}</option><option value="locked">{t("usersStatusLocked")}</option><option value="disabled">{t("usersStatusDisabled")}</option></select></div></TableCell>
+                         <TableCell className="whitespace-nowrap text-right"><div className="flex items-center justify-end gap-2"><Button variant="ghost" size="icon" onClick={() => openEditUser(user)} disabled={!canSeeAdminPermission("user:update") || isSelf || Boolean(userActionBusy)} aria-label={isSelf ? t("usersSelfDisabled") : t("usersEdit")} title={isSelf ? t("usersSelfDisabled") : t("usersEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button><select value={user.status} onChange={(event) => void updateUserStatus(user, event.target.value as "active" | "locked" | "disabled")} disabled={!canSeeAdminPermission("user:update") || isSelf || Boolean(userActionBusy)} aria-label={t("usersChangeStatus")} title={isSelf ? t("usersSelfDisabled") : undefined} className="h-9 min-w-[112px] rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="active">{t("usersStatusActive")}</option><option value="locked">{t("usersStatusLocked")}</option><option value="disabled">{t("usersStatusDisabled")}</option>{user.status === "pending" ? <option value="pending" disabled>{t("usersStatusPending")}</option> : null}</select></div></TableCell>
                       </TableRow>;
                     })}
                   </TableBody>
                 </Table>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {adminSection === "roles" && (
+          <Card className="glass-panel space-y-4">
+            <CardHeader>
+              <CardTitle className="text-xl font-bold text-slate-900 dark:text-white">{t("rolesTitle")}</CardTitle>
+              <CardDescription>{t("rolesDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AdminRoleManagementPanel
+                language={language}
+                currentUserID={principal?.id}
+                users={users}
+                roles={platformRoles}
+                permissions={platformPermissions}
+                busy={platformRolesBusy}
+                message={platformRolesMessage}
+                refresh={refreshPlatformRoles}
+                saveRole={savePlatformRole}
+                disableRole={disablePlatformRole}
+                loadUserRoles={loadPlatformUserRoles}
+                saveUserRoles={savePlatformUserRoles}
+                canManage={canSeeAdminPermission("role:update") && principal?.roles?.includes("platform_owner") === true}
+              />
             </CardContent>
           </Card>
         )}
@@ -769,7 +901,7 @@ export function AdminConsole({
                     <RefreshCw className={cn("h-3.5 w-3.5", groupsBusy ? "animate-spin" : "")} />
                     <span>{t("groupsRefresh")}</span>
                   </Button>
-                  <Button size="sm" onClick={openCreateGroup} disabled={Boolean(groupActionBusy)} className="h-9 gap-1.5 text-xs shadow-lg shadow-indigo-500/20">
+                  <Button size="sm" onClick={openCreateGroup} disabled={!canSeeAdminPermission("group:update") || Boolean(groupActionBusy)} className="h-9 gap-1.5 text-xs shadow-lg shadow-indigo-500/20">
                     <Plus className="h-3.5 w-3.5" />
                     <span>{t("groupsNew")}</span>
                   </Button>
@@ -841,11 +973,11 @@ export function AdminConsole({
                           <TableCell><Badge variant={group.status === "active" ? "success" : "muted"}>{group.status === "active" ? t("groupsStatusActive") : t("groupsStatusDisabled")}</Badge></TableCell>
                           <TableCell className="whitespace-nowrap text-right">
                             <div className="inline-flex items-center gap-1">
-                              <Button variant="ghost" size="sm" onClick={() => openEditGroup(group)} disabled={Boolean(groupActionBusy)} className="h-8 px-2.5 text-xs text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white">
+                              <Button variant="ghost" size="sm" onClick={() => openEditGroup(group)} disabled={!canSeeAdminPermission("group:update") || Boolean(groupActionBusy)} className="h-8 px-2.5 text-xs text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white">
                                 <Pencil className="mr-1 h-3.5 w-3.5" />
                                 <span>{t("groupsEdit")}</span>
                               </Button>
-                              <Button variant={groupDeleteConfirm === group.id ? "destructive" : "ghost"} size="sm" onClick={() => deleteGroup(group)} disabled={Boolean(groupActionBusy)} className="h-8 px-2 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10" title={groupDeleteConfirm === group.id ? t("groupsDeleteConfirm") : t("groupsDelete")}>
+                              <Button variant={groupDeleteConfirm === group.id ? "destructive" : "ghost"} size="sm" onClick={() => deleteGroup(group)} disabled={!canSeeAdminPermission("group:update") || Boolean(groupActionBusy)} className="h-8 px-2 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10" title={groupDeleteConfirm === group.id ? t("groupsDeleteConfirm") : t("groupsDelete")}>
                                 <Trash2 className="h-3.5 w-3.5" />
                                 <span className="sr-only">{t("groupsDelete")}</span>
                               </Button>
@@ -877,10 +1009,6 @@ export function AdminConsole({
                   <Button variant="outline" size="sm" onClick={() => refreshTokens(true)} disabled={tokensBusy || Boolean(tokenActionBusy)} className="h-9 gap-1.5 text-xs">
                     <RefreshCw className={cn("h-3.5 w-3.5", tokensBusy ? "animate-spin" : "")} />
                     <span>{t("tokensRefresh")}</span>
-                  </Button>
-                  <Button size="sm" onClick={openCreateToken} disabled={Boolean(tokenActionBusy)} className="h-9 gap-1.5 text-xs">
-                    <Plus className="h-3.5 w-3.5" />
-                    <span>{t("tokensCreateAction")}</span>
                   </Button>
                 </div>
               </div>
@@ -932,7 +1060,7 @@ export function AdminConsole({
                             <div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{token.project_id}</div>
                           </TableCell>
                           <TableCell className="min-w-[170px]">
-                            <select value={token.group_id || ""} onChange={(event) => void updateTokenGroup(token, event.target.value)} disabled={token.status !== "active" || Boolean(tokenActionBusy)} className="h-9 min-w-[150px] rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 ring-offset-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:ring-offset-slate-900">
+                            <select value={token.group_id || ""} onChange={(event) => void updateTokenGroup(token, event.target.value)} disabled={!canSeeAdminPermission("token:update") || token.status !== "active" || Boolean(tokenActionBusy)} className="h-9 min-w-[150px] rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 ring-offset-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:ring-offset-slate-900">
                               {!token.group_id ? <option value="">{t("tokensNoGroup")}</option> : null}
                               {groups.map((group) => <option key={group.id} value={group.id} disabled={group.status !== "active" && group.id !== token.group_id}>{group.name} ({group.code}){group.status !== "active" ? ` - ${t("groupsStatusDisabled")}` : ""}</option>)}
                             </select>
@@ -940,7 +1068,7 @@ export function AdminConsole({
                           <TableCell><Badge variant={token.status === "active" ? "success" : token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell>
                           <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{formatTime(token.created_at)}</TableCell>
                           <TableCell className="text-right">
-                            <Button variant={tokenRevokeConfirm === token.id ? "destructive" : "ghost"} size="sm" onClick={() => void revokeToken(token)} disabled={token.status !== "active" || Boolean(tokenActionBusy)} className="gap-1.5 text-xs">
+                            <Button variant={tokenRevokeConfirm === token.id ? "destructive" : "ghost"} size="sm" onClick={() => void revokeToken(token)} disabled={!canSeeAdminPermission("token:revoke") || token.status !== "active" || Boolean(tokenActionBusy)} className="gap-1.5 text-xs">
                               <Trash2 className="h-3.5 w-3.5" />
                               {tokenRevokeConfirm === token.id ? t("tokensRevokeConfirm") : t("tokensRevoke")}
                             </Button>
@@ -978,7 +1106,7 @@ export function AdminConsole({
                   <Button
                     size="sm"
                     onClick={() => openCreateChannel()}
-                    disabled={Boolean(channelActionBusy)}
+                    disabled={!canSeeAdminPermission("channel:update") || Boolean(channelActionBusy)}
                     className="h-9 gap-1.5 text-xs shadow-lg shadow-indigo-500/20"
                   >
                     <Plus className="h-4 w-4" />
@@ -1129,7 +1257,7 @@ export function AdminConsole({
                                 size="sm"
                                 className="h-8 px-2.5 text-xs text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
                                 onClick={() => openEditChannel(channel)}
-                                disabled={Boolean(channelActionBusy)}
+                                 disabled={!canSeeAdminPermission("channel:update") || Boolean(channelActionBusy)}
                               >
                                 <Pencil className="h-3.5 w-3.5 mr-1" />
                                 <span>{t("channelsEdit")}</span>
@@ -1141,7 +1269,7 @@ export function AdminConsole({
                                   size="sm"
                                   className="h-8 px-2 text-xs text-amber-600 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10"
                                   onClick={() => changeChannelStatus(channel, "disabled")}
-                                  disabled={Boolean(channelActionBusy)}
+                                   disabled={!canSeeAdminPermission("channel:update") || Boolean(channelActionBusy)}
                                   title={t("channelsPause")}
                                 >
                                   <Pause className="h-3.5 w-3.5" />
@@ -1152,7 +1280,7 @@ export function AdminConsole({
                                   size="sm"
                                   className="h-8 px-2 text-xs text-emerald-600 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-500/10"
                                   onClick={() => changeChannelStatus(channel, "active")}
-                                  disabled={Boolean(channelActionBusy)}
+                                   disabled={!canSeeAdminPermission("channel:update") || Boolean(channelActionBusy)}
                                   title={t("channelsEnable")}
                                 >
                                   <Play className="h-3.5 w-3.5" />
@@ -1164,7 +1292,7 @@ export function AdminConsole({
                                 size="sm"
                                 className="h-8 px-2 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10"
                                 onClick={() => deleteChannel(channel)}
-                                disabled={Boolean(channelActionBusy)}
+                                 disabled={!canSeeAdminPermission("channel:update") || Boolean(channelActionBusy)}
                                 title={t("channelsDelete")}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
@@ -1197,7 +1325,7 @@ export function AdminConsole({
                       </CardTitle>
                       <CardDescription>{t("billingReferenceHint")}</CardDescription>
                     </div>
-                    <Button type="button" variant="outline" size="sm" onClick={() => void syncOfficialPrices()} disabled={billingBusy || officialPriceSyncBusy} className="h-9 shrink-0 gap-1.5 text-xs">
+                    <Button type="button" variant="outline" size="sm" onClick={() => void syncOfficialPrices()} disabled={!canSeeAdminPermission("price:publish") || billingBusy || officialPriceSyncBusy} className="h-9 shrink-0 gap-1.5 text-xs">
                       <RefreshCw className={cn("h-3.5 w-3.5", officialPriceSyncBusy ? "animate-spin" : "")} />
                       <span>{officialPriceSyncBusy ? t("billingOfficialSyncing") : t("billingOfficialSync")}</span>
                     </Button>
@@ -1302,14 +1430,14 @@ export function AdminConsole({
                         variant="outline"
                         size="sm"
                         onClick={loadBillingAccount}
-                        disabled={billingBusy}
+                       disabled={!canSeeAdminPermission("billing:read") || billingBusy}
                         className="h-9 text-xs"
                       >
                         <RefreshCw className={cn("h-3.5 w-3.5 mr-1", billingBusy ? "animate-spin" : "")} />
                         <span>{t("billingAccountLoad")}</span>
                       </Button>
 
-                      <Button type="submit" size="sm" disabled={billingBusy} className="h-9 text-xs gap-1.5">
+                       <Button type="submit" size="sm" disabled={!canSeeAdminPermission("billing:update") || billingBusy} className="h-9 text-xs gap-1.5">
                         <CircleDollarSign className="h-3.5 w-3.5" />
                         <span>{billingBusy ? t("billingCrediting") : t("billingCredit")}</span>
                       </Button>
@@ -1324,7 +1452,7 @@ export function AdminConsole({
                         <Badge variant="success">{billingAccount.status}</Badge>
                       </div>
                       <div className="text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 font-mono">
-                        {billingAccount.currency} {billingAccount.balance}
+                        {billingAccount.currency} {formatMoney(billingAccount.balance)}
                       </div>
                       <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono truncate">
                         {t("billingAccountID")}: {billingAccount.id}
@@ -1362,8 +1490,9 @@ export function AdminConsole({
                   groups={priceGroups}
                   t={t}
                   formatTime={formatTime}
-                  openEditPrice={openEditPrice}
-                  billingBusy={billingBusy}
+                   openEditPrice={openEditPrice}
+                   canPublishPrice={canSeeAdminPermission("price:publish")}
+                   billingBusy={billingBusy}
                   officialPriceSyncBusy={officialPriceSyncBusy}
                 />
               </CardContent>
@@ -1399,12 +1528,34 @@ export function AdminConsole({
             securityMessage={securityMessage}
             securityBusy={securityBusy}
             persistSecurity={persistSecurity}
+            canUpdateSystemSettings={canSeeAdminPermission("security:update")}
             siteForm={siteForm}
             setSiteForm={setSiteForm}
             siteBusy={siteBusy}
             siteMessage={siteMessage}
             saveSiteSettings={saveSiteSettings}
-          />
+	            smtpForm={smtpForm}
+	            setSmtpForm={setSmtpForm}
+	            emailSettings={emailSettings}
+	            emailBusy={emailBusy}
+	            emailMessage={emailMessage}
+	            emailTestRecipient={emailTestRecipient}
+	            setEmailTestRecipient={setEmailTestRecipient}
+	            smtpConnectionBusy={smtpConnectionBusy}
+	            smtpMessageBusy={smtpMessageBusy}
+	            saveEmailSettings={saveEmailSettings}
+	            testSMTPConnection={testSMTPConnection}
+	            sendTestEmail={sendTestEmail}
+	            featureSettings={featureSettings}
+	            featureBusy={featureBusy}
+	            featureMessage={featureMessage}
+	            saveFeatureSettings={saveFeatureSettings}
+	            emailTemplates={emailTemplates}
+	            emailTemplatesBusy={emailTemplatesBusy}
+	            emailTemplatesMessage={emailTemplatesMessage}
+	            saveEmailTemplate={saveEmailTemplate}
+	            deleteEmailTemplate={deleteEmailTemplate}
+	          />
         )}
         {adminSection === "usage" && (
           <AdminUsagePanel
@@ -1450,6 +1601,7 @@ export function AdminConsole({
         {adminSection === "audit" && (
           <AdminAuditPanel language={language} report={auditReport} busy={auditBusy} message={auditMessage} refresh={refreshAudit} />
         )}
+        </>}
       </div>
     </div>
   );
@@ -1521,11 +1673,18 @@ function componentDisplayPrice(value: string, unit: string) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(parsed * componentUnitScale(unit));
 }
 
+function formatMoney(value?: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "0";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(parsed);
+}
+
 function PriceMatrixTable({
   groups,
   t,
   formatTime,
   openEditPrice,
+  canPublishPrice,
   billingBusy,
   officialPriceSyncBusy,
 }: {
@@ -1533,6 +1692,7 @@ function PriceMatrixTable({
   t: (key: TranslationKey) => string;
   formatTime: (value: string) => string;
   openEditPrice: (price: PriceMatrixSummary) => void;
+  canPublishPrice: boolean;
   billingBusy: boolean;
   officialPriceSyncBusy: boolean;
 }) {
@@ -1569,7 +1729,7 @@ function PriceMatrixTable({
                     <TableCell><Badge variant={price.source === "manual" ? "default" : price.source === "litellm" ? "cyan" : "muted"}>{price.source === "manual" ? t("billingPriceSourceManual") : price.source === "litellm" ? t("billingPriceSourceLiteLLM") : t("billingPriceSourceMissing")}</Badge></TableCell>
                     <TableCell><div className="flex max-w-[420px] flex-wrap gap-1.5">{(price.components || []).map((component) => <span key={component.component_code} className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={component.component_code + " · " + component.unit}>{component.component_code}: {componentDisplayPrice(component.price_per_unit, component.unit)} <span className="font-sans text-slate-400">{componentUnitLabel(component.unit)}</span></span>)}{(price.components || []).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}</div></TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{price.updated_at ? formatTime(price.updated_at) : "-"}</TableCell>
-                    <TableCell className="text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openEditPrice(price)} disabled={billingBusy || officialPriceSyncBusy} title={t("billingPriceEdit")} aria-label={t("billingPriceEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button></TableCell>
+                    <TableCell className="text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openEditPrice(price)} disabled={!canPublishPrice || billingBusy || officialPriceSyncBusy} title={t("billingPriceEdit")} aria-label={t("billingPriceEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button></TableCell>
                   </TableRow>
                 ))}
               </TableBody>

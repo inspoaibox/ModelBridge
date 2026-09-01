@@ -125,31 +125,161 @@ func (GrokProvider) GenerateImages(ctx context.Context, upstream UpstreamImageRe
 }
 
 func (GrokProvider) EditImage(ctx context.Context, upstream UpstreamImageEditRequest) (MediaJSONResponse, error) {
-	return (OpenAIProvider{}).EditImage(ctx, upstream)
+	if len(upstream.Request.Mask) > 0 {
+		// xAI's current image edit API does not expose OpenAI's mask contract.
+		// Reject it rather than silently changing the requested edit semantics.
+		return MediaJSONResponse{}, ErrUnsupportedFeature
+	}
+	return grokEditImage(ctx, upstream)
 }
 
 func (GrokProvider) TranscribeAudio(ctx context.Context, upstream UpstreamAudioRequest) (MediaJSONResponse, error) {
-	return (OpenAIProvider{}).TranscribeAudio(ctx, upstream)
-}
-
-func (GrokProvider) TranslateAudio(ctx context.Context, upstream UpstreamAudioRequest) (MediaJSONResponse, error) {
-	return (OpenAIProvider{}).TranslateAudio(ctx, upstream)
+	return grokTranscribeAudio(ctx, upstream)
 }
 
 func (GrokProvider) SynthesizeSpeech(ctx context.Context, upstream UpstreamSpeechRequest) (MediaBinaryResponse, error) {
-	return (OpenAIProvider{}).SynthesizeSpeech(ctx, upstream)
+	return grokSynthesizeSpeech(ctx, upstream)
 }
 
 func (GrokProvider) CreateVideo(ctx context.Context, upstream UpstreamVideoRequest) (MediaJSONResponse, error) {
-	return (OpenAIProvider{}).CreateVideo(ctx, upstream)
+	body, err := grokVideoRequestBody(upstream.Request, upstreamModelFor(upstream.Channel, upstream.Request.Model))
+	if err != nil {
+		return MediaJSONResponse{}, ErrInvalidRequest
+	}
+	data, header, status, err := mediaJSONRequest(ctx, upstream.Channel.BaseURL, upstream.APIKey, "/videos/generations", body)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	response, err := decodeMediaJSON(data, status, header)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	response.ID = firstNonEmpty(extractJSONString(data, "request_id"), extractJSONString(data, "id"))
+	response.Status = extractJSONString(data, "status")
+	return response, nil
 }
 
 func (GrokProvider) GetVideo(ctx context.Context, upstream UpstreamVideoRequest, jobID string) (MediaJSONResponse, error) {
-	return (OpenAIProvider{}).GetVideo(ctx, upstream, jobID)
+	data, header, status, err := mediaJSONMethodRequest(ctx, http.MethodGet, upstream.Channel.BaseURL, upstream.APIKey, "/videos/"+url.PathEscape(strings.TrimSpace(jobID)), nil)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	response, err := decodeMediaJSON(data, status, header)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	response.ID = firstNonEmpty(extractJSONString(data, "request_id"), extractJSONString(data, "id"), jobID)
+	response.Status = extractJSONString(data, "status")
+	return response, nil
 }
 
 func (GrokProvider) DownloadVideo(ctx context.Context, upstream UpstreamVideoRequest, value string) (MediaBinaryResponse, error) {
-	return (OpenAIProvider{}).DownloadVideo(ctx, upstream, value)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return MediaBinaryResponse{}, ErrInvalidRequest
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return downloadMediaURL(ctx, upstream.Channel.BaseURL, upstream.APIKey, value)
+	}
+	return MediaBinaryResponse{}, ErrInvalidRequest
+}
+
+func grokEditImage(ctx context.Context, upstream UpstreamImageEditRequest) (MediaJSONResponse, error) {
+	prompt := strings.TrimSpace(upstream.Request.Fields["prompt"])
+	if prompt == "" || len(upstream.Request.Image) == 0 {
+		return MediaJSONResponse{}, ErrInvalidRequest
+	}
+	imageType := firstNonEmpty(upstream.Request.ImageType, "image/png")
+	body := map[string]any{
+		"model":  upstreamModelFor(upstream.Channel, upstream.Request.Model),
+		"prompt": prompt,
+		"image": map[string]string{
+			"url":  "data:" + imageType + ";base64," + base64.StdEncoding.EncodeToString(upstream.Request.Image),
+			"type": "image_url",
+		},
+	}
+	if quality := strings.TrimSpace(upstream.Request.Fields["quality"]); quality != "" {
+		body["quality"] = quality
+	}
+	if aspectRatio := strings.TrimSpace(upstream.Request.Fields["aspect_ratio"]); aspectRatio != "" {
+		body["aspect_ratio"] = aspectRatio
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return MediaJSONResponse{}, ErrInvalidRequest
+	}
+	data, header, status, err := mediaJSONRequest(ctx, upstream.Channel.BaseURL, upstream.APIKey, "/images/edits", encoded)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	return imageResponseWithUsage(data, status, header, 1)
+}
+
+func grokVideoRequestBody(request VideoCreateRequest, model string) ([]byte, error) {
+	var body map[string]any
+	if len(request.Payload) > 0 {
+		if err := json.Unmarshal(request.Payload, &body); err != nil {
+			return nil, ErrInvalidRequest
+		}
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	body["model"] = model
+	body["prompt"] = request.Prompt
+	if seconds, ok := body["seconds"]; ok {
+		body["duration"] = seconds
+		delete(body, "seconds")
+	} else if duration := strings.TrimSpace(request.Duration); duration != "" {
+		if parsed, err := strconv.ParseFloat(duration, 64); err == nil {
+			body["duration"] = parsed
+		} else {
+			return nil, ErrInvalidRequest
+		}
+	}
+	return json.Marshal(body)
+}
+
+func grokTranscribeAudio(ctx context.Context, upstream UpstreamAudioRequest) (MediaJSONResponse, error) {
+	fields := cloneStringMap(upstream.Request.Fields)
+	delete(fields, "model")
+	data, header, status, err := mediaMultipartRequest(ctx, upstream.Channel.BaseURL, upstream.APIKey, "/stt", fields,
+		"file", upstream.Request.FileName, upstream.Request.FileType, upstream.Request.File, "", "", nil)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	return audioResponseWithUsage(data, status, header, upstream.Request.File)
+}
+
+func grokSynthesizeSpeech(ctx context.Context, upstream UpstreamSpeechRequest) (MediaBinaryResponse, error) {
+	var body map[string]any
+	if len(upstream.Request.Payload) > 0 {
+		if err := json.Unmarshal(upstream.Request.Payload, &body); err != nil {
+			return MediaBinaryResponse{}, ErrInvalidRequest
+		}
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	body["text"] = upstream.Request.Input
+	delete(body, "input")
+	if voice, ok := body["voice"].(string); ok {
+		if _, exists := body["voice_id"]; !exists {
+			body["voice_id"] = voice
+		}
+		delete(body, "voice")
+	}
+	delete(body, "model")
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return MediaBinaryResponse{}, ErrInvalidRequest
+	}
+	response, err := mediaBinaryRequest(ctx, http.MethodPost, upstream.Channel.BaseURL, upstream.APIKey, "/tts", encoded, "application/json")
+	if err != nil {
+		return MediaBinaryResponse{}, err
+	}
+	response.Usage = MediaUsage{Metrics: billing.MeteredUsage{"input_characters": strconv.FormatInt(int64(len([]rune(upstream.Request.Input))), 10)}, Source: "local_estimate"}
+	return response, nil
 }
 
 // Gemini exposes image and video generation through the native REST methods.
@@ -182,7 +312,34 @@ func (GeminiProvider) GenerateImages(ctx context.Context, upstream UpstreamImage
 }
 
 func (GeminiProvider) EditImage(ctx context.Context, upstream UpstreamImageEditRequest) (MediaJSONResponse, error) {
-	return MediaJSONResponse{}, ErrUnsupportedFeature
+	if len(upstream.Request.Image) == 0 {
+		return MediaJSONResponse{}, ErrInvalidRequest
+	}
+	if len(upstream.Request.Mask) > 0 {
+		return MediaJSONResponse{}, ErrUnsupportedFeature
+	}
+	imageType := firstNonEmpty(upstream.Request.ImageType, "image/png")
+	prompt := strings.TrimSpace(upstream.Request.Fields["prompt"])
+	if prompt == "" {
+		return MediaJSONResponse{}, ErrInvalidRequest
+	}
+	body := map[string]any{
+		"contents": []map[string]any{{"role": "user", "parts": []map[string]any{
+			{"inlineData": map[string]string{"mimeType": imageType, "data": base64.StdEncoding.EncodeToString(upstream.Request.Image)}},
+			{"text": prompt},
+		}}},
+		"generationConfig": map[string]any{"responseModalities": []string{"IMAGE"}},
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return MediaJSONResponse{}, ErrInvalidRequest
+	}
+	model := geminiModelName(upstreamModelFor(upstream.Channel, upstream.Request.Model))
+	data, header, status, err := geminiRESTRequest(ctx, upstream.Channel.BaseURL, upstream.APIKey, http.MethodPost, "/models/"+url.PathEscape(model)+":generateContent", encoded)
+	if err != nil {
+		return MediaJSONResponse{}, err
+	}
+	return geminiImageResponse(data, status, header, 1)
 }
 
 func (GeminiProvider) TranscribeAudio(ctx context.Context, upstream UpstreamAudioRequest) (MediaJSONResponse, error) {
@@ -259,7 +416,7 @@ func (GeminiProvider) GetVideo(ctx context.Context, upstream UpstreamVideoReques
 
 func (GeminiProvider) DownloadVideo(ctx context.Context, upstream UpstreamVideoRequest, value string) (MediaBinaryResponse, error) {
 	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-		return downloadMediaURL(ctx, upstream.Channel.BaseURL, upstream.APIKey, value)
+		return downloadMediaURLWithHeader(ctx, upstream.Channel.BaseURL, upstream.APIKey, value, "x-goog-api-key", upstream.APIKey)
 	}
 	return MediaBinaryResponse{}, ErrInvalidRequest
 }
@@ -599,15 +756,27 @@ func cloneStringMap(value map[string]string) map[string]string {
 }
 
 func downloadMediaURL(ctx context.Context, baseURL, apiKey, rawURL string) (MediaBinaryResponse, error) {
+	return downloadMediaURLWithHeader(ctx, baseURL, apiKey, rawURL, "Authorization", "Bearer "+strings.TrimSpace(apiKey))
+}
+
+func downloadMediaURLWithHeader(ctx context.Context, baseURL, apiKey, rawURL, headerName, headerValue string) (MediaBinaryResponse, error) {
 	target, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.Fragment != "" {
 		return MediaBinaryResponse{}, ErrInvalidRequest
 	}
 	base, err := parseAndValidateBaseURL(baseURL)
-	if err != nil || !strings.EqualFold(base.Hostname(), target.Hostname()) || effectiveURLPort(base) != effectiveURLPort(target) {
+	if err != nil || target.Scheme != "https" {
 		return MediaBinaryResponse{}, ErrInvalidRequest
 	}
-	client, err := providerHTTPClient(baseURL)
+	sameOrigin := strings.EqualFold(base.Hostname(), target.Hostname()) && effectiveURLPort(base) == effectiveURLPort(target)
+	clientBase := baseURL
+	if !sameOrigin {
+		if err := validateHost(target.Hostname()); err != nil {
+			return MediaBinaryResponse{}, ErrInvalidRequest
+		}
+		clientBase = target.Scheme + "://" + target.Host
+	}
+	client, err := providerHTTPClient(clientBase)
 	if err != nil {
 		return MediaBinaryResponse{}, ErrInvalidRequest
 	}
@@ -615,7 +784,11 @@ func downloadMediaURL(ctx context.Context, baseURL, apiKey, rawURL string) (Medi
 	if err != nil {
 		return MediaBinaryResponse{}, ErrInvalidRequest
 	}
-	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	// Signed vendor URLs are intentionally fetched without forwarding the
+	// provider API key; same-origin content endpoints still need it.
+	if sameOrigin {
+		request.Header.Set(headerName, headerValue)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return MediaBinaryResponse{}, &UpstreamError{Err: ErrUpstream}

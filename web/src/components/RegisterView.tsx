@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 interface RegisterViewProps {
   language: Language;
   routeTo: (target: string) => void;
-  onRegistered: (email: string, tenantID: string) => void;
+  onRegistered: (email: string, tenantID: string, verificationRequired: boolean) => void;
 }
 
 export function RegisterView({ language, routeTo, onRegistered }: RegisterViewProps) {
@@ -48,13 +48,13 @@ export function RegisterView({ language, routeTo, onRegistered }: RegisterViewPr
           project_name: projectName.trim(),
         }),
       });
-      const result = (await response.json().catch(() => ({}))) as { tenant_id?: string; error?: string };
+      const result = (await response.json().catch(() => ({}))) as { tenant_id?: string; email_verification_required?: boolean; error?: string };
       if (!response.ok || !result.tenant_id) {
         if (response.status === 409 && result.error === "EMAIL_ALREADY_REGISTERED") throw new Error(t("registerEmailExists"));
         if (response.status === 409 && result.error === "TENANT_SLUG_ALREADY_REGISTERED") throw new Error(t("registerSlugExists"));
         throw new Error(t("registerUnavailable"));
       }
-      onRegistered(email.trim(), result.tenant_id);
+      onRegistered(email.trim(), result.tenant_id, Boolean(result.email_verification_required));
     } catch (error) {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : t("registerUnavailable") });
     } finally {
