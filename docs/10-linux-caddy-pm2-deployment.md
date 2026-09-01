@@ -15,7 +15,7 @@
 > | `sql` | PostgreSQL 的 `postgres=#` 提示符内的 SQL | 否，先执行进入 psql 的命令 |
 > | `conf` | PostgreSQL 配置文件内容 | 否，写入指定配置文件 |
 > | `dotenv` | AI Token 环境文件内容 | 否，写入 `/etc/ai-token/ai-token.env` |
-> | `caddyfile` | AI Token 的 Caddy 站点片段 | 否，写入 `/etc/caddy/conf.d/ai-token.caddy` |
+> | `caddyfile` | Caddy 站点配置内容 | 否，追加到 `/etc/caddy/Caddyfile` 文件末尾 |
 >
 > 看到 `REPLACE_...`、`gateway.example.com` 或 `YOUR_...` 时，必须替换成自己的值。
 > 文档中的 `$RELEASE` 是当前发布版本变量，不是要原样输入的文字。
@@ -37,7 +37,6 @@
 
 | 文件 | 部署位置 |
 | --- | --- |
-| deploy/caddy/ai-token.caddy | /etc/caddy/conf.d/ai-token.caddy |
 | deploy/pm2/start.sh | /opt/ai-token/current/deploy/pm2/start.sh |
 | deploy/pm2/ecosystem.config.cjs | /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs |
 | deploy/pm2/ai-token-pm2.service | /etc/systemd/system/ai-token-pm2.service |
@@ -108,10 +107,9 @@ install -d -m 0700 /etc/ai-token
 
 ### 清理旧的非 root 部署（仅已按旧文档部署过时执行）
 
-以下命令会停止旧应用、删除旧的 Linux `ai-token` 用户、项目文件、旧 PM2 配置和
-AI Token 的 Caddy 片段；**不会删除 PostgreSQL 数据库**。先从
-`/etc/caddy/Caddyfile` 手动删除仅属于 AI Token 的
-`import /etc/caddy/conf.d/ai-token.caddy` 一行，再执行：
+以下命令会停止旧应用、删除旧的 Linux `ai-token` 用户、项目文件和旧 PM2 配置；
+**不会删除 PostgreSQL 数据库**。若旧 Caddyfile 中已有 AI Token 站点块，先手动
+删除该站点块，再执行：
 
 ~~~bash
 systemctl disable --now ai-token-pm2 ai-token 2>/dev/null || true
@@ -120,7 +118,7 @@ systemctl daemon-reload
 pkill -u ai-token 2>/dev/null || true
 userdel -r ai-token 2>/dev/null || true
 rm -rf /opt/ai-token /etc/ai-token
-rm -f /etc/caddy/conf.d/ai-token.caddy /var/log/caddy/ai-token.access.log
+rm -f /var/log/caddy/ai-token.access.log
 ~~~
 
 如果这个服务器从未部署过 AI Token，跳过本小节。若确实要清空所有平台用户、
@@ -476,51 +474,58 @@ chmod 0600 /etc/ai-token/ai-token.env
 
 ## 7. Caddy 配置
 
-**不会覆盖客户已有的 `/etc/caddy/Caddyfile`。** 本节仅适用于使用标准
-Caddyfile 的 Caddy 服务；如果客户的 Caddy 由 JSON、Docker、面板或其他配置
-路径管理，先执行 `systemctl cat caddy` 找到真实配置来源，并在该来源中手工加入
-等价反向代理，不要执行本节的主配置修改命令。
-
-AI Token 只安装一个独立站点片段。以下命令必须在 root 终端执行；主配置不存在时
-会停止，存在时才会先备份原配置，再安装片段：
+直接编辑客户已有的 `/etc/caddy/Caddyfile`，在文件**末尾**追加一个独立站点块。
+不会覆盖或替换客户已有站点。若 Caddy 不是用 `/etc/caddy/Caddyfile` 管理，
+先执行 `systemctl cat caddy` 查看实际配置路径。
 
 ~~~bash
-test -f /etc/caddy/Caddyfile || {
-  echo "未找到 /etc/caddy/Caddyfile；请先执行：systemctl cat caddy"
-  exit 1
+nano /etc/caddy/Caddyfile
+~~~
+
+在 nano 中移动到文件最末尾，粘贴下面整个 `caddyfile` 块；将
+`gateway.example.com` 改为真实域名。不要修改 `127.0.0.1:8080`，不要与已有
+站点重复使用同一个域名。
+
+~~~caddyfile
+gateway.example.com {
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/ai-token.access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	request_body {
+		max_size 50MB
+	}
+
+	@relay path /v1/*
+	reverse_proxy @relay 127.0.0.1:8080 {
+		flush_interval -1
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
 }
-install -d -m 0755 /etc/caddy/conf.d
-cp -a /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d-%H%M%S)"
-install -m 0644 /opt/ai-token/current/deploy/caddy/ai-token.caddy \
-  /etc/caddy/conf.d/ai-token.caddy
-nano /etc/caddy/conf.d/ai-token.caddy
 ~~~
 
-进入 nano 后只修改以下内容：
-
-1. 将所有 `gateway.example.com` 改成你的真实域名。
-2. 保留 `127.0.0.1:8080`，不要改成公网地址。
-
-保存：按 `Ctrl+O`，回车确认；退出：按 `Ctrl+X`。
-
-接着检查主配置是否已经加载 `/etc/caddy/conf.d` 下的片段：
+保存：按 `Ctrl+O`，回车确认；退出：按 `Ctrl+X`。然后校验并加载：
 
 ~~~bash
-grep -nE '^[[:space:]]*import[[:space:]].*conf\.d' /etc/caddy/Caddyfile
-~~~
-
-如果上面的命令有输出，说明客户已有配置已经加载了该目录，不要修改主配置。
-如果没有任何输出，执行以下命令只追加一行 `import`；不会替换任何已有站点：
-
-~~~bash
-grep -qxF 'import /etc/caddy/conf.d/ai-token.caddy' /etc/caddy/Caddyfile || \
-  printf '\n# AI Token Gateway\nimport /etc/caddy/conf.d/ai-token.caddy\n' >> /etc/caddy/Caddyfile
-~~~
-
-最后校验并加载。这里不会格式化或覆盖客户的主 Caddyfile：
-
-~~~bash
-caddy fmt --overwrite /etc/caddy/conf.d/ai-token.caddy
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl enable --now caddy
 systemctl reload caddy
