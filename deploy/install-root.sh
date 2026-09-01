@@ -5,14 +5,17 @@ REPO_URL="https://github.com/inspoaibox/ModelBridge.git"
 BRANCH="main"
 DOMAIN=""
 ADMIN_EMAIL=""
+RESUME=false
 
 usage() {
   cat <<'EOF'
 Usage:
   bash deploy/install-root.sh --domain api.example.com [--admin-email admin@example.com]
+  bash deploy/install-root.sh --resume --domain api.example.com [--admin-email admin@example.com]
 
 This installer must run as root on a fresh Ubuntu or Debian server.
 It installs AI Token with root-managed PM2, PostgreSQL, Caddy, and the first platform admin.
+Use --resume only after a previous installation attempt stopped with an error.
 EOF
 }
 
@@ -39,6 +42,10 @@ while [[ $# -gt 0 ]]; do
       BRANCH="${2:-}"
       shift 2
       ;;
+    --resume)
+      RESUME=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -52,6 +59,7 @@ done
 [[ "${EUID}" -eq 0 ]] || fail "Run this installer as root."
 [[ -n "$DOMAIN" ]] || fail "Pass your domain with --domain, for example: --domain api.example.com"
 [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || fail "The domain contains unsupported characters."
+[[ "$DOMAIN" == *.* ]] || fail "Pass a complete domain name, for example: api.example.com"
 
 if [[ -z "$ADMIN_EMAIL" ]]; then
   read -rp "Administrator email: " ADMIN_EMAIL
@@ -71,7 +79,61 @@ RELEASE_DIR="/opt/ai-token/releases/$RELEASE"
 PM2_HOME="/opt/ai-token/.pm2"
 CADDYFILE="/etc/caddy/Caddyfile"
 
-[[ ! -e "$ENV_FILE" ]] || fail "$ENV_FILE already exists. Do not overwrite an existing deployment."
+finish_install() {
+  cd /opt/ai-token/current
+  install -d -m 0700 "$PM2_HOME"
+  install -m 0644 deploy/pm2/ai-token-pm2.service /etc/systemd/system/ai-token-pm2.service
+  systemctl daemon-reload
+  PM2_HOME="$PM2_HOME" pm2 startOrReload deploy/pm2/ecosystem.config.cjs --update-env
+  PM2_HOME="$PM2_HOME" pm2 save
+  PM2_HOME="$PM2_HOME" pm2 kill
+  systemctl enable --now ai-token-pm2
+
+  set -a
+  source "$ENV_FILE"
+  set +a
+
+  local existing_admins
+  existing_admins="$(runuser -u postgres -- psql -d ai_token -tAc "
+    SELECT count(*)
+    FROM users u
+    JOIN platform_user_roles ur ON ur.user_id = u.id
+    JOIN platform_roles pr ON pr.id = ur.role_id
+    WHERE pr.code = 'platform_owner' AND pr.status = 'active'
+  " 2>/dev/null || true)"
+
+  if [[ "$existing_admins" =~ ^[1-9][0-9]*$ ]]; then
+    echo "A platform administrator already exists; skipping bootstrap."
+  else
+    export ADMIN_EMAIL ADMIN_PASSWORD
+    go run ./cmd/bootstrap-admin
+    unset ADMIN_PASSWORD
+  fi
+
+  for _ in {1..30}; do
+    if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+      echo "Installation complete: https://$DOMAIN"
+      return 0
+    fi
+    sleep 1
+  done
+
+  systemctl status ai-token-pm2 --no-pager || true
+  journalctl -u ai-token-pm2 -n 100 --no-pager || true
+  fail "The service did not become healthy. Review the logs above."
+}
+
+if [[ "$RESUME" == "true" ]]; then
+  [[ -f "$ENV_FILE" ]] || fail "Cannot resume: $ENV_FILE does not exist."
+  [[ -d /opt/ai-token/current ]] || fail "Cannot resume: /opt/ai-token/current does not exist."
+  [[ -f /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs ]] || fail "Cannot resume: the current release is incomplete."
+  [[ -f "$CADDYFILE" ]] || fail "Cannot resume: Caddy configuration not found at $CADDYFILE."
+  echo "Resuming the existing installation without changing its environment file or Caddy configuration."
+  finish_install
+  exit 0
+fi
+
+[[ ! -e "$ENV_FILE" ]] || fail "$ENV_FILE already exists. To continue a failed installation, rerun with --resume."
 [[ ! -e "$RELEASE_DIR" ]] || fail "Release directory already exists: $RELEASE_DIR"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -179,9 +241,9 @@ chmod 0600 "$ENV_FILE"
 
 [[ -f "$CADDYFILE" ]] || fail "Caddy configuration not found at $CADDYFILE"
 if grep -qE "^[[:space:]]*${DOMAIN//./\\.}[[:space:]]*\\{" "$CADDYFILE"; then
-  fail "A Caddy site for $DOMAIN already exists. Add the reverse proxy manually instead."
-fi
-cat >> "$CADDYFILE" <<EOF
+  echo "A Caddy site for $DOMAIN already exists; leaving the existing Caddy configuration unchanged."
+else
+  cat >> "$CADDYFILE" <<EOF
 
 $DOMAIN {
 	encode zstd gzip
@@ -218,33 +280,11 @@ $DOMAIN {
 	}
 }
 EOF
+fi
 
 caddy validate --config "$CADDYFILE" --adapter caddyfile
 systemctl enable --now caddy
 systemctl reload caddy
 
-install -m 0644 deploy/pm2/ai-token-pm2.service /etc/systemd/system/ai-token-pm2.service
-systemctl daemon-reload
-PM2_HOME="$PM2_HOME" pm2 startOrReload deploy/pm2/ecosystem.config.cjs --update-env
-PM2_HOME="$PM2_HOME" pm2 save
-PM2_HOME="$PM2_HOME" pm2 kill
-systemctl enable --now ai-token-pm2
-
-set -a
-source "$ENV_FILE"
-set +a
-export ADMIN_EMAIL ADMIN_PASSWORD
-go run ./cmd/bootstrap-admin
-unset ADMIN_PASSWORD DB_PASSWORD TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY
-
-for _ in {1..30}; do
-  if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
-    echo "Installation complete: https://$DOMAIN"
-    exit 0
-  fi
-  sleep 1
-done
-
-systemctl status ai-token-pm2 --no-pager || true
-journalctl -u ai-token-pm2 -n 100 --no-pager || true
-fail "The service did not become healthy. Review the logs above."
+finish_install
+unset DB_PASSWORD TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY

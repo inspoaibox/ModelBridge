@@ -37,6 +37,14 @@ bash /root/ai-token-install.sh --domain gateway.example.com
 脚本安装成功后访问 `https://你的域名`，使用刚创建的管理员账号登录。SMTP 不在脚本
 或环境文件中填写；登录后从“系统设置 → 邮件设置”配置。
 
+若脚本中途报错，不要再手工执行后面的 `cd`、构建或 PM2 命令。修正报错原因后，使用
+同一个域名执行下面命令继续；`--resume` 不会覆盖已有环境文件，也不会改动已有 Caddy
+站点：
+
+~~~bash
+bash /root/ai-token-install.sh --resume --domain gateway.example.com
+~~~
+
 ### 终端身份和编辑器
 
 本文的项目部署命令统一在 root 终端执行。若当前不是 root，先执行 `sudo -i`，
