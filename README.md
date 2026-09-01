@@ -221,4 +221,4 @@ migrations/
 - 套餐、退款、对账、自动充值和财务/使用记录导出
 - Redis 或其他共享存储的分布式限流，以及多实例并发协调
 
-接口接入示例见 `docs/08-api-integration.md`；数据表、权限和安全基线的详细说明见 `docs/01-role-permission-matrix.md` 至 `docs/08-api-integration.md`。标准 Caddy + PM2 Linux 部署、生产配置、TLS、SMTP、备份、更新和回滚流程见 `docs/10-linux-caddy-pm2-deployment.md`；Nginx + systemd 备选方案见 `docs/09-linux-deployment.md`。
+接口接入示例见 `docs/08-api-integration.md`；数据表、权限和安全基线的详细说明见 `docs/01-role-permission-matrix.md` 至 `docs/08-api-integration.md`。Linux 标准部署、生产配置、TLS、SMTP、备份、更新和回滚流程见 `docs/10-linux-caddy-pm2-deployment.md`。旧版 Nginx + systemd 文档已停用，不应与当前流程混用。
