@@ -261,7 +261,9 @@ function defaultSMTPSettings(): SMTPSettingsForm {
 function defaultFeatureSettings(): FeatureSettings {
 	return {
 		email_enabled: false,
+		registration_enabled: true,
 		model_status_enabled: true,
+		totp_enabled: false,
 		email_verification_enabled: true,
 		email_password_reset_enabled: true,
 		email_subscription_enabled: true,
@@ -682,7 +684,11 @@ export default function App() {
         const response = await fetch("/public/v1/features", { headers: { Accept: "application/json" } });
         const result = (await response.json().catch(() => ({}))) as Partial<PublicFeatureSettings>;
         if (!cancelled && response.ok) {
-          setPublicFeatures({ model_status_enabled: result.model_status_enabled !== false });
+          setPublicFeatures({
+            registration_enabled: result.registration_enabled !== false,
+            model_status_enabled: result.model_status_enabled !== false,
+            totp_enabled: result.totp_enabled === true,
+          });
         }
       } catch {
         // Keep optional customer features visible when the public settings endpoint is unavailable.
@@ -798,6 +804,10 @@ export default function App() {
     }
     if (route.view === "login") {
       setAudience("console");
+    }
+    if (route.view === "register" && publicFeatures?.registration_enabled === false) {
+      window.location.hash = "#login";
+      return;
     }
     if (route.view === "admin" && (!signedIn || audience !== "admin")) {
       window.location.hash = signedIn && audience === "console" ? "#console/dashboard" : "#login";
@@ -980,6 +990,10 @@ export default function App() {
 	}, [signedIn, audience, route.view, adminSection, language]);
 
   const routeTo = (target: string) => {
+    if (target === "#register" && publicFeatures?.registration_enabled === false) {
+      window.location.hash = "#login";
+      return;
+    }
     if (
       isAdminEntryLocation() &&
       (target === "#home" || target === "#login" || target === "#register" || target === "#models")
@@ -1695,7 +1709,14 @@ export default function App() {
 			const result = (await response.json().catch(() => ({}))) as FeatureSettings & { error?: string };
 			if (!response.ok) throw new Error(response.status === 400 ? t("featureSettingsValidation") : t("featureSettingsSaveFailed"));
 			setFeatureSettings(result);
-			setPublicFeatures({ model_status_enabled: result.model_status_enabled !== false });
+			setPublicFeatures({
+				registration_enabled: result.registration_enabled !== false,
+				model_status_enabled: result.model_status_enabled !== false,
+				totp_enabled: result.totp_enabled === true,
+			});
+			if (result.totp_enabled !== true) {
+				setSecuritySettings((current) => ({ ...current, admin_mfa_enabled: false }));
+			}
 			setEmailSettings((current) => current ? { ...current, email_enabled: result.email_enabled, balance_threshold: result.balance_threshold, recharge_url: result.recharge_url } : current);
 			setFeatureMessage({ kind: "success", text: t("featureSettingsSaved") });
 		} catch (error) {
@@ -3229,7 +3250,7 @@ export default function App() {
   const currentView = route.view;
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-indigo-500/30 selection:text-indigo-200 transition-colors duration-200">
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Universal Top Navigation */}
       <Navbar
         theme={theme}
@@ -3244,6 +3265,7 @@ export default function App() {
         principalAudience={principal?.audience || audience}
         siteName={siteSettings.site_name}
         siteLogoURL={siteSettings.site_logo_url}
+        registrationEnabled={publicFeatures?.registration_enabled !== false}
       />
 
       {/* Main View Router */}
@@ -3261,6 +3283,7 @@ export default function App() {
             routeTo={routeTo}
             handleSignOut={handleSignOut}
             models={modelCatalog}
+            registrationEnabled={publicFeatures?.registration_enabled !== false}
           />
         ) : currentView === "models" ? (
           <ModelPlazaView
@@ -3274,6 +3297,8 @@ export default function App() {
           <LoginView
             language={language}
             loginAudience={currentView === "admin-login" ? "admin" : "console"}
+            totpEnabled={publicFeatures?.totp_enabled === true}
+            registrationEnabled={publicFeatures?.registration_enabled !== false}
             email={email}
             setEmail={setEmail}
             password={password}
@@ -3291,7 +3316,7 @@ export default function App() {
             routeTo={routeTo}
           />
         ) : currentView === "register" ? (
-          <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} />
+          <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} registrationEnabled={publicFeatures?.registration_enabled !== false} />
         ) : currentView === "reset" ? (
           <ResetPasswordView language={language} token={route.reset_token} routeTo={routeTo} />
         ) : currentView === "verify-email" ? (
@@ -3367,6 +3392,7 @@ export default function App() {
             saveEmail={handleEmailSubmit}
             savePassword={handlePasswordSubmit}
             mfaStatus={mfaStatus}
+            totpEnabled={publicFeatures?.totp_enabled === true}
             mfaEnrollment={mfaEnrollment}
             profileMfaCode={profileMfaCode}
             setProfileMfaCode={setProfileMfaCode}

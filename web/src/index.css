@@ -147,6 +147,16 @@ samp {
   flex-direction: column;
 }
 
+::selection {
+  background: rgba(165, 180, 252, 0.8);
+  color: #0f172a;
+}
+
+.dark ::selection {
+  background: rgba(79, 70, 229, 0.85);
+  color: #ffffff;
+}
+
 /* Background Grid Pattern */
 html:not(.dark) .bg-tech-grid {
   background-size: 32px 32px;

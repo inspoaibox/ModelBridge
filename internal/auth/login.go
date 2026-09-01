@@ -186,22 +186,26 @@ func (s *SQLLoginService) Login(ctx context.Context, request LoginRequest, audie
 	}
 
 	authStrength := "password"
-	if audience == AudienceAdmin {
+	totpEnabled, err := s.totpEnabled(ctx)
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	if audience == AudienceAdmin && totpEnabled {
 		adminMFAEnabled, err := s.adminMFAEnabled(ctx)
 		if err != nil {
 			return IssuedSession{}, err
 		}
-		if adminMFAEnabled {
-			hasMFA, err := s.verifyConfiguredMFA(ctx, userID, request.MFACode)
-			if err != nil {
+		hasMFA, err := s.hasConfiguredMFA(ctx, userID)
+		if err != nil {
+			return IssuedSession{}, err
+		}
+		if adminMFAEnabled || hasMFA {
+			if _, err := s.verifyConfiguredMFA(ctx, userID, request.MFACode); err != nil {
 				return recordMFAFailure(err)
-			}
-			if !hasMFA {
-				return IssuedSession{}, ErrMFARequired
 			}
 			authStrength = "password_mfa"
 		}
-	} else {
+	} else if audience == AudienceConsole && totpEnabled {
 		configured, err := s.hasConfiguredMFA(ctx, userID)
 		if err != nil {
 			return IssuedSession{}, err
@@ -228,6 +232,17 @@ func (s *SQLLoginService) Login(ctx context.Context, request LoginRequest, audie
 		return IssuedSession{}, err
 	}
 	return session, nil
+}
+
+func (s *SQLLoginService) totpEnabled(ctx context.Context) (bool, error) {
+	if s == nil || s.security == nil {
+		return true, nil
+	}
+	reader, ok := s.security.(TOTPFeatureReader)
+	if !ok || reader == nil {
+		return true, nil
+	}
+	return reader.TOTPEnabled(ctx)
 }
 
 func (s *SQLLoginService) recordLoginFailure(ctx context.Context, subjectHash, ipHash string) error {

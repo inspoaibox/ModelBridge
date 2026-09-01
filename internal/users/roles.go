@@ -574,15 +574,13 @@ func uniqueRoleIDs(values []string) []string {
 func platformMFAEnforced(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }) (bool, error) {
-	var value string
-	err := queryer.QueryRowContext(ctx, `SELECT value FROM platform_settings WHERE key = 'admin_mfa_enabled'`).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return strings.EqualFold(strings.TrimSpace(value), "true"), nil
+	var enabled bool
+	err := queryer.QueryRowContext(ctx, `
+		SELECT
+			COALESCE((SELECT value = 'true' FROM platform_settings WHERE key = 'admin_mfa_enabled'), false)
+			AND COALESCE((SELECT value = 'true' FROM platform_settings WHERE key = 'totp_enabled'), false)
+	`).Scan(&enabled)
+	return enabled, err
 }
 
 func userHasActiveTOTP(ctx context.Context, queryer interface {

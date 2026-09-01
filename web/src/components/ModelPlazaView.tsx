@@ -61,7 +61,7 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
   const [category, setCategory] = useState<ModelCategory>("all");
-  const [groupID, setGroupID] = useState("default");
+  const [groupID, setGroupID] = useState("");
 
   const providers = useMemo(() => Array.from(new Set(models.map((model) => model.provider))).sort(), [models]);
   const platformGroups = useMemo(() => {
@@ -75,8 +75,11 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
   }, [models]);
 
   useEffect(() => {
-    if (platformGroups.length === 0) return;
-    if (!platformGroups.some((group) => group.group_id === groupID)) {
+    if (platformGroups.length === 0) {
+      if (groupID) setGroupID("");
+      return;
+    }
+    if (!groupID || !platformGroups.some((group) => group.group_id === groupID)) {
       setGroupID(platformGroups.find((group) => group.group_code === "default")?.group_id || platformGroups[0].group_id);
     }
   }, [groupID, platformGroups]);
@@ -96,9 +99,10 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
       const matchesProvider = provider === "all" || model.provider === provider;
       const matchesCategory = category === "all" || model.category === category;
       const matchesSearch = !query || `${model.name} ${model.display_name} ${model.provider} ${model.protocol_family}`.toLowerCase().includes(query);
-      return matchesProvider && matchesCategory && matchesSearch;
+      const matchesGroup = !groupID || (model.pricing?.platform_prices || []).some((price) => price.group_id === groupID);
+      return matchesProvider && matchesCategory && matchesSearch && matchesGroup;
     });
-  }, [category, models, provider, search]);
+  }, [category, groupID, models, provider, search]);
 
   const categories: Array<{ id: ModelCategory; label: string; icon: typeof Code2 }> = [
     { id: "all", label: t("modelsCategoryAll"), icon: Layers3 },
@@ -178,55 +182,80 @@ function capabilityItems(model: PublicModelSummary, t: (key: TranslationKey) => 
 function findPlatformPrice(model: PublicModelSummary, groupID: string) {
   const prices = model.pricing?.platform_prices || [];
   if (prices.length === 0) return undefined;
-  return prices.find((price) => price.group_id === groupID) || prices.find((price) => price.group_code === "default") || prices[0];
+  if (!groupID) return prices.find((price) => price.group_code === "default") || prices[0];
+  return prices.find((price) => price.group_id === groupID);
 }
 
-function componentLabel(code: string) {
-  return code.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+type PriceComponents = NonNullable<PublicModelSummary["pricing"]>["components"];
+
+interface PriceSummary {
+  input: string;
+  cachedInput: string;
+  cacheWrites: string;
+  output: string;
 }
 
-function componentPrice(value: string, unit: string) {
-  const parsed = Number(value);
+function componentPrice(components: PriceComponents, codes: string[]) {
+  const component = (components || []).find((item) => codes.includes(item.component_code));
+  if (!component) return "-";
+  const parsed = Number(component.price_per_unit);
   if (!Number.isFinite(parsed)) return "-";
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(parsed * componentUnitScale(unit));
+  const unit = component.unit.toLowerCase();
+  const scale = unit === "token" || unit.endsWith("_token") ? 1_000_000 : 1;
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 }).format(parsed * scale);
 }
 
-function componentUnit(unit: string) {
-  const normalizedUnit = unit.toLowerCase();
-  if (normalizedUnit.includes("1k") && normalizedUnit.includes("call")) return "USD / 1K calls";
-  if (normalizedUnit.includes("1k") && normalizedUnit.includes("token")) return "USD / 1K Token";
-  if (normalizedUnit.includes("token")) {
-    const kind = normalizedUnit.includes("audio") ? "Audio" : normalizedUnit.includes("image") ? "Image" : normalizedUnit.includes("video") ? "Video" : normalizedUnit.includes("dbu") ? "DBU" : "";
-    return kind ? "USD / 1M " + kind + " Token" : "USD / 1M Token";
-  }
-  if (normalizedUnit === "second") return "USD / second";
-  if (normalizedUnit === "image") return "USD / image";
-  if (normalizedUnit === "pixel") return "USD / pixel";
-  if (normalizedUnit === "request") return "USD / request";
-  if (normalizedUnit === "query") return "USD / query";
-  if (normalizedUnit === "session") return "USD / session";
-  if (normalizedUnit === "page") return "USD / page";
-  if (normalizedUnit === "gb_day") return "USD / GB-day";
-  return "USD / " + (unit || "unit");
+function primaryOrComponent(primary: string | undefined, fallback: string | undefined, components: PriceComponents, codes: string[]) {
+  if (primary) return formatPrice(primary);
+  if (fallback) return formatPrice(fallback, true);
+  return componentPrice(components, codes);
 }
 
-function componentUnitScale(unit: string) {
-  const normalizedUnit = unit.toLowerCase();
-  if (normalizedUnit.includes("1k") || normalizedUnit.includes("gb_day")) return 1;
-  if (normalizedUnit === "token" || normalizedUnit.endsWith("_token")) return 1_000_000;
-  return 1;
+function officialPriceSummary(official: NonNullable<PublicModelSummary["pricing"]>): PriceSummary {
+  return {
+    input: primaryOrComponent(official.input_price_per_million_tokens, official.input_price_per_unit, official.components, ["input_tokens"]),
+    cachedInput: primaryOrComponent(official.cached_input_price_per_million_tokens, official.cached_input_price_per_unit, official.components, ["cached_input_tokens"]),
+    cacheWrites: componentPrice(official.components, ["cache_creation_tokens", "cache_creation_1h_tokens"]),
+    output: primaryOrComponent(official.output_price_per_million_tokens, official.output_price_per_unit, official.components, ["output_tokens"]),
+  };
 }
 
-function ComponentPriceList({ components, tone = "official" }: { components?: NonNullable<PublicModelSummary["pricing"]>["components"]; tone?: "official" | "platform" }) {
-  const visible = (components || []).filter((component) => !["input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens"].includes(component.component_code));
-  if (visible.length === 0) return null;
-  return <div className="mt-2 space-y-1.5 border-t border-slate-200 pt-2 dark:border-slate-800">{visible.map((component) => <div key={component.component_code} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[11px]"><span className="text-slate-500 dark:text-slate-400">{componentLabel(component.component_code)}</span><span className={cn("font-mono", tone === "platform" ? "text-indigo-700 dark:text-indigo-300" : "text-slate-800 dark:text-slate-200")}>{componentPrice(component.price_per_unit, component.unit)} <span className="font-sans text-[10px] text-slate-400">{componentUnit(component.unit)}</span></span></div>)}</div>;
+function platformPriceSummary(platform: PublicPlatformModelPrice): PriceSummary {
+  return {
+    input: primaryOrComponent(platform.input_price_per_million_tokens, undefined, platform.components, ["input_tokens"]),
+    cachedInput: primaryOrComponent(platform.cached_input_price_per_million_tokens, undefined, platform.components, ["cached_input_tokens"]),
+    cacheWrites: componentPrice(platform.components, ["cache_creation_tokens", "cache_creation_1h_tokens"]),
+    output: primaryOrComponent(platform.output_price_per_million_tokens, undefined, platform.components, ["output_tokens"]),
+  };
+}
+
+function CompactPriceRow({ pricing, tone = "official", t }: { pricing: PriceSummary; tone?: "official" | "platform"; t: (key: TranslationKey) => string }) {
+  const valueClass = tone === "platform" ? "text-indigo-700 dark:text-indigo-300" : "text-slate-800 dark:text-slate-200";
+  const items = [
+    { label: t("modelsInputPrice"), value: pricing.input },
+    { label: t("modelsCachedInputPrice"), value: pricing.cachedInput },
+    { label: t("modelsCacheWritesPrice"), value: pricing.cacheWrites },
+    { label: t("modelsOutputPrice"), value: pricing.output },
+  ];
+  return <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-4">{items.map((item) => <div key={item.label} className="min-w-0 text-[11px]"><span className="block truncate text-slate-500 dark:text-slate-400">{item.label}</span><strong className={cn("mt-0.5 block truncate font-mono text-xs", valueClass)}>{item.value}</strong></div>)}</div>;
 }
 
 function PriceComparison({ official, platform, language, t }: { official: NonNullable<PublicModelSummary["pricing"]>; platform?: PublicPlatformModelPrice; language: Language; t: (key: TranslationKey) => string }) {
-  const input = formatPrice(official.input_price_per_million_tokens || official.input_price_per_unit, !official.input_price_per_million_tokens);
-  const output = formatPrice(official.output_price_per_million_tokens || official.output_price_per_unit, !official.output_price_per_million_tokens);
-  const officialReasoning = Number(official.reasoning_price_per_million_tokens || official.reasoning_price_per_unit);
-  const platformReasoning = Number(platform?.reasoning_price_per_million_tokens || "");
-  return <div className="space-y-2 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t("modelsOfficialPrice")} · {official.currency} / 1M</span><span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">{official.source === "litellm" ? t("modelsPricingReference") : t("modelsPricingManual")}</span></div><div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-400"><span>{t("modelsInputPrice")} <strong className="text-slate-800 dark:text-slate-200">{input}</strong></span><span>{t("modelsOutputPrice")} <strong className="text-slate-800 dark:text-slate-200">{output}</strong></span>{Number(official.cached_input_price_per_million_tokens || official.cached_input_price_per_unit) > 0 ? <span>{t("modelsCachedInputPrice")} <strong className="text-slate-800 dark:text-slate-200">{formatPrice(official.cached_input_price_per_million_tokens || official.cached_input_price_per_unit, !official.cached_input_price_per_million_tokens)}</strong></span> : null}{Number.isFinite(officialReasoning) && officialReasoning > 0 ? <span>{t("modelsReasoningPrice")} <strong className="text-slate-800 dark:text-slate-200">{formatPrice(official.reasoning_price_per_million_tokens || official.reasoning_price_per_unit, !official.reasoning_price_per_million_tokens)}</strong></span> : null}</div><ComponentPriceList components={official.components} />{platform ? <div className="border-t border-slate-200 pt-2 dark:border-slate-800"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t("modelsPlatformPricing")}</span><span className="font-mono text-[10px] text-indigo-600 dark:text-indigo-300">{platform.group_name} · x{formatMultiplier(platform.multiplier)}</span></div>{platform.billing_type === "free" ? <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">{t("modelsPlatformFree")}</div> : <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-400"><span>{t("modelsInputPrice")} <strong className="text-indigo-700 dark:text-indigo-300">{platform.input_price_per_million_tokens}</strong></span><span>{t("modelsOutputPrice")} <strong className="text-indigo-700 dark:text-indigo-300">{platform.output_price_per_million_tokens}</strong></span>{Number(platform.cached_input_price_per_million_tokens) > 0 ? <span>{t("modelsCachedInputPrice")} <strong className="text-indigo-700 dark:text-indigo-300">{platform.cached_input_price_per_million_tokens}</strong></span> : null}{Number.isFinite(platformReasoning) && platformReasoning > 0 ? <span>{t("modelsReasoningPrice")} <strong className="text-indigo-700 dark:text-indigo-300">{platform.reasoning_price_per_million_tokens}</strong></span> : null}<ComponentPriceList components={platform.components} tone="platform" /></div>}</div> : null}{official.updated_at ? <div className="text-[10px] text-slate-400">{t("modelsPricingUpdated")} {new Date(official.updated_at).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US")}</div> : null}</div>;
+  const officialPricing = officialPriceSummary(official);
+  const platformPricing = platform ? platformPriceSummary(platform) : undefined;
+  return <div className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t("modelsOfficialPrice")} · {official.currency} / 1M</span>
+      <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">{official.source === "litellm" ? t("modelsPricingReference") : t("modelsPricingManual")}</span>
+    </div>
+    <CompactPriceRow pricing={officialPricing} t={t} />
+    {platform ? <div className="border-t border-slate-200 pt-2.5 dark:border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t("modelsPlatformPricing")}</span>
+        <span className="font-mono text-[10px] text-indigo-600 dark:text-indigo-300">{platform.group_name} · x{formatMultiplier(platform.multiplier)}</span>
+      </div>
+      {platform.billing_type === "free" ? <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">{t("modelsPlatformFree")}</div> : <div className="mt-2"><CompactPriceRow pricing={platformPricing!} tone="platform" t={t} /></div>}
+    </div> : null}
+    {official.updated_at ? <div className="text-[10px] text-slate-400">{t("modelsPricingUpdated")} {new Date(official.updated_at).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US")}</div> : null}
+  </div>;
 }

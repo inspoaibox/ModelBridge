@@ -68,7 +68,7 @@ Token 价格按 USD / 1M Token 展示；非 Token 组件按自身单位展示，
 - 管理端 mutation、认证 mutation 和 Relay 请求写入追加式审计日志；请求体、Authorization、API Key、上游密钥不会写入审计。
 - `POST /admin/v1/usage/{requestID}/settle` 允许具备 `billing:update` 的管理员为 `settlement_pending` 请求补录真实 Usage；空计量会被拒绝，补结算操作会进入审计日志。
 - Token 网络白名单支持 IP/CIDR 或浏览器域名来源策略；IP/CIDR 匹配真实对端地址，域名匹配 Origin/Referer。服务端调用应使用 IP/CIDR，域名请求缺少浏览器来源头时会被拒绝；非浏览器客户端可以伪造来源头，因此域名不应作为强 bearer-token 边界。
-- 管理员角色/权限写入和管理员绑定也必须携带实时 `X-MFA-Code`；连续错误会返回 `MFA_STEP_UP_THROTTLED`。`platform_owner` 角色定义不可编辑或停用，最后一个有效平台管理员不能被移除；角色权限/状态改变会立即撤销受影响管理员的后台 Session。普通 `user:update` 管理员不能修改平台所有者账号。
+- 管理员全局 MFA 策略开启时，角色/权限写入和管理员绑定必须携带实时 `X-MFA-Code`；连续错误会返回 `MFA_STEP_UP_THROTTLED`。`platform_owner` 角色定义不可编辑或停用，最后一个有效平台管理员不能被移除；角色权限/状态改变会立即撤销受影响管理员的后台 Session。普通 `user:update` 管理员不能修改平台所有者账号。
 
 ## 发布前检查
 

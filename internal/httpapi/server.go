@@ -215,10 +215,9 @@ func newHandler(
 		billingService = billers[0]
 	}
 	protectStepUp := func(handler http.Handler, permissions ...string) http.Handler {
-		// Sensitive routes fail closed when the application forgot to wire a
-		// verifier. Tests and alternate embeddings must opt into the same
-		// contract by supplying a verifier explicitly.
-		return authMiddleware.Protect(auth.AudienceAdmin, permissions...)(auth.RequireStepUp(services.StepUpMFA)(handler))
+		return authMiddleware.Protect(auth.AudienceAdmin, permissions...)(
+			requireAdminStepUpWhenEnforced(services.SecuritySettings, services.StepUpMFA)(handler),
+		)
 	}
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -231,7 +230,7 @@ func newHandler(
 
 	mux.HandleFunc("POST /admin/v1/auth/login", adminLoginHandler(services.Login, secureCookies, adminEntryPath))
 	mux.HandleFunc("POST /console/v1/auth/login", loginHandler(services.Login, auth.AudienceConsole, secureCookies))
-	mux.HandleFunc("POST /console/v1/auth/register", registrationHandler(services.Registration))
+	mux.HandleFunc("POST /console/v1/auth/register", registrationHandler(services.Registration, services.SecuritySettings))
 	mux.HandleFunc("POST /console/v1/auth/email/verify", emailVerificationHandler(services.Registration))
 	mux.HandleFunc("POST /console/v1/auth/email/resend", emailVerificationResendHandler(services.Registration))
 	mux.HandleFunc("POST /admin/v1/auth/password-reset/request", passwordResetRequestHandler(
@@ -255,11 +254,11 @@ func newHandler(
 
 	mux.Handle("POST /admin/v1/auth/mfa/enroll", authMiddleware.Protect(
 		auth.AudienceAdmin,
-	)(mfaEnrollmentBeginHandler(services.MFA)))
+	)(requireTOTPFeature(services.SecuritySettings, mfaEnrollmentBeginHandler(services.MFA))))
 
 	mux.Handle("POST /admin/v1/auth/mfa/enroll/{enrollmentID}/confirm", authMiddleware.Protect(
 		auth.AudienceAdmin,
-	)(mfaEnrollmentConfirmHandler(services.MFA)))
+	)(requireTOTPFeature(services.SecuritySettings, mfaEnrollmentConfirmHandler(services.MFA))))
 
 	mux.Handle("GET /admin/v1/me", authMiddleware.Protect(
 		auth.AudienceAdmin,
@@ -297,11 +296,11 @@ func newHandler(
 
 	mux.Handle("GET /admin/v1/auth/mfa/status", authMiddleware.Protect(
 		auth.AudienceAdmin,
-	)(mfaStatusHandler(services.MFA)))
+	)(mfaStatusForFeatureHandler(services.SecuritySettings, services.MFA)))
 
 	mux.Handle("POST /admin/v1/auth/mfa/disable", authMiddleware.Protect(
 		auth.AudienceAdmin,
-	)(adminMFADisableHandler(services.MFA, services.SecuritySettings)))
+	)(requireTOTPFeature(services.SecuritySettings, adminMFADisableHandler(services.MFA, services.SecuritySettings))))
 
 	mux.Handle("GET /console/v1/me", authMiddleware.Protect(
 		auth.AudienceConsole,
@@ -325,19 +324,19 @@ func newHandler(
 
 	mux.Handle("GET /console/v1/profile/mfa", authMiddleware.Protect(
 		auth.AudienceConsole,
-	)(mfaStatusHandler(services.MFA)))
+	)(mfaStatusForFeatureHandler(services.SecuritySettings, services.MFA)))
 
 	mux.Handle("POST /console/v1/profile/mfa/enroll", authMiddleware.Protect(
 		auth.AudienceConsole,
-	)(mfaEnrollmentBeginHandler(services.MFA)))
+	)(requireTOTPFeature(services.SecuritySettings, mfaEnrollmentBeginHandler(services.MFA))))
 
 	mux.Handle("POST /console/v1/profile/mfa/enroll/{enrollmentID}/confirm", authMiddleware.Protect(
 		auth.AudienceConsole,
-	)(mfaEnrollmentConfirmHandler(services.MFA)))
+	)(requireTOTPFeature(services.SecuritySettings, mfaEnrollmentConfirmHandler(services.MFA))))
 
 	mux.Handle("POST /console/v1/profile/mfa/disable", authMiddleware.Protect(
 		auth.AudienceConsole,
-	)(mfaDisableHandler(services.MFA)))
+	)(requireTOTPFeature(services.SecuritySettings, mfaDisableHandler(services.MFA))))
 
 	mux.Handle("GET /admin/v1/security/settings", authMiddleware.Protect(
 		auth.AudienceAdmin,
@@ -912,10 +911,19 @@ type emailVerificationPayload struct {
 	Email string `json:"email"`
 }
 
-func registrationHandler(service auth.RegistrationProvider) http.HandlerFunc {
+func registrationHandler(service auth.RegistrationProvider, featureService auth.SecuritySettingsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "REGISTRATION_UNAVAILABLE"})
+			return
+		}
+		enabled, err := registrationFeatureEnabled(r.Context(), featureService)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "REGISTRATION_UNAVAILABLE"})
+			return
+		}
+		if !enabled {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "REGISTRATION_DISABLED"})
 			return
 		}
 		var payload registrationPayload
@@ -1258,6 +1266,72 @@ func mfaStatusHandler(service auth.MFAEnrollmentProvider) http.Handler {
 	})
 }
 
+func totpFeatureEnabled(ctx context.Context, service auth.SecuritySettingsProvider) (bool, error) {
+	provider, ok := service.(adminsettings.FeatureSettingsProvider)
+	if !ok || provider == nil {
+		// Preserve TOTP for alternate embedders that predate the feature switch.
+		return true, nil
+	}
+	features, err := provider.GetFeatureSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	return features.TOTPEnabled, nil
+}
+
+func requireTOTPFeature(service auth.SecuritySettingsProvider, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enabled, err := totpFeatureEnabled(r.Context(), service)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOTP_UNAVAILABLE"})
+			return
+		}
+		if !enabled {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "TOTP_DISABLED"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func mfaStatusForFeatureHandler(service auth.SecuritySettingsProvider, mfaService auth.MFAEnrollmentProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enabled, err := totpFeatureEnabled(r.Context(), service)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOTP_UNAVAILABLE"})
+			return
+		}
+		if !enabled {
+			writeJSON(w, http.StatusOK, map[string]bool{"enabled": false})
+			return
+		}
+		mfaStatusHandler(mfaService).ServeHTTP(w, r)
+	})
+}
+
+func requireAdminStepUpWhenEnforced(service auth.SecuritySettingsProvider, verifier auth.MFAVerifier) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if service == nil {
+				// A partially wired deployment fails closed for sensitive
+				// administrator operations.
+				auth.RequireStepUp(verifier)(next).ServeHTTP(w, r)
+				return
+			}
+			settings, err := service.GetAdminSecuritySettings(r.Context())
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MFA_UNAVAILABLE"})
+				return
+			}
+			if !settings.AdminMFAEnabled {
+				next.ServeHTTP(w, r)
+				return
+			}
+			auth.RequireStepUp(verifier)(next).ServeHTTP(w, r)
+		})
+	}
+}
+
 func mfaDisableHandler(service auth.MFAEnrollmentProvider) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		settings, ok := service.(auth.MFASettingsProvider)
@@ -1330,7 +1404,7 @@ func publicSystemSettingsHandler(service auth.SecuritySettingsProvider) http.Han
 // feature flags. SMTP settings and internal operations switches stay private.
 func publicFeatureSettingsHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		settings := map[string]bool{"model_status_enabled": true}
+		settings := map[string]bool{"registration_enabled": true, "model_status_enabled": true, "totp_enabled": false}
 		provider, ok := service.(adminsettings.FeatureSettingsProvider)
 		if ok && provider != nil {
 			features, err := provider.GetFeatureSettings(r.Context())
@@ -1338,10 +1412,24 @@ func publicFeatureSettingsHandler(service auth.SecuritySettingsProvider) http.Ha
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PUBLIC_FEATURES_UNAVAILABLE"})
 				return
 			}
+			settings["registration_enabled"] = features.RegistrationEnabled
 			settings["model_status_enabled"] = features.ModelStatusEnabled
+			settings["totp_enabled"] = features.TOTPEnabled
 		}
 		writeJSON(w, http.StatusOK, settings)
 	})
+}
+
+func registrationFeatureEnabled(ctx context.Context, service auth.SecuritySettingsProvider) (bool, error) {
+	provider, ok := service.(adminsettings.FeatureSettingsProvider)
+	if !ok || provider == nil {
+		return true, nil
+	}
+	features, err := provider.GetFeatureSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	return features.RegistrationEnabled, nil
 }
 
 type systemSettingsPayload struct {
@@ -1744,6 +1832,8 @@ func securitySettingsUpdateHandler(service auth.SecuritySettingsProvider) http.H
 			switch {
 			case errors.Is(err, adminsettings.ErrAdminMFAEnrollmentRequired):
 				writeJSON(w, http.StatusConflict, map[string]string{"error": "ADMIN_MFA_ENROLLMENT_REQUIRED"})
+			case errors.Is(err, adminsettings.ErrTOTPFeatureDisabled):
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "TOTP_FEATURE_DISABLED"})
 			default:
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "SECURITY_SETTINGS_UNAVAILABLE"})
 			}

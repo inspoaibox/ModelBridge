@@ -145,7 +145,7 @@ func TestLoadAcceptsCompleteProductionConfig(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsPublicRegistrationWithoutEmailVerification(t *testing.T) {
+func TestLoadAcceptsRegistrationInitialStateWithoutEmailVerificationEnv(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
@@ -155,12 +155,15 @@ func TestLoadRejectsPublicRegistrationWithoutEmailVerification(t *testing.T) {
 	t.Setenv("MFA_ENCRYPTION_KEY", hex.EncodeToString(make([]byte, 32)))
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://gateway.example.com")
 	t.Setenv("REGISTRATION_ENABLED", "true")
-	t.Setenv("REGISTRATION_EMAIL_VERIFICATION_REQUIRED", "false")
 	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
 	t.Setenv("PUBLIC_BASE_URL", "https://gateway.example.com")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
-	if _, err := Load(); err == nil {
-		t.Fatal("public registration must require email verification in production")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RegistrationEnabled {
+		t.Fatal("expected registration initial state to be enabled")
 	}
 }
 
@@ -173,7 +176,6 @@ func clearConfigEnv(t *testing.T) {
 		"LOGIN_LOCK_DURATION", "APP_ENV", "CORS_ALLOWED_ORIGINS",
 		"REGISTRATION_ENABLED", "PUBLIC_BASE_URL", "SMTP_ADDR", "SMTP_FROM",
 		"SMTP_USERNAME", "SMTP_PASSWORD",
-		"REGISTRATION_EMAIL_VERIFICATION_REQUIRED",
 		"TRUSTED_PROXY_CIDRS", "ADMIN_ENTRY_PATH",
 	} {
 		t.Setenv(name, "")

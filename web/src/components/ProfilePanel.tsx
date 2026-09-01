@@ -47,6 +47,7 @@ interface ProfilePanelProps {
   saveProfile: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   saveEmail: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   savePassword: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  totpEnabled: boolean;
   mfaStatus: MFAStatus;
   mfaEnrollment: MFAEnrollment | null;
   profileMfaCode: string;
@@ -73,6 +74,7 @@ export function ProfilePanel({
   saveProfile,
   saveEmail,
   savePassword,
+  totpEnabled,
   mfaStatus,
   mfaEnrollment,
   profileMfaCode,
@@ -171,7 +173,7 @@ export function ProfilePanel({
           </CardContent>
         </Card>
 
-        <Card className="border-emerald-500/20 shadow-sm dark:border-emerald-400/20 dark:bg-slate-900/60 xl:col-span-2">
+        {totpEnabled ? <Card className="border-emerald-500/20 shadow-sm dark:border-emerald-400/20 dark:bg-slate-900/60 xl:col-span-2">
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div><CardTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="h-5 w-5 text-emerald-600" />{t("profileMFASectionTitle")}</CardTitle><CardDescription>{t("profileMFASectionDescription")}</CardDescription></div>
@@ -198,7 +200,7 @@ export function ProfilePanel({
               <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("profileMFADisabled")}</div><div className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400">{t("profileMFADisabledBody")}</div></div><Button type="button" variant="emerald" onClick={() => void beginMFA()} disabled={busy} className="gap-2"><ShieldCheck className="h-4 w-4" />{t("profileMFAEnable")}</Button></div>
             )}
           </CardContent>
-        </Card>
+        </Card> : null}
       </div>
     </div>
   );

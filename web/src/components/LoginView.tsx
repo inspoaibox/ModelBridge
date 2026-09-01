@@ -24,6 +24,8 @@ import { cn } from "@/lib/utils";
 interface LoginViewProps {
   language: Language;
   loginAudience: Audience;
+  totpEnabled: boolean;
+  registrationEnabled: boolean;
   email: string;
   setEmail: (v: string) => void;
   password: string;
@@ -44,6 +46,8 @@ interface LoginViewProps {
 export function LoginView({
   language,
   loginAudience,
+  totpEnabled,
+  registrationEnabled,
   email,
   setEmail,
   password,
@@ -231,30 +235,31 @@ export function LoginView({
                     </div>
                   </div>
 
-                  {/* MFA Code */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="mfaCode" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        {t("fieldMfaCode")}
-                      </Label>
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {loginAudience === "admin" ? t("mfaHintAdmin") : t("mfaHintTenant")}
-                      </span>
+                  {totpEnabled ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="mfaCode" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          {t("fieldMfaCode")}
+                        </Label>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {loginAudience === "admin" ? t("mfaHintAdmin") : t("mfaHintTenant")}
+                        </span>
+                      </div>
+                      <div className="relative">
+                        <KeyRound className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                        <Input
+                          id="mfaCode"
+                          type="text"
+                          placeholder={t("placeholderMfaCode")}
+                          value={mfaCode}
+                          onChange={(e) => setMfaCode(e.target.value)}
+                          className="pl-9 font-mono tracking-widest"
+                          maxLength={6}
+                          disabled={formBusy}
+                        />
+                      </div>
                     </div>
-                    <div className="relative">
-                      <KeyRound className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                      <Input
-                        id="mfaCode"
-                        type="text"
-                        placeholder={t("placeholderMfaCode")}
-                        value={mfaCode}
-                        onChange={(e) => setMfaCode(e.target.value)}
-                        className="pl-9 font-mono tracking-widest"
-                        maxLength={6}
-                        disabled={formBusy}
-                      />
-                    </div>
-                  </div>
+                  ) : null}
 
                   {/* Status Banner */}
                   {loginMessage.text && (
@@ -292,7 +297,7 @@ export function LoginView({
                 </form>
 
                 {/* Footer Switch */}
-                {loginAudience === "console" ? (
+                {loginAudience === "console" && registrationEnabled ? (
                   <div className="text-center pt-2">
                     <span className="text-xs text-slate-500 dark:text-slate-400">
                       {t("noAccountText")}{" "}

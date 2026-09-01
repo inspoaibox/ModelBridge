@@ -15,6 +15,10 @@ type AdminMFAReader interface {
 	AdminMFAEnabled(ctx context.Context) (bool, error)
 }
 
+type TOTPFeatureReader interface {
+	TOTPEnabled(ctx context.Context) (bool, error)
+}
+
 type SecuritySettingsProvider interface {
 	AdminMFAReader
 	GetAdminSecuritySettings(ctx context.Context) (SecuritySettings, error)

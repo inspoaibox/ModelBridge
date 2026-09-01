@@ -277,8 +277,7 @@ LOGIN_LOCK_DURATION=15m
 CORS_ALLOWED_ORIGINS=https://$DOMAIN
 TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 ADMIN_ENTRY_PATH=/admin-$ADMIN_ENTRY_SUFFIX
-REGISTRATION_ENABLED=true
-REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
+REGISTRATION_ENABLED=false
 EOF
 
 chown root:root /etc/ai-token/ai-token.env
@@ -295,8 +294,10 @@ stat -c '环境文件权限：%a %U:%G' /etc/ai-token/ai-token.env
 环境文件权限：600 root:root
 ```
 
-`REGISTRATION_ENABLED=true` 使前端用户可以自助注册。邮件功能总开关默认关闭，因此在
-管理员后台完成 SMTP 配置并打开邮件与邮箱验证功能前，新注册账户会直接为可用状态；
+`REGISTRATION_ENABLED` 仅用于首次写入“开放用户注册”的初始状态。推荐首次部署保持
+`false`，完成管理员登录后，在“系统设置 → 功能开关”中开启注册；之后该后台开关即时生效，
+无需修改环境变量或重启服务。邮件功能总开关默认关闭，因此在管理员后台完成 SMTP 配置并
+打开邮件与邮箱验证功能前，新注册账户会直接为可用状态；
 邮件系统本身不写入环境文件。
 
 验证 PostgreSQL 可通过 TCP 与业务账号连接：
@@ -522,7 +523,7 @@ PM2_HOME=/opt/ai-token/.pm2 pm2 save
 | Caddy 提示同域名站点已存在 | 该域名已有业务配置。不要追加、不要覆盖；读取原站点块后再决定如何把反代加入其中。 |
 | `caddy validate` 失败 | 只修改刚追加的 AI Token 站点块，修复后重新 validate；验证通过前不要 reload。 |
 | 访问返回 502 | 先运行本机 `curl http://127.0.0.1:8080/healthz`，再看 PM2 和 systemd 日志。 |
-| 登录或注册不可用 | 检查 PM2 日志、数据库迁移和 `REGISTRATION_ENABLED`；邮件总开关关闭时不依赖 SMTP。 |
+| 登录或注册不可用 | 检查 PM2 日志、数据库迁移，以及“系统设置 → 功能开关 → 开放用户注册”；邮件总开关关闭时不依赖 SMTP。 |
 | 密码重置邮件未发送 | 在管理员后台配置 SMTP，发送测试邮件，再开启邮件总开关和“密码重置”事件开关。 |
 
 ## 13. 不放在部署服务器执行的工作

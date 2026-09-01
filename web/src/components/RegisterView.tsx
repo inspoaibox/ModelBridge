@@ -12,9 +12,10 @@ interface RegisterViewProps {
   language: Language;
   routeTo: (target: string) => void;
   onRegistered: (email: string, tenantID: string, verificationRequired: boolean) => void;
+  registrationEnabled: boolean;
 }
 
-export function RegisterView({ language, routeTo, onRegistered }: RegisterViewProps) {
+export function RegisterView({ language, routeTo, onRegistered, registrationEnabled }: RegisterViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -28,6 +29,10 @@ export function RegisterView({ language, routeTo, onRegistered }: RegisterViewPr
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!registrationEnabled) {
+      setMessage({ kind: "error", text: t("registerClosed") });
+      return;
+    }
     if (password.length < 12 || password !== confirmPassword || !tenantSlug.trim()) {
       setMessage({ kind: "error", text: t("registerValidation") });
       return;
@@ -52,6 +57,7 @@ export function RegisterView({ language, routeTo, onRegistered }: RegisterViewPr
       if (!response.ok || !result.tenant_id) {
         if (response.status === 409 && result.error === "EMAIL_ALREADY_REGISTERED") throw new Error(t("registerEmailExists"));
         if (response.status === 409 && result.error === "TENANT_SLUG_ALREADY_REGISTERED") throw new Error(t("registerSlugExists"));
+        if (response.status === 403 && result.error === "REGISTRATION_DISABLED") throw new Error(t("registerClosed"));
         throw new Error(t("registerUnavailable"));
       }
       onRegistered(email.trim(), result.tenant_id, Boolean(result.email_verification_required));
@@ -88,7 +94,7 @@ export function RegisterView({ language, routeTo, onRegistered }: RegisterViewPr
               <div className="mt-4 space-y-2"><Label htmlFor="register-project-name">{t("registerProjectName")}</Label><Input id="register-project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder={t("registerProjectPlaceholder")} maxLength={100} /></div>
             </div>
             {message.text ? <div className={cn("flex items-center gap-2 rounded-xl border p-3 text-xs", message.kind === "error" ? "border-rose-500/30 bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300" : "border-indigo-500/30 bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300")}><KeyRound className="h-4 w-4 shrink-0" />{message.text}</div> : null}
-            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={() => routeTo("#home")} disabled={busy}>{t("backHome")}</Button><Button type="submit" disabled={busy} className="gap-2">{busy ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <ArrowRight className="h-4 w-4" />}{busy ? t("registerSubmitting") : t("registerSubmit")}</Button></div>
+            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={() => routeTo("#home")} disabled={busy}>{t("backHome")}</Button><Button type="submit" disabled={busy || !registrationEnabled} className="gap-2">{busy ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <ArrowRight className="h-4 w-4" />}{busy ? t("registerSubmitting") : t("registerSubmit")}</Button></div>
           </form></CardContent>
         </Card>
       </div>

@@ -69,6 +69,7 @@ interface ConsoleViewProps {
   saveProfile: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   saveEmail: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   savePassword: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  totpEnabled: boolean;
   mfaStatus: MFAStatus;
   mfaEnrollment: MFAEnrollment | null;
   profileMfaCode: string;
@@ -158,6 +159,7 @@ export function ConsoleView({
   saveProfile,
   saveEmail,
   savePassword,
+  totpEnabled,
   mfaStatus,
   mfaEnrollment,
   profileMfaCode,
@@ -232,7 +234,7 @@ export function ConsoleView({
           {displayedSection === "projects" ? <TenantWorkspacePanel language={language} canManageTenant={canManageTenant} canManageProjects={canManageProjects} projects={projects} projectsBusy={projectsBusy} projectsMessage={projectsMessage} refreshProjects={refreshProjects} saveProject={saveProject} deleteProject={deleteProject} projectActionBusy={projectActionBusy} projectDeleteConfirm={projectDeleteConfirm} members={members} membersBusy={membersBusy} membersMessage={membersMessage} refreshMembers={refreshMembers} addMember={addMember} updateMember={updateMember} removeMember={removeMember} memberActionBusy={memberActionBusy} projectMembers={projectMembers} projectMembersBusy={projectMembersBusy} projectMembersMessage={projectMembersMessage} selectedProjectID={selectedProjectID} selectProject={selectProject} refreshProjectMembers={refreshProjectMembers} addProjectMember={addProjectMember} updateProjectMember={updateProjectMember} removeProjectMember={removeProjectMember} projectMemberActionBusy={projectMemberActionBusy} /> : null}
           {displayedSection === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} revokeToken={revokeToken} revokeConfirm={revokeConfirm} openCreateToken={openCreateToken} canCreateToken={canCreateToken} canRevokeToken={canRevokeToken} /> : null}
           {displayedSection === "billing" ? <BillingPanel language={language} t={t} billingAccount={billingAccount} billingBusy={billingBusy} billingMessage={billingMessage} refreshBilling={refreshBilling} /> : null}
-          {displayedSection === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
+          {displayedSection === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} totpEnabled={totpEnabled} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
           {displayedSection === "docs" ? <UsageDocsPanel language={language} routeTo={routeTo} /> : null}
         </div>
       </div>

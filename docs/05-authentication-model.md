@@ -62,7 +62,9 @@ console_session
 
 ## 3. 管理员 MFA
 
-管理员 MFA 由后台安全设置控制，默认关闭；开启后管理员至少配置一种 MFA。优先支持：
+TOTP 由“系统设置 → 功能开关”控制，默认关闭。主开关开启后，租户用户和管理员可各自在个人资料中选择绑定或解除绑定；个人绑定仅保护该账号登录，不会强制其他账号。
+
+管理员全局 MFA 由管理员中心中的独立策略控制，默认关闭；开启前所有有效管理员必须已完成个人绑定。优先支持：
 
 ```text
 WebAuthn / Passkey
@@ -70,7 +72,7 @@ TOTP
 一次性恢复码
 ```
 
-高风险操作使用实时 TOTP step-up。当前实现要求每次敏感写请求携带 `X-MFA-Code`，验证码不持久化；失败达到阈值后短时锁定。不能由前端传入一个布尔值表示“已验证”。
+管理员全局 MFA 开启后，高风险操作使用实时 TOTP step-up。每次敏感写请求携带 `X-MFA-Code`，验证码不持久化；失败达到阈值后短时锁定。不能由前端传入一个布尔值表示“已验证”。
 
 ## 4. 下游 API Token
 
@@ -115,7 +117,7 @@ rate_limit
 
 ## 5. 公开注册与邮箱验证
 
-开发环境可以关闭 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED` 以便本机测试。生产只要开启 `REGISTRATION_ENABLED=true`，配置校验就要求 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`。注册流程为：
+`REGISTRATION_ENABLED` 仅在首次启动时写入“开放用户注册”的初始状态；之后由管理员“系统设置 → 功能开关”实时控制，无需重启。邮件总开关和“邮箱验证码”开关同时开启时，注册流程为：
 
 ```text
 注册 -> 创建 pending 用户和租户资源 -> SMTP 发送一次性链接

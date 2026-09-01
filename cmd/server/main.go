@@ -101,6 +101,9 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if err := settingsService.EnsureFeatureDefaults(ctx, cfg.RegistrationEnabled); err != nil {
+			log.Fatal(err)
+		}
 		login, err := auth.NewSQLLoginService(
 			dbConn,
 			sessions,
@@ -178,22 +181,19 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		var registrationService auth.RegistrationProvider
-		if cfg.RegistrationEnabled {
-			// The database-backed email feature switches are evaluated at request
-			// time. Keeping the dynamic notifier attached here means admins can
-			// enable or disable verification without restarting the service.
-			registrationService, err = auth.NewSQLRegistrationServiceWithNotifier(
-				dbConn,
-				tokenHasher,
-				cfg.LoginMaxFailures,
-				cfg.LoginWindow,
-				cfg.LoginLockDuration,
-				smtpNotifier,
-			)
-			if err != nil {
-				log.Fatal(err)
-			}
+		// Registration is initialized regardless of its current availability.
+		// The database-backed feature switch is checked for each request, so
+		// administrators can open or close registration without a restart.
+		registrationService, err := auth.NewSQLRegistrationServiceWithNotifier(
+			dbConn,
+			tokenHasher,
+			cfg.LoginMaxFailures,
+			cfg.LoginWindow,
+			cfg.LoginLockDuration,
+			smtpNotifier,
+		)
+		if err != nil {
+			log.Fatal(err)
 		}
 		relayService, err = relay.NewServiceWithTokenLimiter(
 			channelRouter,

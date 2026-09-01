@@ -17,6 +17,7 @@ import (
 
 var (
 	ErrAdminMFAEnrollmentRequired = errors.New("admin mfa enrollment required")
+	ErrTOTPFeatureDisabled        = errors.New("totp feature is disabled")
 	ErrInvalidSystemSettings      = errors.New("invalid system settings")
 )
 
@@ -73,16 +74,22 @@ func (s *Service) AdminMFAEnabled(ctx context.Context) (bool, error) {
 	if s == nil || s.db == nil {
 		return false, errors.New("security settings service is not configured")
 	}
-	var enabled bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(value = 'true', false)
-		FROM platform_settings
-		WHERE key = 'admin_mfa_enabled'
-	`).Scan(&enabled)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+	values, err := s.loadSettings(ctx)
+	if err != nil {
+		return false, err
 	}
-	return enabled, err
+	return parseSettingBool(values["totp_enabled"], false) && parseSettingBool(values["admin_mfa_enabled"], false), nil
+}
+
+func (s *Service) TOTPEnabled(ctx context.Context) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("security settings service is not configured")
+	}
+	values, err := s.loadSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	return parseSettingBool(values["totp_enabled"], false), nil
 }
 
 func (s *Service) GetAdminSecuritySettings(ctx context.Context) (auth.SecuritySettings, error) {
@@ -105,6 +112,13 @@ func (s *Service) GetAdminSecuritySettings(ctx context.Context) (auth.SecuritySe
 	if err != nil {
 		return auth.SecuritySettings{}, err
 	}
+	if enabled {
+		totpEnabled, err := s.TOTPEnabled(ctx)
+		if err != nil {
+			return auth.SecuritySettings{}, err
+		}
+		enabled = totpEnabled
+	}
 	result := auth.SecuritySettings{AdminMFAEnabled: enabled}
 	if updatedAt.Valid {
 		result.UpdatedAt = updatedAt.Time
@@ -123,6 +137,13 @@ func (s *Service) UpdateAdminMFAEnabled(ctx context.Context, enabled bool, actor
 		return auth.SecuritySettings{}, errors.New("actor is required")
 	}
 	if enabled {
+		totpEnabled, err := s.TOTPEnabled(ctx)
+		if err != nil {
+			return auth.SecuritySettings{}, err
+		}
+		if !totpEnabled {
+			return auth.SecuritySettings{}, ErrTOTPFeatureDisabled
+		}
 		ok, err := s.allPlatformAdminsHaveMFA(ctx)
 		if err != nil {
 			return auth.SecuritySettings{}, err

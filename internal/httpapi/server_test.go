@@ -354,6 +354,36 @@ func TestRegistrationRouteCreatesTenantConsoleAccount(t *testing.T) {
 	}
 }
 
+func TestRegistrationFeatureSwitchClosesEndpointAndPublicFlag(t *testing.T) {
+	service := &fakeRegistrationService{}
+	settings := &fakeSystemSettingsService{
+		features: adminsettings.FeatureSettings{RegistrationEnabled: false},
+	}
+	handler := New(
+		auth.NewMiddleware(testResolver{}),
+		&auth.Services{Registration: service, SecuritySettings: settings},
+		false,
+		"../../web",
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/console/v1/auth/register", strings.NewReader(`{"email":"user@example.com","password":"a-very-long-password","display_name":"User","tenant_name":"Acme","tenant_slug":"acme","project_name":"Production"}`))
+	record := httptest.NewRecorder()
+	handler.ServeHTTP(record, request)
+	if record.Code != http.StatusForbidden || !strings.Contains(record.Body.String(), "REGISTRATION_DISABLED") {
+		t.Fatalf("expected registration feature to reject new accounts, got %d: %s", record.Code, record.Body.String())
+	}
+	if service.request.Email != "" {
+		t.Fatalf("registration service must not be called while the feature is disabled: %#v", service.request)
+	}
+
+	publicRequest := httptest.NewRequest(http.MethodGet, "/public/v1/features", nil)
+	publicRecord := httptest.NewRecorder()
+	handler.ServeHTTP(publicRecord, publicRequest)
+	if publicRecord.Code != http.StatusOK || !strings.Contains(publicRecord.Body.String(), `"registration_enabled":false`) {
+		t.Fatalf("expected public registration flag false, got %d: %s", publicRecord.Code, publicRecord.Body.String())
+	}
+}
+
 func TestLoginSetsHttpOnlySessionCookieWithoutReturningSecret(t *testing.T) {
 	handler := New(auth.NewMiddleware(testResolver{}), &auth.Services{Login: successfulLoginService{}}, false, "../../web")
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", strings.NewReader(
@@ -1292,11 +1322,10 @@ func TestAdminEmailSettingsRoutesAreProtectedAndSeparated(t *testing.T) {
 
 	update := httptest.NewRequest(http.MethodPut, "/admin/v1/settings/features", strings.NewReader(`{"email_enabled":false,"email_verification_enabled":true,"email_password_reset_enabled":true,"email_subscription_enabled":true,"email_low_balance_alert_enabled":false,"email_recharge_success_enabled":false,"email_usage_limit_alert_enabled":false,"email_content_audit_enabled":false,"email_account_disabled_enabled":false,"email_cyber_policy_enabled":false,"email_operations_enabled":false,"balance_threshold":"0","recharge_url":""}`))
 	update.Header.Set("Authorization", "Bearer email-admin")
-	update.Header.Set("X-MFA-Code", "123456")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, update)
-	if updateRec.Code != http.StatusOK || stepUp.calls == 0 {
-		t.Fatalf("expected protected feature update, got %d: %s", updateRec.Code, updateRec.Body.String())
+	if updateRec.Code != http.StatusOK || stepUp.calls != 0 {
+		t.Fatalf("disabled MFA policy must not require step-up, got %d: %s calls=%d", updateRec.Code, updateRec.Body.String(), stepUp.calls)
 	}
 
 	templates := httptest.NewRequest(http.MethodGet, "/admin/v1/settings/email/templates", nil)
@@ -1400,6 +1429,35 @@ func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
 	handler.ServeHTTP(disableRec, disableRequest)
 	if disableRec.Code != http.StatusConflict || !strings.Contains(disableRec.Body.String(), `"error":"MFA_NOT_ENABLED"`) {
 		t.Fatalf("expected disabled mfa conflict, got %d: %s", disableRec.Code, disableRec.Body.String())
+	}
+}
+
+func TestTOTPFeatureGateHidesEnrollmentWhenDisabled(t *testing.T) {
+	mfaService := &fakeMFASettingsService{}
+	settings := &fakeSystemSettingsService{}
+	handler := New(auth.NewMiddleware(testResolver{
+		"console-user": {
+			ID:       "22222222-2222-4222-8222-222222222222",
+			Type:     auth.PrincipalTenantUser,
+			Audience: auth.AudienceConsole,
+			TenantID: "33333333-3333-4333-8333-333333333333",
+		},
+	}), &auth.Services{MFA: mfaService, SecuritySettings: settings}, false, "../../web")
+
+	status := httptest.NewRequest(http.MethodGet, "/console/v1/profile/mfa", nil)
+	status.Header.Set("Authorization", "Bearer console-user")
+	statusRec := httptest.NewRecorder()
+	handler.ServeHTTP(statusRec, status)
+	if statusRec.Code != http.StatusOK || !strings.Contains(statusRec.Body.String(), `"enabled":false`) {
+		t.Fatalf("disabled TOTP feature must hide active status, got %d: %s", statusRec.Code, statusRec.Body.String())
+	}
+
+	enroll := httptest.NewRequest(http.MethodPost, "/console/v1/profile/mfa/enroll", strings.NewReader(`{"issuer":"AI Token","account":"user@example.com"}`))
+	enroll.Header.Set("Authorization", "Bearer console-user")
+	enrollRec := httptest.NewRecorder()
+	handler.ServeHTTP(enrollRec, enroll)
+	if enrollRec.Code != http.StatusNotFound || !strings.Contains(enrollRec.Body.String(), `"error":"TOTP_DISABLED"`) {
+		t.Fatalf("disabled TOTP feature must close enrollment, got %d: %s", enrollRec.Code, enrollRec.Body.String())
 	}
 }
 

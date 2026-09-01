@@ -58,7 +58,9 @@ type SiteSettingsUpdate struct {
 
 type FeatureSettings struct {
 	EmailEnabled                bool      `json:"email_enabled"`
+	RegistrationEnabled         bool      `json:"registration_enabled"`
 	ModelStatusEnabled          bool      `json:"model_status_enabled"`
+	TOTPEnabled                 bool      `json:"totp_enabled"`
 	EmailVerificationEnabled    bool      `json:"email_verification_enabled"`
 	EmailPasswordResetEnabled   bool      `json:"email_password_reset_enabled"`
 	EmailSubscriptionEnabled    bool      `json:"email_subscription_enabled"`
@@ -77,7 +79,9 @@ type FeatureSettings struct {
 
 type FeatureSettingsUpdate struct {
 	EmailEnabled                bool   `json:"email_enabled"`
+	RegistrationEnabled         bool   `json:"registration_enabled"`
 	ModelStatusEnabled          bool   `json:"model_status_enabled"`
+	TOTPEnabled                 *bool  `json:"totp_enabled"`
 	EmailVerificationEnabled    bool   `json:"email_verification_enabled"`
 	EmailPasswordResetEnabled   bool   `json:"email_password_reset_enabled"`
 	EmailSubscriptionEnabled    bool   `json:"email_subscription_enabled"`
@@ -208,7 +212,9 @@ func (s *Service) GetFeatureSettings(ctx context.Context) (FeatureSettings, erro
 	}
 	result := FeatureSettings{
 		EmailEnabled:                parseSettingBool(values["email_enabled"], false),
+		RegistrationEnabled:         parseSettingBool(values["registration_enabled"], false),
 		ModelStatusEnabled:          parseSettingBool(values["model_status_enabled"], true),
+		TOTPEnabled:                 parseSettingBool(values["totp_enabled"], false),
 		EmailVerificationEnabled:    parseSettingBool(values["email_verification_enabled"], true),
 		EmailPasswordResetEnabled:   parseSettingBool(values["email_password_reset_enabled"], true),
 		EmailSubscriptionEnabled:    parseSettingBool(values["email_subscription_enabled"], true),
@@ -356,6 +362,14 @@ func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, req
 	if request.BalanceThreshold == "" {
 		request.BalanceThreshold = "0"
 	}
+	values, err := s.loadSettings(ctx)
+	if err != nil {
+		return FeatureSettings{}, err
+	}
+	totpEnabled := parseSettingBool(values["totp_enabled"], false)
+	if request.TOTPEnabled != nil {
+		totpEnabled = *request.TOTPEnabled
+	}
 	if request.EmailEnabled {
 		smtp, err := s.readSMTPSettings(ctx, nil)
 		if err != nil || !smtp.Configured {
@@ -367,7 +381,9 @@ func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, req
 	}
 	items := []struct{ key, value string }{
 		{"email_enabled", strconv.FormatBool(request.EmailEnabled)},
+		{"registration_enabled", strconv.FormatBool(request.RegistrationEnabled)},
 		{"model_status_enabled", strconv.FormatBool(request.ModelStatusEnabled)},
+		{"totp_enabled", strconv.FormatBool(totpEnabled)},
 		{"email_verification_enabled", strconv.FormatBool(request.EmailVerificationEnabled)},
 		{"email_password_reset_enabled", strconv.FormatBool(request.EmailPasswordResetEnabled)},
 		{"email_subscription_enabled", strconv.FormatBool(request.EmailSubscriptionEnabled)},
@@ -380,6 +396,9 @@ func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, req
 		{"email_operations_enabled", strconv.FormatBool(request.EmailOperationsEnabled)},
 		{"email_balance_threshold", request.BalanceThreshold},
 		{"email_recharge_url", request.RechargeURL},
+	}
+	if !totpEnabled {
+		items = append(items, struct{ key, value string }{"admin_mfa_enabled", "false"})
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -395,6 +414,21 @@ func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, req
 		return FeatureSettings{}, err
 	}
 	return s.GetFeatureSettings(ctx)
+}
+
+// EnsureFeatureDefaults writes only settings that do not exist yet. This keeps
+// the deployment-time registration default as an initial value while allowing
+// administrators to manage the feature from the database afterwards.
+func (s *Service) EnsureFeatureDefaults(ctx context.Context, registrationEnabled bool) error {
+	if s == nil || s.db == nil {
+		return errors.New("feature settings service is not configured")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO platform_settings (key, value)
+		VALUES ('registration_enabled', $1)
+		ON CONFLICT (key) DO NOTHING
+	`, strconv.FormatBool(registrationEnabled))
+	return err
 }
 
 func (s *Service) TestSMTPConnection(ctx context.Context) error {

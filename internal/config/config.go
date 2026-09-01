@@ -14,31 +14,30 @@ import (
 )
 
 type Config struct {
-	DeploymentMode                       string
-	RegistrationEnabled                  bool
-	RegistrationRequireEmailVerification bool
-	HTTPAddr                             string
-	HTTPReadTimeout                      time.Duration
-	HTTPWriteTimeout                     time.Duration
-	HTTPIdleTimeout                      time.Duration
-	WebDir                               string
-	DatabaseURL                          string
-	MigrationsDir                        string
-	TokenPepper                          string
-	SessionPepper                        string
-	MFAEncryptionKey                     []byte
-	CookieSecure                         bool
-	SessionTTL                           time.Duration
-	LoginMaxFailures                     int
-	LoginWindow                          time.Duration
-	LoginLockDuration                    time.Duration
-	PublicBaseURL                        string
-	SMTPAddress                          string
-	SMTPFrom                             string
-	SMTPUsername                         string
-	SMTPPassword                         string
-	TrustedProxyCIDRs                    string
-	AdminEntryPath                       string
+	DeploymentMode      string
+	RegistrationEnabled bool
+	HTTPAddr            string
+	HTTPReadTimeout     time.Duration
+	HTTPWriteTimeout    time.Duration
+	HTTPIdleTimeout     time.Duration
+	WebDir              string
+	DatabaseURL         string
+	MigrationsDir       string
+	TokenPepper         string
+	SessionPepper       string
+	MFAEncryptionKey    []byte
+	CookieSecure        bool
+	SessionTTL          time.Duration
+	LoginMaxFailures    int
+	LoginWindow         time.Duration
+	LoginLockDuration   time.Duration
+	PublicBaseURL       string
+	SMTPAddress         string
+	SMTPFrom            string
+	SMTPUsername        string
+	SMTPPassword        string
+	TrustedProxyCIDRs   string
+	AdminEntryPath      string
 }
 
 func Load() (Config, error) {
@@ -47,10 +46,6 @@ func Load() (Config, error) {
 		return Config{}, errors.New("APP_ENV must be development, test, or production")
 	}
 	registrationEnabled, err := boolEnv("REGISTRATION_ENABLED", deploymentMode != "production")
-	if err != nil {
-		return Config{}, err
-	}
-	registrationRequireEmailVerification, err := boolEnv("REGISTRATION_EMAIL_VERIFICATION_REQUIRED", deploymentMode == "production")
 	if err != nil {
 		return Config{}, err
 	}
@@ -143,9 +138,6 @@ func Load() (Config, error) {
 		if strings.TrimSpace(os.Getenv("REGISTRATION_ENABLED")) == "" {
 			return Config{}, errors.New("REGISTRATION_ENABLED must be explicitly configured in production")
 		}
-		if registrationEnabled && !registrationRequireEmailVerification {
-			return Config{}, errors.New("REGISTRATION_EMAIL_VERIFICATION_REQUIRED must be true when public registration is enabled")
-		}
 		if publicBaseURL != "" {
 			if err := validatePublicBaseURL(publicBaseURL, true); err != nil {
 				return Config{}, err
@@ -165,31 +157,30 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		DeploymentMode:                       deploymentMode,
-		RegistrationEnabled:                  registrationEnabled,
-		RegistrationRequireEmailVerification: registrationRequireEmailVerification,
-		HTTPAddr:                             httpAddr,
-		HTTPReadTimeout:                      httpReadTimeout,
-		HTTPWriteTimeout:                     httpWriteTimeout,
-		HTTPIdleTimeout:                      httpIdleTimeout,
-		WebDir:                               stringEnv("WEB_DIR", "web"),
-		DatabaseURL:                          databaseURL,
-		MigrationsDir:                        stringEnv("MIGRATIONS_DIR", "migrations"),
-		TokenPepper:                          tokenPepper,
-		SessionPepper:                        sessionPepper,
-		MFAEncryptionKey:                     mfaKey,
-		CookieSecure:                         cookieSecure,
-		SessionTTL:                           sessionTTL,
-		LoginMaxFailures:                     maxFailures,
-		LoginWindow:                          loginWindow,
-		LoginLockDuration:                    loginLockDuration,
-		PublicBaseURL:                        publicBaseURL,
-		SMTPAddress:                          smtpAddress,
-		SMTPFrom:                             smtpFrom,
-		SMTPUsername:                         smtpUsername,
-		SMTPPassword:                         smtpPassword,
-		TrustedProxyCIDRs:                    trustedProxyCIDRs,
-		AdminEntryPath:                       adminEntryPath,
+		DeploymentMode:      deploymentMode,
+		RegistrationEnabled: registrationEnabled,
+		HTTPAddr:            httpAddr,
+		HTTPReadTimeout:     httpReadTimeout,
+		HTTPWriteTimeout:    httpWriteTimeout,
+		HTTPIdleTimeout:     httpIdleTimeout,
+		WebDir:              stringEnv("WEB_DIR", "web"),
+		DatabaseURL:         databaseURL,
+		MigrationsDir:       stringEnv("MIGRATIONS_DIR", "migrations"),
+		TokenPepper:         tokenPepper,
+		SessionPepper:       sessionPepper,
+		MFAEncryptionKey:    mfaKey,
+		CookieSecure:        cookieSecure,
+		SessionTTL:          sessionTTL,
+		LoginMaxFailures:    maxFailures,
+		LoginWindow:         loginWindow,
+		LoginLockDuration:   loginLockDuration,
+		PublicBaseURL:       publicBaseURL,
+		SMTPAddress:         smtpAddress,
+		SMTPFrom:            smtpFrom,
+		SMTPUsername:        smtpUsername,
+		SMTPPassword:        smtpPassword,
+		TrustedProxyCIDRs:   trustedProxyCIDRs,
+		AdminEntryPath:      adminEntryPath,
 	}, nil
 }
 

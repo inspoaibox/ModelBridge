@@ -32,9 +32,10 @@ interface HomeViewProps {
   routeTo: (target: string) => void;
   handleSignOut: () => void;
   models: PublicModelSummary[];
+  registrationEnabled: boolean;
 }
 
-export function HomeView({ language, signedIn, workspaceRoute, routeTo, handleSignOut, models }: HomeViewProps) {
+export function HomeView({ language, signedIn, workspaceRoute, routeTo, handleSignOut, models, registrationEnabled }: HomeViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [activeCodeLang, setActiveCodeLang] = useState<"curl" | "python" | "nodejs" | "golang">("python");
   const [copiedCode, setCopiedCode] = useState(false);
@@ -168,12 +169,12 @@ func main() {
                   <LogOut className="h-4 w-4" />
                   <span>{t("signOut")}</span>
                 </Button>
-              ) : (
+              ) : registrationEnabled ? (
                 <Button size="lg" variant="outline" onClick={() => routeTo("#register")} className="gap-2">
                   <span>{t("navRegister")}</span>
                   <ChevronRight className="h-4 w-4 text-slate-400" />
                 </Button>
-              )}
+              ) : null}
             </div>
 
             {/* Live Trust Indicators */}

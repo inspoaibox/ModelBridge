@@ -162,7 +162,9 @@ export interface EmailSettings {
 
 export interface FeatureSettings {
   email_enabled: boolean;
+  registration_enabled: boolean;
   model_status_enabled: boolean;
+  totp_enabled: boolean;
   email_verification_enabled: boolean;
   email_password_reset_enabled: boolean;
   email_subscription_enabled: boolean;
@@ -180,7 +182,9 @@ export interface FeatureSettings {
 }
 
 export interface PublicFeatureSettings {
+  registration_enabled: boolean;
   model_status_enabled: boolean;
+  totp_enabled: boolean;
 }
 
 export interface EmailTemplate {
