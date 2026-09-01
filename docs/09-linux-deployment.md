@@ -2,6 +2,29 @@
 
 本文用于在全新 Linux 服务器部署 AI Token Gateway。基线为 Ubuntu 24.04 LTS、PostgreSQL 16、Nginx、systemd。生产由 Nginx 终止 TLS，应用仅监听本机回环地址。
 
+> **给第一次部署的用户**
+>
+> 本文是 Nginx + systemd 备用方案；如果你计划使用 Caddy + PM2，请改用
+> `docs/10-linux-caddy-pm2-deployment.md`。请按章节顺序执行，不要一次性粘贴整篇文档。
+>
+> 代码块类型必须区分：
+>
+> | 类型 | 用途 | 执行方式 |
+> | --- | --- | --- |
+> | `bash` | Linux 终端命令 | 粘贴到 `root@服务器:~#` 后执行 |
+> | `sql` | PostgreSQL SQL | 先进入 `postgres=#` 再执行 |
+> | `conf` | PostgreSQL 配置文件内容 | 写入 `postgresql.conf` 或 `pg_hba.conf` |
+> | `dotenv` | AI Token 环境文件内容 | 写入 `/etc/ai-token/ai-token.env` |
+> | `ini` | systemd 服务文件内容 | 写入 `/etc/systemd/system/ai-token.service` |
+> | `nginx` | Nginx 配置文件内容 | 写入 `/etc/nginx/sites-available/ai-token` |
+>
+> `conf`、`sql`、`dotenv`、`ini` 和 `nginx` 代码块不是 Bash 命令，不能直接粘贴到
+> `root@服务器:~#` 后执行。`REPLACE_...`、`gateway.example.com` 和
+> `YOUR_...` 也必须替换为自己的值。
+
+遇到 `nano` 时，打开的是文件编辑器：按 `Ctrl+O` 保存并回车确认，
+按 `Ctrl+X` 退出，然后再执行下一条命令。
+
 不要在 Shell 历史、Git、工单、聊天、截图或日志中记录数据库密码、Token、上游 API Key、SMTP 密码、Pepper、MFA 密钥、管理员密码或 TOTP Secret。
 
 ## 1. 架构和发布前准备
@@ -69,35 +92,95 @@ sudo install -d -o root -g ai-token -m 0750 /etc/ai-token
 psql --version
 sudo systemctl enable --now postgresql
 sudo systemctl status postgresql --no-pager
+~~~
+
+先执行下面的命令进入 PostgreSQL：
+
+~~~bash
 sudo -u postgres psql
 ~~~
 
-在交互式 psql 中创建最小权限账号。使用 \\password 录入密码，避免密码进入历史记录：
+看到 `postgres=#` 后，再执行下面的 SQL。执行 `\q` 返回 Linux 终端：
 
 ~~~sql
 CREATE ROLE ai_token LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
-\\password ai_token
+\password ai_token
 CREATE DATABASE ai_token OWNER ai_token ENCODING 'UTF8';
 REVOKE ALL ON DATABASE ai_token FROM PUBLIC;
-\\q
+\q
 ~~~
 
-同机数据库保持本地监听。确认 postgresql.conf：
+`\password ai_token` 会单独询问数据库密码，输入时不会显示字符。
+
+### 编辑 PostgreSQL 配置文件
+
+下面的 `conf` 内容不能在 `root@服务器:~#` 后执行，否则会出现
+`-bash: listen_addresses: command not found`。
+
+先查询配置文件真实路径：
+
+~~~bash
+sudo -u postgres psql -tAc "SHOW config_file"
+sudo -u postgres psql -tAc "SHOW hba_file"
+~~~
+
+使用第一条命令输出的路径打开 `postgresql.conf`，例如：
+
+~~~bash
+sudo nano /etc/postgresql/16/main/postgresql.conf
+~~~
+
+找到同名配置项，取消注释并修改；如果没有则添加以下两行。
 
 ~~~conf
 listen_addresses = '127.0.0.1,::1'
 password_encryption = scram-sha-256
 ~~~
 
-在 pg_hba.conf 中限制为本机 SCRAM：
+保存退出后，使用第二条命令输出的路径打开 `pg_hba.conf`，例如：
+
+~~~bash
+sudo nano /etc/postgresql/16/main/pg_hba.conf
+~~~
+
+在文件末尾添加：
 
 ~~~conf
 host    ai_token    ai_token    127.0.0.1/32    scram-sha-256
 host    ai_token    ai_token    ::1/128         scram-sha-256
 ~~~
 
+保存退出后，再执行。`listen_addresses` 需要重启 PostgreSQL 才会生效：
+
 ~~~bash
-sudo systemctl reload postgresql
+sudo systemctl restart postgresql
+~~~
+
+### 创建应用数据库和账号
+
+先执行：
+
+~~~bash
+sudo -u postgres psql
+~~~
+
+看到 `postgres=#` 后，再执行下面的 SQL。不要把 SQL 直接粘贴到
+`root@服务器:~#` 后面：
+
+~~~sql
+CREATE ROLE ai_token LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+\password ai_token
+CREATE DATABASE ai_token OWNER ai_token ENCODING 'UTF8';
+REVOKE ALL ON DATABASE ai_token FROM PUBLIC;
+\q
+~~~
+
+`\password ai_token` 会单独询问数据库密码，输入时不会显示字符。
+执行 `\q` 后会回到 Linux 终端。
+
+验证应用账号可以连接：
+
+~~~bash
 sudo -u postgres psql -d ai_token -c 'SELECT current_database(), current_user;'
 ~~~
 
@@ -133,20 +216,44 @@ build-essential 和 gcc 是 go test -race 的必需依赖，不应省略。
 
 ## 5. 获取、构建和校验发布版本
 
-以下使用版本 YYYY-MM-DD.N。替换发布源和版本号：
+这一节用于把项目下载到服务器，并编译成可运行程序。下面所有代码块都是
+`bash` 命令，可以复制到 Linux 终端执行。
+
+### 第 1 步：下载项目代码
+
+当前项目 Git 仓库地址：
+
+```text
+https://github.com/inspoaibox/ModelBridge.git
+```
+
+`RELEASE` 是服务器上本次发布目录的名字。可以使用日期和序号，例如
+`2026-09-01-01`；它不是 Git 标签。当前仓库没有正式标签，首次部署使用
+`main` 分支：
 
 ~~~bash
-export RELEASE=YYYY-MM-DD.N
+export RELEASE=2026-09-01-01
+export GIT_BRANCH=main
+export REPO_URL=https://github.com/inspoaibox/ModelBridge.git
+
 sudo -u ai-token -H mkdir -p /opt/ai-token/releases/$RELEASE
-sudo -u ai-token -H git clone --depth 1 --branch "$RELEASE" \
-  https://YOUR_GIT_HOST/YOUR_ORG/ai-token.git \
+sudo -u ai-token -H git clone --depth 1 --branch "$GIT_BRANCH" \
+  "$REPO_URL" \
   /opt/ai-token/releases/$RELEASE
+
+sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
 ~~~
 
-若使用压缩包，先校验 SHA-256 或签名，再解压到发布目录。发布包不得包含 .env、node_modules、dist、本地缓存、日志、数据库转储或管理员凭据。
+最后一条会输出提交编号，请记录下来。以后有正式 Git 标签时，把
+`GIT_BRANCH=main` 改为对应标签即可。
+
+### 第 2 步：执行检查并编译
+
+下面整段命令会切换到 `ai-token` 运行账号，下载依赖、检查代码、构建前端和后端。
+最后的 `exit` 会自动返回 root 终端：
 
 ~~~bash
-sudo -u ai-token -H bash
+sudo -u ai-token -H env RELEASE="$RELEASE" bash
 export PATH=/usr/local/go/bin:$PATH
 cd /opt/ai-token/releases/$RELEASE
 
@@ -170,19 +277,27 @@ test -f web/dist/index.html
 exit
 ~~~
 
-任一步失败都不得继续发布。
+| 命令 | 在做什么 |
+| --- | --- |
+| `go mod download` | 下载 Go 后端依赖。 |
+| `go test`、`go vet`、`govulncheck` | 检查后端质量、并发问题和已知依赖漏洞。 |
+| `npm ci` | 下载锁定版本的前端依赖。 |
+| `npm run lint`、`npm run typecheck`、`npm test` | 检查并构建 React 前端，生成 `web/dist`。 |
+| `go build ... -o bin/ai-token` | 生成真正运行的后端程序。 |
+
+任一步失败都不得继续发布。压缩包部署时，也必须先解压到
+`/opt/ai-token/releases/$RELEASE`，再从本节“第 2 步”开始执行。
 
 ## 6. 生产环境变量
 
 创建环境文件：
 
 ~~~bash
-sudoedit /etc/ai-token/ai-token.env
-sudo chown root:ai-token /etc/ai-token/ai-token.env
-sudo chmod 0640 /etc/ai-token/ai-token.env
+sudo nano /etc/ai-token/ai-token.env
 ~~~
 
-模板：
+进入 nano 后，把文件内容替换为下面的 `dotenv` 模板。`dotenv` 不是 Bash 命令。
+保存按 `Ctrl+O`，回车确认；退出按 `Ctrl+X`：
 
 ~~~dotenv
 APP_ENV=production
@@ -212,9 +327,18 @@ SMTP_USERNAME=REPLACE_SMTP_USERNAME
 SMTP_PASSWORD=REPLACE_SMTP_PASSWORD
 ~~~
 
-生成随机值时，立即存入安全密码管理器：
+退出 nano 后，回到 Linux 终端设置文件所有者和权限：
 
 ~~~bash
+sudo chown root:ai-token /etc/ai-token/ai-token.env
+sudo chmod 0640 /etc/ai-token/ai-token.env
+~~~
+
+生成三组随机值时，立即存入安全密码管理器。前三条命令分别用于
+`TOKEN_PEPPER`、`SESSION_PEPPER` 和 `MFA_ENCRYPTION_KEY`：
+
+~~~bash
+openssl rand -hex 48
 openssl rand -hex 48
 openssl rand -hex 32
 ~~~
@@ -369,7 +493,7 @@ read -rp 'Administrator email: ' ADMIN_EMAIL
 read -rsp 'Administrator password: ' ADMIN_PASSWORD
 echo
 export ADMIN_EMAIL ADMIN_PASSWORD
-go run /opt/ai-token/current/cmd/bootstrap-admin
+/usr/local/go/bin/go run /opt/ai-token/current/cmd/bootstrap-admin
 unset ADMIN_PASSWORD
 exit
 ~~~
@@ -418,10 +542,10 @@ sudo -u postgres dropdb ai_token_restore
 
 ## 12. 升级
 
-所有升级先在预发布环境验证：
+所有升级先在预发布环境验证。把 `YOUR_RELEASE_TAG` 替换成新版本的真实 Git 标签：
 
 ~~~bash
-export RELEASE=YYYY-MM-DD.N
+export RELEASE=YOUR_RELEASE_TAG
 sudo -u postgres pg_dump -Fc -d ai_token \
   -f /var/backups/ai-token/pre-$RELEASE.dump
 

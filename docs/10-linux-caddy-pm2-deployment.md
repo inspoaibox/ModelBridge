@@ -2,6 +2,36 @@
 
 本文是 AI Token Gateway 的标准 Linux 生产部署流程，使用 Caddy 自动 HTTPS 反向代理和 PM2 守护 Go 网关进程。适用于全新 Ubuntu 24.04 LTS 或 Debian 12 服务器。当前迁移目录最高版本为 `036_model_status_feature.sql`。
 
+> **给第一次部署的用户**
+>
+> 推荐只阅读并执行本文，不要同时执行 `docs/09-linux-deployment.md`。
+> 本文按从零开始的顺序编排，请按章节一步一步执行，不要把整篇文档一次性粘贴到终端。
+>
+> 代码块右上角的类型决定执行方式：
+>
+> | 类型 | 用途 | 是否粘贴到 `root@服务器:~#` 后执行 |
+> | --- | --- | --- |
+> | `bash` | Linux 终端命令 | 是，按行执行 |
+> | `sql` | PostgreSQL 的 `postgres=#` 提示符内的 SQL | 否，先执行进入 psql 的命令 |
+> | `conf` | PostgreSQL 配置文件内容 | 否，写入指定配置文件 |
+> | `dotenv` | AI Token 环境文件内容 | 否，写入 `/etc/ai-token/ai-token.env` |
+> | `caddyfile` | Caddy 配置文件内容 | 否，写入 `/etc/caddy/Caddyfile` |
+>
+> 看到 `REPLACE_...`、`gateway.example.com` 或 `YOUR_...` 时，必须替换成自己的值。
+> 文档中的 `$RELEASE` 是当前发布版本变量，不是要原样输入的文字。
+
+### 终端身份和编辑器
+
+本文的普通命令可以在 root 终端执行，也可以在具有 sudo 权限的账号下执行。
+命令中的 `sudo -u ai-token`、`sudo -u postgres` 表示临时使用对应系统账号执行，不需要先切换账号。
+
+遇到 `sudoedit` 或 `nano` 时，打开的是文件编辑器，不是在执行命令：
+
+1. 把需要写入文件的内容粘贴到编辑器中。
+2. nano 保存：按 `Ctrl+O`，回车确认文件名。
+3. nano 退出：按 `Ctrl+X`。
+4. 保存后再执行文档中的下一条 `bash` 命令。
+
 相关模板已随代码提供：
 
 | 文件 | 部署位置 |
@@ -75,7 +105,6 @@ sudo useradd --system --create-home --home-dir /var/lib/ai-token \
 sudo install -d -o ai-token -g ai-token -m 0750 \
   /opt/ai-token/releases /var/lib/ai-token
 sudo install -d -o root -g ai-token -m 0750 /etc/ai-token
-sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
 ~~~
 
 ## 3. 安装 PostgreSQL
@@ -85,35 +114,83 @@ sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
 ~~~bash
 psql --version
 sudo systemctl enable --now postgresql
-sudo -u postgres psql
 ~~~
 
-在 psql 中创建最小权限账号。使用 \\password 交互输入数据库密码：
+### 配置 PostgreSQL 监听地址
 
-~~~sql
-CREATE ROLE ai_token LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
-\\password ai_token
-CREATE DATABASE ai_token OWNER ai_token ENCODING 'UTF8';
-REVOKE ALL ON DATABASE ai_token FROM PUBLIC;
-\\q
+下面两段内容是 PostgreSQL 配置文件内容，不是 Linux 命令。
+如果把它们直接粘贴到 `root@服务器:~#` 后面，就会出现
+`-bash: listen_addresses: command not found`。
+
+先查询实际配置文件路径：
+
+~~~bash
+sudo -u postgres psql -tAc "SHOW config_file"
+sudo -u postgres psql -tAc "SHOW hba_file"
 ~~~
 
-同机 PostgreSQL 必须只监听回环地址。postgresql.conf：
+第一条命令通常输出 `postgresql.conf` 的路径，第二条通常输出
+`pg_hba.conf` 的路径。使用输出的真实路径打开文件，例如：
+
+~~~bash
+sudo nano /etc/postgresql/16/main/postgresql.conf
+~~~
+
+在 `postgresql.conf` 中找到同名配置项。如果原来有被 `#` 注释的配置，
+删除开头的 `#` 并修改；如果没有，就添加下面两行。每个配置项只保留一份有效行：
 
 ~~~conf
 listen_addresses = '127.0.0.1,::1'
 password_encryption = scram-sha-256
 ~~~
 
-pg_hba.conf：
+按 `Ctrl+O` 保存，回车确认，再按 `Ctrl+X` 退出。
+
+打开上面第二条命令输出的 `pg_hba.conf` 路径，例如：
+
+~~~bash
+sudo nano /etc/postgresql/16/main/pg_hba.conf
+~~~
+
+在文件末尾添加下面两行：
 
 ~~~conf
 host    ai_token    ai_token    127.0.0.1/32    scram-sha-256
 host    ai_token    ai_token    ::1/128         scram-sha-256
 ~~~
 
+保存并退出 nano 后，回到 Linux 终端执行。这里必须使用 `restart`，
+因为 `listen_addresses` 不是仅 reload 就能生效的配置：
+
 ~~~bash
-sudo systemctl reload postgresql
+sudo systemctl restart postgresql
+~~~
+
+### 创建应用数据库和账号
+
+先在 Linux 终端执行：
+
+~~~bash
+sudo -u postgres psql
+~~~
+
+看到 `postgres=#` 后，再执行下面的 SQL。不要把 SQL 直接粘贴到
+`root@服务器:~#` 后面：
+
+~~~sql
+CREATE ROLE ai_token LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+\password ai_token
+CREATE DATABASE ai_token OWNER ai_token ENCODING 'UTF8';
+REVOKE ALL ON DATABASE ai_token FROM PUBLIC;
+\q
+~~~
+
+其中 `\password ai_token` 会单独询问数据库密码。输入密码时终端不会显示字符，
+输入完成后按回车即可。执行 `\q` 后会回到 Linux 终端。
+
+最后验证应用账号可以连接：
+
+~~~bash
 sudo -u postgres psql -d ai_token -c 'SELECT current_database(), current_user;'
 ~~~
 
@@ -156,33 +233,76 @@ curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
 curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
   | sudo tee /etc/apt/sources.list.d/caddy-stable.list
 sudo apt update
-sudo apt install -y caddy
-caddy version
 ~~~
 
-如果服务器已运行 Nginx 或 Apache，占用 80/443 的服务必须先停用：
+如果服务器已运行 Nginx 或 Apache，占用 80/443 的服务，必须先停用。
+这一段应在安装 Caddy 前执行：
 
 ~~~bash
 sudo systemctl disable --now nginx 2>/dev/null || true
 sudo systemctl disable --now apache2 2>/dev/null || true
 ~~~
 
-## 5. 获取和构建发布版本
-
-以下使用版本 YYYY-MM-DD.N。替换为真实来源和版本：
+现在安装 Caddy。此时系统会创建 `caddy` 运行账号，再创建访问日志目录：
 
 ~~~bash
-export RELEASE=YYYY-MM-DD.N
-sudo -u ai-token -H mkdir -p /opt/ai-token/releases/$RELEASE
-sudo -u ai-token -H git clone --depth 1 --branch "$RELEASE" \
-  https://YOUR_GIT_HOST/YOUR_ORG/ai-token.git \
-  /opt/ai-token/releases/$RELEASE
+sudo apt install -y caddy
+sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
+caddy version
 ~~~
 
-若使用压缩包，先核验 SHA-256 或签名。发布包不得包含 .env、node_modules、dist、本地缓存、日志、数据库转储或密钥。
+## 5. 获取和构建发布版本
+
+这一节的目标只有两件事：
+
+1. 从 GitHub 下载项目代码到服务器。
+2. 把前端和后端编译成可运行程序。
+
+下面所有代码块都是 `bash` 命令，可以复制到 Linux 终端执行。
+
+### 第 1 步：下载项目代码
+
+当前项目 Git 仓库地址为：
+
+```text
+https://github.com/inspoaibox/ModelBridge.git
+```
+
+`RELEASE` 只是服务器上本次发布目录的名字，可以使用日期加序号。
+例如今天第一次部署可使用 `2026-09-01-01`。它不是 Git 标签，也不需要在
+GitHub 上预先创建。
+
+当前仓库没有发布标签，因此首次部署使用 `main` 分支。下面整段命令可直接复制
+到 Linux 终端：
 
 ~~~bash
-sudo -u ai-token -H bash
+export RELEASE=2026-09-01-01
+export GIT_BRANCH=main
+export REPO_URL=https://github.com/inspoaibox/ModelBridge.git
+
+sudo -u ai-token -H mkdir -p /opt/ai-token/releases/$RELEASE
+sudo -u ai-token -H git clone --depth 1 --branch "$GIT_BRANCH" \
+  "$REPO_URL" \
+  /opt/ai-token/releases/$RELEASE
+
+sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
+~~~
+
+最后一条会输出一长串提交编号。把它记录到部署记录中，用于将来确认当前服务器
+运行的是哪一版代码。
+
+如果你以后创建了正式 Git 标签，例如 `v1.0.0`，只需要把
+`export GIT_BRANCH=main` 改成 `export GIT_BRANCH=v1.0.0` 即可。
+不要复制文档中的 `YOUR_...`、`YYYY-MM-DD.N` 之类占位符。
+
+### 第 2 步：执行检查并编译
+
+下面整段命令会切换到 `ai-token` 运行账号，下载依赖、检查代码、编译前端和后端。
+看到提示符变成类似 `ai-token@服务器:~$` 后属于正常情况；最后的 `exit`
+会自动返回 root 终端。
+
+~~~bash
+sudo -u ai-token -H env RELEASE="$RELEASE" bash
 export PATH=/usr/local/go/bin:$PATH
 cd /opt/ai-token/releases/$RELEASE
 
@@ -207,17 +327,35 @@ test -f web/dist/index.html
 exit
 ~~~
 
+上面命令的作用：
+
+| 命令 | 在做什么 |
+| --- | --- |
+| `go mod download` | 下载 Go 后端需要的依赖。 |
+| `go test ./...` | 运行后端自动测试。 |
+| `go test -race ./...` | 检查常见并发问题，耗时会比普通测试长。 |
+| `go vet ./...` | 检查明显的 Go 代码错误。 |
+| `govulncheck` | 检查 Go 依赖中的已知安全漏洞。 |
+| `npm ci` | 根据锁定版本下载前端依赖。 |
+| `npm run lint`、`npm run typecheck`、`npm test` | 检查并构建 React 前端；`npm test` 会生成 `web/dist`。 |
+| `npm audit` | 检查前端生产依赖漏洞。 |
+| `go build ... -o bin/ai-token` | 生成实际运行的后端程序 `/opt/ai-token/releases/本次版本/bin/ai-token`。 |
+| `chmod 0755 .../start.sh` | 让 PM2 启动脚本可以执行。 |
+
+任何一条命令出现错误时，先停下来处理错误，不要跳过后面的检查继续上线。
+压缩包部署时，也必须先把压缩包解压到
+`/opt/ai-token/releases/$RELEASE`，再从本节“第 2 步”开始执行。
+
 ## 6. 完整生产环境文件
 
-创建 /etc/ai-token/ai-token.env：
+创建 `/etc/ai-token/ai-token.env`。先在 Linux 终端执行：
 
 ~~~bash
-sudoedit /etc/ai-token/ai-token.env
-sudo chown root:ai-token /etc/ai-token/ai-token.env
-sudo chmod 0640 /etc/ai-token/ai-token.env
+sudo nano /etc/ai-token/ai-token.env
 ~~~
 
-填写以下模板。所有 REPLACE 值必须替换，且不得复用开发环境密钥：
+进入 nano 后，把文件内容替换为下面的 `dotenv` 模板。
+`dotenv` 不是 Bash 命令。所有 `REPLACE_...`、域名和邮箱都必须替换：
 
 ~~~dotenv
 APP_ENV=production
@@ -252,11 +390,47 @@ SMTP_USERNAME=REPLACE_SMTP_USERNAME
 SMTP_PASSWORD=REPLACE_SMTP_PASSWORD
 ~~~
 
-生成密钥：
+在 nano 中按 `Ctrl+O` 保存，回车确认文件名，再按 `Ctrl+X` 退出。
+回到 Linux 终端后，设置文件所有者和权限：
+
+~~~bash
+sudo chown root:ai-token /etc/ai-token/ai-token.env
+sudo chmod 0640 /etc/ai-token/ai-token.env
+~~~
+
+生成随机密钥。前三条命令分别输出一个随机值，请依次填入环境文件对应的
+`TOKEN_PEPPER`、`SESSION_PEPPER` 和 `MFA_ENCRYPTION_KEY`。第三条命令
+生成的 64 个十六进制字符用于 `MFA_ENCRYPTION_KEY`：
 
 ~~~bash
 openssl rand -hex 48
+openssl rand -hex 48
 openssl rand -hex 32
+~~~
+
+为了避免数据库密码中的 `@`、`#`、`?` 等特殊字符破坏 `DATABASE_URL`，
+建议数据库密码也使用十六进制随机值，例如执行：
+
+~~~bash
+openssl rand -hex 24
+~~~
+
+将这个值用于 PostgreSQL 的 `\password ai_token`，并填入
+`DATABASE_URL` 中的 `REPLACE_DATABASE_PASSWORD`。所有密钥和密码都应
+立即保存到安全的密码管理器，不要提交到 Git。
+
+如果前面保存的只是模板，此时必须再次打开环境文件，把上述四个随机值、
+真实数据库密码、域名、邮箱和 SMTP 配置填入对应位置：
+
+~~~bash
+sudo nano /etc/ai-token/ai-token.env
+~~~
+
+保存按 `Ctrl+O`，回车确认；退出按 `Ctrl+X`。退出后再次确认文件权限：
+
+~~~bash
+sudo chown root:ai-token /etc/ai-token/ai-token.env
+sudo chmod 0640 /etc/ai-token/ai-token.env
 ~~~
 
 规则：
@@ -279,12 +453,24 @@ SMTP 也可以在管理员登录后通过“系统设置”写入数据库。环
 
 ## 7. Caddy 配置
 
-复制模板并替换域名与邮箱：
+复制模板并编辑域名与邮箱。先在 Linux 终端执行：
 
 ~~~bash
 sudo install -m 0644 /opt/ai-token/releases/$RELEASE/deploy/caddy/Caddyfile \
   /etc/caddy/Caddyfile
-sudoedit /etc/caddy/Caddyfile
+sudo nano /etc/caddy/Caddyfile
+~~~
+
+进入 nano 后只修改以下内容：
+
+1. 将 `email ops@example.com` 改成接收证书通知的真实邮箱。
+2. 将所有 `gateway.example.com` 改成你的真实域名。
+3. 保留 `127.0.0.1:8080`，不要改成公网地址。
+
+保存：按 `Ctrl+O`，回车确认；退出：按 `Ctrl+X`。然后回到 Linux
+终端执行：
+
+~~~bash
 sudo caddy fmt --overwrite /etc/caddy/Caddyfile
 sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl enable --now caddy
@@ -351,7 +537,8 @@ read -rp 'Administrator email: ' ADMIN_EMAIL
 read -rsp 'Administrator password: ' ADMIN_PASSWORD
 echo
 export ADMIN_EMAIL ADMIN_PASSWORD
-go run /opt/ai-token/current/cmd/bootstrap-admin
+cd /opt/ai-token/current
+/usr/local/go/bin/go run ./cmd/bootstrap-admin
 unset ADMIN_PASSWORD
 exit
 ~~~
@@ -442,10 +629,10 @@ sudo -u postgres dropdb ai_token_restore
 
 ## 13. 更新和回滚
 
-更新：
+更新前先把 `YOUR_RELEASE_TAG` 替换成新版本的真实 Git 标签：
 
 ~~~bash
-export RELEASE=YYYY-MM-DD.N
+export RELEASE=YOUR_RELEASE_TAG
 sudo -u postgres pg_dump -Fc -d ai_token \
   -f /var/backups/ai-token/pre-$RELEASE.dump
 
