@@ -38,3 +38,10 @@ test("home hash route is wired into the application", () => {
   assert.match(app, /raw === "" \|\| raw === "home"/);
   assert.match(app, /currentView === "home"/);
 });
+
+test("feature settings updates do not send read-only audit metadata", () => {
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  assert.match(app, /function featureSettingsUpdatePayload\(settings: FeatureSettings\)/);
+  assert.match(app, /body: JSON\.stringify\(featureSettingsUpdatePayload\(next\)\)/);
+  assert.doesNotMatch(app, /body: JSON\.stringify\(next\)/);
+});

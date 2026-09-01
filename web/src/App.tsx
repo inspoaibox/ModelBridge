@@ -438,6 +438,27 @@ function resolveFeatureSettingsError(
   }
 }
 
+function featureSettingsUpdatePayload(settings: FeatureSettings) {
+  return {
+    email_enabled: settings.email_enabled,
+    registration_enabled: settings.registration_enabled,
+    model_status_enabled: settings.model_status_enabled,
+    totp_enabled: settings.totp_enabled,
+    email_verification_enabled: settings.email_verification_enabled,
+    email_password_reset_enabled: settings.email_password_reset_enabled,
+    email_subscription_enabled: settings.email_subscription_enabled,
+    email_low_balance_alert_enabled: settings.email_low_balance_alert_enabled,
+    email_recharge_success_enabled: settings.email_recharge_success_enabled,
+    email_usage_limit_alert_enabled: settings.email_usage_limit_alert_enabled,
+    email_content_audit_enabled: settings.email_content_audit_enabled,
+    email_account_disabled_enabled: settings.email_account_disabled_enabled,
+    email_cyber_policy_enabled: settings.email_cyber_policy_enabled,
+    email_operations_enabled: settings.email_operations_enabled,
+    balance_threshold: settings.balance_threshold,
+    recharge_url: settings.recharge_url,
+  };
+}
+
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = window.localStorage.getItem("ai-token-theme");
@@ -1725,7 +1746,7 @@ export default function App() {
 				method: "PUT",
 				headers: { "Content-Type": "application/json", Accept: "application/json" },
 				credentials: "same-origin",
-				body: JSON.stringify(next),
+				body: JSON.stringify(featureSettingsUpdatePayload(next)),
 			});
 			const result = (await response.json().catch(() => ({}))) as FeatureSettings & { error?: string };
 			if (!response.ok) throw new Error(resolveFeatureSettingsError(response.status, result.error, t));
