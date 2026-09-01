@@ -201,8 +201,8 @@ migrations/
 - 管理员全局 MFA 默认关闭。开启前，所有 active 平台管理员都必须先完成个人 TOTP 绑定；管理员个人资料、密码、邮箱和 MFA 修改会使旧 Session 失效。
 - 改价、充值、渠道新增/编辑/暂停/启用/删除、Token 运营变更、管理员用户状态和系统设置写入都要求当前管理员通过 `X-MFA-Code` 提交一次性 TOTP Step-up。
 - 对于上游成功但没有可靠 Usage 的 `settlement_pending` 请求，管理员可在使用记录中核对真实计量后调用补结算接口；接口拒绝空计量，避免误记为 0 元。
-- 生产必须使用 HTTPS、`COOKIE_SECURE=true` 和明确的 `CORS_ALLOWED_ORIGINS`。SMTP 地址、发件人、用户名、密码和公开访问地址可由管理员在“系统设置”中配置，敏感密码使用 AES-GCM 保存；环境变量仍可作为首次启动兜底。
-- 生产必须显式设置 `REGISTRATION_ENABLED`。公开注册时必须同时设置 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`，并在系统设置或环境变量中配置 HTTPS 公开地址与 SMTP STARTTLS；注册接口另有 IP/邮箱节流。Captcha、Bot 防护和 WAF 仍应在 Caddy 前的 CDN/WAF 边缘层配置，不能由应用内置节流替代。
+- 生产必须使用 HTTPS、`COOKIE_SECURE=true` 和明确的 `CORS_ALLOWED_ORIGINS`。SMTP 地址、发件人、用户名、密码、公开访问地址和邮件模板由管理员在“系统设置 → 邮件设置”配置，敏感密码使用 AES-GCM 保存；标准部署不需要在环境文件填写 SMTP。
+- 生产必须显式设置 `REGISTRATION_ENABLED`。公开注册时必须同时设置 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`，并先在管理员后台配置 HTTPS 公开地址、SMTP STARTTLS、测试邮件和邮件功能开关；注册接口另有 IP/邮箱节流。Captcha、Bot 防护和 WAF 仍应在 Caddy 前的 CDN/WAF 边缘层配置，不能由应用内置节流替代。
 - 平台角色只能由 `platform_owner` 通过角色管理页面和对应 API 维护；角色权限不是管理员绑定权限，服务层会再次校验平台所有者身份，并保护最后一个有效平台管理员。
 - 生产在 Nginx 等反向代理后运行时，必须配置 `TRUSTED_PROXY_CIDRS`，仅信任这些代理追加的 `X-Forwarded-For`；这决定 Token IP 白名单和使用记录中的客户端 IP。
 - 生产应用进程必须监听回环地址（例如 `127.0.0.1:8080`），并按流式与媒体请求配置 `HTTP_READ_TIMEOUT`、`HTTP_WRITE_TIMEOUT`、`HTTP_IDLE_TIMEOUT`；默认写超时为 15 分钟。

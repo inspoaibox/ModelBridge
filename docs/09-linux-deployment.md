@@ -249,11 +249,13 @@ sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
 
 ### 第 2 步：执行检查并编译
 
-下面整段命令会切换到 `ai-token` 运行账号，下载依赖、检查代码、构建前端和后端。
-最后的 `exit` 会自动返回 root 终端：
+下面整段命令直接在 root 终端执行。它只会在执行期间临时使用 `ai-token`
+运行账号下载依赖和构建，完成后会自动回到 root；**不要手动切换到
+`ai-token` 账号**，也不要为它设置密码或 sudo 权限：
 
 ~~~bash
-sudo -u ai-token -H env RELEASE="$RELEASE" bash
+sudo -u ai-token -H env RELEASE="$RELEASE" bash -lc '
+set -e
 export PATH=/usr/local/go/bin:$PATH
 cd /opt/ai-token/releases/$RELEASE
 
@@ -274,7 +276,7 @@ cd ..
 mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 test -f web/dist/index.html
-exit
+'
 ~~~
 
 | 命令 | 在做什么 |
@@ -285,15 +287,19 @@ exit
 | `npm run lint`、`npm run typecheck`、`npm test` | 检查并构建 React 前端，生成 `web/dist`。 |
 | `go build ... -o bin/ai-token` | 生成真正运行的后端程序。 |
 
+命令成功后，你的提示符仍应是 `root@服务器:~#`，可以直接继续下一节。
+如果你之前已经误进入 `ai-token@服务器:...$`，先执行一次 `exit`，再运行
+`whoami`；只有输出 `root` 时，才可以编辑 `/etc/ai-token/ai-token.env`。
+
 任一步失败都不得继续发布。压缩包部署时，也必须先解压到
 `/opt/ai-token/releases/$RELEASE`，再从本节“第 2 步”开始执行。
 
 ## 6. 生产环境变量
 
-创建环境文件：
+创建环境文件。这一步必须在 root 提示符 `root@服务器:~#` 下执行：
 
 ~~~bash
-sudo nano /etc/ai-token/ai-token.env
+nano /etc/ai-token/ai-token.env
 ~~~
 
 进入 nano 后，把文件内容替换为下面的 `dotenv` 模板。`dotenv` 不是 Bash 命令。
@@ -320,18 +326,16 @@ CORS_ALLOWED_ORIGINS=https://gateway.example.com
 TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 
 REGISTRATION_ENABLED=false
-PUBLIC_BASE_URL=https://gateway.example.com
-SMTP_ADDR=smtp.example.com:587
-SMTP_FROM=no-reply@example.com
-SMTP_USERNAME=REPLACE_SMTP_USERNAME
-SMTP_PASSWORD=REPLACE_SMTP_PASSWORD
 ~~~
+
+**这里不填写 SMTP、发件人邮箱、邮件密码或 `PUBLIC_BASE_URL`。**
+这些内容在首次管理员登录后，从管理员后台“系统设置 → 邮件设置”配置。
 
 退出 nano 后，回到 Linux 终端设置文件所有者和权限：
 
 ~~~bash
-sudo chown root:ai-token /etc/ai-token/ai-token.env
-sudo chmod 0640 /etc/ai-token/ai-token.env
+chown root:ai-token /etc/ai-token/ai-token.env
+chmod 0640 /etc/ai-token/ai-token.env
 ~~~
 
 生成三组随机值时，立即存入安全密码管理器。前三条命令分别用于
@@ -352,10 +356,10 @@ openssl rand -hex 32
 | CORS_ALLOWED_ORIGINS | 精确 HTTPS 来源，逗号分隔，不使用通配符。 |
 | TRUSTED_PROXY_CIDRS | 只填写真实反向代理地址或网段，绝不能填写 0.0.0.0/0。 |
 | REGISTRATION_ENABLED | 生产必须显式设置；建议关闭，启用前部署邮箱验证、Captcha 和 WAF 限流。 |
-| PUBLIC_BASE_URL | HTTPS 站点地址，用于生成密码重置链接。 |
-| SMTP | 必须支持 STARTTLS，先用测试邮箱验证投递。 |
+| 邮件设置 | 不写入环境文件。首次管理员登录后在“系统设置 → 邮件设置”配置 HTTPS 公开地址、SMTP STARTTLS、发件人和模板。 |
 
-生产模式缺少数据库、密钥、CORS、注册开关、SMTP、公共地址或受信任代理配置时，应用将拒绝启动。
+生产模式缺少数据库、密钥、CORS、注册开关或受信任代理配置时，应用将拒绝启动。
+邮件服务默认关闭，不会阻止首次部署或管理员登录。
 
 ## 7. systemd
 
@@ -500,6 +504,11 @@ exit
 
 若工具显示 TOTP Secret，只能在安全终端中导入认证器并保存恢复方案。不要复制到聊天、工单或日志。
 
+首个管理员登录后，在“系统设置 → 邮件设置”填写 HTTPS 公开地址、SMTP 主机、
+端口、用户名、密码和发件人信息，并执行“测试连接”和“发送测试邮件”。
+然后在“系统设置 → 功能开关”开启邮件总开关和需要的邮件事件。SMTP 密码加密保存，
+邮件设置修改无需重启服务。
+
 ## 10. 上线验收
 
 ~~~bash
@@ -579,7 +588,7 @@ curl -fsS https://gateway.example.com/healthz
 | 服务无法启动 | journalctl、生产环境变量、web/dist、数据库连接和文件权限。 |
 | 页面空白或 404 | WEB_DIR、npm build、Nginx proxy_pass 和 systemd current 链接。 |
 | IP 白名单全部拒绝 | TRUSTED_PROXY_CIDRS、X-Forwarded-For、Nginx 是否同机监听。 |
-| 密码重置 503 | SMTP、PUBLIC_BASE_URL、环境文件权限和测试邮箱。 |
+| 密码重置 503 | 管理员后台“系统设置 → 邮件设置”的 SMTP、HTTPS 公开地址、测试邮件和邮件功能开关。 |
 | 注册不可用 | REGISTRATION_ENABLED；生产关闭公开注册是预期行为。 |
 | 迁移失败 | 停止服务、查看 PostgreSQL 日志、从备份恢复；不要手工删 schema_migrations。 |
 

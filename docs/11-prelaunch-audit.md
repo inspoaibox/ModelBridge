@@ -62,7 +62,7 @@
 
 1. 本机 `.env.local` 当前含开发数据库密码、Token Pepper、Session Pepper 和 MFA 加密密钥。它虽然未被 Git 跟踪，但所有这些值必须在生产重新生成；发布包、备份、截图、日志和 shell history 都不得包含它。
 2. 生产必须使用非超级用户 PostgreSQL 账号、`COOKIE_SECURE=true`、HTTPS、明确 `CORS_ALLOWED_ORIGINS`、回环 `HTTP_ADDR` 和明确 `TRUSTED_PROXY_CIDRS`。
-3. 开启公开注册时必须同时设置 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`，配置 HTTPS `PUBLIC_BASE_URL` 和可用的 SMTP STARTTLS，并在边缘配置 Captcha/WAF。
+3. 开启公开注册时必须同时设置 `REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true`，并在“系统设置 → 邮件设置”配置 HTTPS 公开地址和可用的 SMTP STARTTLS；同时在边缘配置 Captcha/WAF。
 4. 迁移必须执行到 `036_model_status_feature.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
 5. 生产应启用外部依赖漏洞扫描；本次使用官方 npm registry 检查生产依赖为 0 个已知漏洞，但仍不能替代发布镜像和运行环境扫描。
 

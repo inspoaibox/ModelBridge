@@ -297,12 +297,13 @@ sudo -u ai-token -H git -C /opt/ai-token/releases/$RELEASE rev-parse HEAD
 
 ### 第 2 步：执行检查并编译
 
-下面整段命令会切换到 `ai-token` 运行账号，下载依赖、检查代码、编译前端和后端。
-看到提示符变成类似 `ai-token@服务器:~$` 后属于正常情况；最后的 `exit`
-会自动返回 root 终端。
+下面整段命令直接在 root 终端执行。它只会在执行期间临时使用 `ai-token`
+运行账号下载依赖和构建，完成后会自动回到 root；**不要手动切换到
+`ai-token` 账号**，也不要为它设置密码或 sudo 权限。
 
 ~~~bash
-sudo -u ai-token -H env RELEASE="$RELEASE" bash
+sudo -u ai-token -H env RELEASE="$RELEASE" bash -lc '
+set -e
 export PATH=/usr/local/go/bin:$PATH
 cd /opt/ai-token/releases/$RELEASE
 
@@ -324,7 +325,7 @@ mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 chmod 0755 deploy/pm2/start.sh
 test -f web/dist/index.html
-exit
+'
 ~~~
 
 上面命令的作用：
@@ -342,20 +343,25 @@ exit
 | `go build ... -o bin/ai-token` | 生成实际运行的后端程序 `/opt/ai-token/releases/本次版本/bin/ai-token`。 |
 | `chmod 0755 .../start.sh` | 让 PM2 启动脚本可以执行。 |
 
+命令成功后，你的提示符仍应是 `root@服务器:~#`，可以直接继续第 6 节。
+如果你之前已经误进入 `ai-token@服务器:...$`，先执行一次 `exit`，再运行
+`whoami`；只有输出 `root` 时，才可以编辑 `/etc/ai-token/ai-token.env`。
+
 任何一条命令出现错误时，先停下来处理错误，不要跳过后面的检查继续上线。
 压缩包部署时，也必须先把压缩包解压到
 `/opt/ai-token/releases/$RELEASE`，再从本节“第 2 步”开始执行。
 
 ## 6. 完整生产环境文件
 
-创建 `/etc/ai-token/ai-token.env`。先在 Linux 终端执行：
+创建 `/etc/ai-token/ai-token.env`。这一步必须在 root 提示符
+`root@服务器:~#` 下执行：
 
 ~~~bash
-sudo nano /etc/ai-token/ai-token.env
+nano /etc/ai-token/ai-token.env
 ~~~
 
 进入 nano 后，把文件内容替换为下面的 `dotenv` 模板。
-`dotenv` 不是 Bash 命令。所有 `REPLACE_...`、域名和邮箱都必须替换：
+`dotenv` 不是 Bash 命令。所有 `REPLACE_...` 和域名都必须替换：
 
 ~~~dotenv
 APP_ENV=production
@@ -383,19 +389,17 @@ TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 REGISTRATION_ENABLED=false
 # Must be true when REGISTRATION_ENABLED=true in production.
 REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
-PUBLIC_BASE_URL=https://gateway.example.com
-SMTP_ADDR=smtp.example.com:587
-SMTP_FROM=no-reply@example.com
-SMTP_USERNAME=REPLACE_SMTP_USERNAME
-SMTP_PASSWORD=REPLACE_SMTP_PASSWORD
 ~~~
+
+**这里不填写 SMTP、发件人邮箱、邮件密码或 `PUBLIC_BASE_URL`。**
+这些内容在首次管理员登录后，从管理员后台的“系统设置 → 邮件设置”配置并加密保存。
 
 在 nano 中按 `Ctrl+O` 保存，回车确认文件名，再按 `Ctrl+X` 退出。
 回到 Linux 终端后，设置文件所有者和权限：
 
 ~~~bash
-sudo chown root:ai-token /etc/ai-token/ai-token.env
-sudo chmod 0640 /etc/ai-token/ai-token.env
+chown root:ai-token /etc/ai-token/ai-token.env
+chmod 0640 /etc/ai-token/ai-token.env
 ~~~
 
 生成随机密钥。前三条命令分别输出一个随机值，请依次填入环境文件对应的
@@ -420,17 +424,17 @@ openssl rand -hex 24
 立即保存到安全的密码管理器，不要提交到 Git。
 
 如果前面保存的只是模板，此时必须再次打开环境文件，把上述四个随机值、
-真实数据库密码、域名、邮箱和 SMTP 配置填入对应位置：
+真实数据库密码和域名填入对应位置：
 
 ~~~bash
-sudo nano /etc/ai-token/ai-token.env
+nano /etc/ai-token/ai-token.env
 ~~~
 
 保存按 `Ctrl+O`，回车确认；退出按 `Ctrl+X`。退出后再次确认文件权限：
 
 ~~~bash
-sudo chown root:ai-token /etc/ai-token/ai-token.env
-sudo chmod 0640 /etc/ai-token/ai-token.env
+chown root:ai-token /etc/ai-token/ai-token.env
+chmod 0640 /etc/ai-token/ai-token.env
 ~~~
 
 规则：
@@ -443,13 +447,11 @@ sudo chmod 0640 /etc/ai-token/ai-token.env
 | TRUSTED_PROXY_CIDRS | 同机 Caddy 使用 127.0.0.1/32,::1/128；绝不填写 0.0.0.0/0。 |
 | REGISTRATION_ENABLED | 必须显式设置，建议 false。开启公开注册前部署邮箱验证、Captcha 和 WAF。 |
 | REGISTRATION_EMAIL_VERIFICATION_REQUIRED | 生产公开注册必须为 `true`；否则应用拒绝启动。开发环境可按本机测试需要关闭。 |
-| PUBLIC_BASE_URL | HTTPS 站点地址，用于密码重置和邮箱验证链接；必须与实际访问域名一致。 |
-| SMTP | 必须同时配置地址、发件人并支持 STARTTLS；应用拒绝明文 SMTP。公开注册开启时必须可投递测试邮件。 |
+| 邮件设置 | 不写入环境文件。首次管理员登录后在“系统设置 → 邮件设置”配置 HTTPS 公开地址、SMTP STARTTLS、发件人和模板。 |
 | HTTP_WRITE_TIMEOUT | 默认 15 分钟，覆盖长响应和视频创建；不得设置为无限时长。 |
 
-生产模式缺少上述关键变量会拒绝启动。
-
-SMTP 也可以在管理员登录后通过“系统设置”写入数据库。环境变量适合作为首次启动兜底，但公开注册上线前仍必须在真实域名下完成一次注册、验证链接、重发邮件和登录验收。系统设置只返回 SMTP 密码是否已配置，不返回密码明文。
+生产模式缺少数据库、密钥、Cookie、CORS、可信代理或注册开关等核心变量会拒绝启动。
+邮件服务默认关闭，不会阻止首次部署或管理员登录。
 
 ## 7. Caddy 配置
 
@@ -557,14 +559,24 @@ exit
 
 `platform_owner` 定义不可编辑或停用，最后一个有效平台管理员不能被移除。自定义角色的权限或状态改变后，受影响管理员的旧后台 Session 会立即失效，必须重新登录。
 
-当需要开放客户注册时，先在“系统设置”填写 `PUBLIC_BASE_URL`、SMTP 地址、发件人、SMTP 用户名和密码并保存，然后在环境文件中设置：
+首个管理员登录后，先完成邮件系统配置：
+
+1. 进入“系统设置 → 邮件设置”，填写 HTTPS 公开地址、SMTP 主机、端口、用户名、密码、发件人邮箱和发件人名称。
+2. 点击“测试连接”和“发送测试邮件”，确认真实收件箱能收到邮件。
+3. 进入“系统设置 → 功能开关”，打开“邮件开关”，并按需开启邮箱验证、密码重置、余额提醒等事件开关。
+
+SMTP 密码使用数据库 AES-GCM 加密保存，接口和页面只显示“已配置”，不会返回明文。
+邮件设置更新会在下一封邮件立即生效，不需要重启 PM2。
+
+当需要开放客户注册时，确认上述邮件测试通过后，再编辑
+`/etc/ai-token/ai-token.env`，设置：
 
 ~~~dotenv
 REGISTRATION_ENABLED=true
 REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
 ~~~
 
-重载应用后执行以下验收：
+保存环境文件后执行 `sudo systemctl restart ai-token-pm2`，再执行以下验收：
 
 1. 使用未注册邮箱注册，确认返回待验证提示，不能直接登录。
 2. 使用真实邮件中的一次性链接验证，确认账号变为可登录状态。
@@ -665,9 +677,9 @@ curl -fsS https://gateway.example.com/healthz
 | Caddy 无法申请证书 | 检查 DNS、80/443、防火墙、Caddy 日志和域名是否被其他服务占用。 |
 | PM2 反复重启 | 查看 pm2 logs 和环境文件权限；确认 current/bin/ai-token 存在。 |
 | Token IP 白名单失败 | 检查 TRUSTED_PROXY_CIDRS、Caddy header_up 和应用是否只监听 127.0.0.1。 |
-| 密码重置 503 | 检查 SMTP STARTTLS、PUBLIC_BASE_URL、SMTP_FROM 和环境变量。 |
+| 密码重置 503 | 进入“系统设置 → 邮件设置”检查 SMTP、HTTPS 公开地址和测试邮件；再检查功能开关中的邮件与密码重置事件是否开启。 |
 | 注册不可用 | 检查 REGISTRATION_ENABLED、REGISTRATION_EMAIL_VERIFICATION_REQUIRED、数据库迁移版本和系统设置；生产关闭公开注册是预期行为。 |
-| 注册后无法登录 | 检查账号是否仍为 `pending`，重新发送验证邮件并检查 SMTP 投递、PUBLIC_BASE_URL 和链接有效期。 |
+| 注册后无法登录 | 检查账号是否仍为 `pending`，重新发送验证邮件并检查 SMTP 投递、管理员后台的 HTTPS 公开地址和链接有效期。 |
 | 页面 502 | 检查 pm2 status、127.0.0.1:8080 healthz、Caddy 日志。 |
 | 迁移失败 | 停止 PM2、查看 PostgreSQL 日志、从备份恢复，不要修改迁移记录。 |
 

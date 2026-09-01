@@ -76,6 +76,6 @@ Token 价格按 USD / 1M Token 展示；非 Token 组件按自身单位展示，
 2. 生产设置 `COOKIE_SECURE=true`，通过 TLS 反向代理部署，并配置明确的 `CORS_ALLOWED_ORIGINS`。
 3. 运行 `go test ./...`、`go vet ./...` 和 `cd web; npm run build`。
 4. 用真实管理员完成 TOTP 绑定后再开启全局管理员 MFA，并为所有管理员准备恢复流程。
-5. 开启公开注册前配置 SMTP、HTTPS `PUBLIC_BASE_URL` 和邮箱验证，并在边缘层启用 Captcha/WAF。
+5. 开启公开注册前，在“系统设置 → 邮件设置”配置 HTTPS 公开地址、SMTP STARTTLS 和邮箱验证，并在边缘层启用 Captcha/WAF。
 6. 验证 Token 白名单、过期、撤销、RPM/TPM/并发限制、分组兜底和账务幂等。
 7. 对 Anthropic 专用 Embeddings、完整 Responses 高级事件和其他未实现能力不要在客户文档或首页承诺为已支持功能。
