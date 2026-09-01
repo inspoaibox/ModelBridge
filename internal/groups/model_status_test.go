@@ -4,21 +4,22 @@ import "testing"
 
 func TestModelRouteStatus(t *testing.T) {
 	tests := []struct {
-		name                         string
-		groupStatus                  string
-		totalRoutes, available, seen int
-		want                         string
+		name                                   string
+		groupStatus                            string
+		totalRoutes, available, degraded, seen int
+		want                                   string
 	}{
 		{name: "disabled group", groupStatus: StatusDisabled, totalRoutes: 1, available: 1, seen: 1, want: "disabled"},
 		{name: "no routes", groupStatus: StatusActive, want: "unavailable"},
 		{name: "all routes unavailable", groupStatus: StatusActive, totalRoutes: 2, available: 0, seen: 2, want: "unavailable"},
 		{name: "partial routes", groupStatus: StatusActive, totalRoutes: 2, available: 1, seen: 2, want: "degraded"},
+		{name: "degraded route", groupStatus: StatusActive, totalRoutes: 1, available: 1, degraded: 1, seen: 1, want: "degraded"},
 		{name: "not observed", groupStatus: StatusActive, totalRoutes: 2, available: 2, seen: 1, want: "pending"},
 		{name: "normal", groupStatus: StatusActive, totalRoutes: 2, available: 2, seen: 2, want: "normal"},
 	}
 	for _, item := range tests {
 		t.Run(item.name, func(t *testing.T) {
-			if got := modelRouteStatus(item.groupStatus, item.totalRoutes, item.available, item.seen); got != item.want {
+			if got := modelRouteStatus(item.groupStatus, item.totalRoutes, item.available, item.degraded, item.seen); got != item.want {
 				t.Fatalf("model route status = %q, want %q", got, item.want)
 			}
 		})

@@ -174,7 +174,73 @@ function FeatureTab({ t, featureSettings: settings, featureBusy: busy, featureMe
     { key: "email_cyber_policy_enabled", label: "featureEmailCyberPolicy", description: "featureEmailCyberPolicyHint" },
     { key: "email_operations_enabled", label: "featureEmailOperations", description: "featureEmailOperationsHint" },
   ];
-  return <Card className="border-amber-500/20"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ToggleRight className="h-5 w-5 text-amber-600" />{t("featureSettingsTitle")}</CardTitle><CardDescription>{t("featureSettingsDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={(event) => { event.preventDefault(); void save(draft); }}><div className="flex flex-col gap-4 rounded-xl border border-amber-500/30 bg-amber-50/70 p-4 dark:bg-amber-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureEmailMaster")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureEmailMasterHint")}</p></div><Switch checked={draft.email_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, email_enabled: checked }))} disabled={busy || !canUpdate} /></div><div className="flex flex-col gap-4 rounded-xl border border-emerald-500/30 bg-emerald-50/70 p-4 dark:bg-emerald-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureTOTP")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureTOTPHint")}</p></div><Switch checked={draft.totp_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, totp_enabled: checked }))} disabled={busy || !canUpdate} /></div><div className="flex flex-col gap-4 rounded-xl border border-indigo-500/30 bg-indigo-50/70 p-4 dark:bg-indigo-500/10 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureModelStatus")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureModelStatusHint")}</p></div><Switch checked={draft.model_status_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, model_status_enabled: checked }))} disabled={busy || !canUpdate} /></div><div className="grid gap-3 md:grid-cols-2">{items.map((item) => <div key={item.key} className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/30"><div className="min-w-0"><div className="text-sm font-semibold text-slate-900 dark:text-white">{t(item.label)}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t(item.description)}</p></div><Switch checked={Boolean(draft[item.key])} onCheckedChange={(checked) => setDraft((current) => ({ ...current, [item.key]: checked }))} disabled={busy || !canUpdate} /></div>)}</div><div className="grid gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="balance-threshold">{t("featureBalanceThreshold")}</Label><Input id="balance-threshold" inputMode="decimal" value={draft.balance_threshold} onChange={(event) => setDraft((current) => ({ ...current, balance_threshold: event.target.value }))} disabled={busy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("featureBalanceThresholdHint")}</p></div><div className="space-y-2"><Label htmlFor="recharge-url">{t("featureRechargeURL")}</Label><Input id="recharge-url" type="url" value={draft.recharge_url} onChange={(event) => setDraft((current) => ({ ...current, recharge_url: event.target.value }))} placeholder="https://aokede.com" disabled={busy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("featureRechargeURLHint")}</p></div></div>{message.text ? <Notice message={message} /> : null}<div className="flex justify-end"><Button type="submit" disabled={busy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{busy ? t("featureSettingsSaving") : t("featureSettingsSave")}</Button></div></form></CardContent></Card>;
+  const stepUpPolicies: Array<{ key: keyof FeatureSettings; label: TranslationKey; description: TranslationKey }> = [
+    { key: "step_up_channel_model_enabled", label: "featureStepUpChannelModel", description: "featureStepUpChannelModelHint" },
+    { key: "step_up_group_enabled", label: "featureStepUpGroup", description: "featureStepUpGroupHint" },
+    { key: "step_up_token_enabled", label: "featureStepUpToken", description: "featureStepUpTokenHint" },
+    { key: "step_up_user_enabled", label: "featureStepUpUser", description: "featureStepUpUserHint" },
+    { key: "step_up_role_enabled", label: "featureStepUpRole", description: "featureStepUpRoleHint" },
+    { key: "step_up_billing_enabled", label: "featureStepUpBilling", description: "featureStepUpBillingHint" },
+    { key: "step_up_system_enabled", label: "featureStepUpSystem", description: "featureStepUpSystemHint" },
+  ];
+
+  return (
+    <Card className="border-amber-500/20">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg"><ToggleRight className="h-5 w-5 text-amber-600" />{t("featureSettingsTitle")}</CardTitle>
+        <CardDescription>{t("featureSettingsDescription")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); void save(draft); }}>
+          <div className="flex flex-col gap-4 rounded-xl border border-amber-500/30 bg-amber-50/70 p-4 dark:bg-amber-500/10 sm:flex-row sm:items-center sm:justify-between">
+            <div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureEmailMaster")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureEmailMasterHint")}</p></div>
+            <Switch checked={draft.email_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, email_enabled: checked }))} disabled={busy || !canUpdate} />
+          </div>
+          <div className="flex flex-col gap-4 rounded-xl border border-emerald-500/30 bg-emerald-50/70 p-4 dark:bg-emerald-500/10 sm:flex-row sm:items-center sm:justify-between">
+            <div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureTOTP")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureTOTPHint")}</p></div>
+            <Switch checked={draft.totp_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, totp_enabled: checked }))} disabled={busy || !canUpdate} />
+          </div>
+          {draft.totp_enabled ? (
+            <section className="space-y-4 rounded-xl border border-emerald-500/25 bg-emerald-50/40 p-4 dark:bg-emerald-500/5">
+              <div>
+                <div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureStepUpPoliciesTitle")}</div>
+                <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureStepUpPoliciesDescription")}</p>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {stepUpPolicies.map((item) => (
+                  <div key={item.key} className="flex items-center justify-between gap-4 rounded-xl border border-emerald-500/20 bg-white/80 p-4 dark:border-emerald-500/15 dark:bg-slate-950/30">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-white">{t(item.label)}</div>
+                      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t(item.description)}</p>
+                    </div>
+                    <Switch checked={Boolean(draft[item.key])} onCheckedChange={(checked) => setDraft((current) => ({ ...current, [item.key]: checked }))} disabled={busy || !canUpdate} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          <div className="flex flex-col gap-4 rounded-xl border border-indigo-500/30 bg-indigo-50/70 p-4 dark:bg-indigo-500/10 sm:flex-row sm:items-center sm:justify-between">
+            <div><div className="text-sm font-bold text-slate-900 dark:text-white">{t("featureModelStatus")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("featureModelStatusHint")}</p></div>
+            <Switch checked={draft.model_status_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, model_status_enabled: checked }))} disabled={busy || !canUpdate} />
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {items.map((item) => (
+              <div key={item.key} className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/30">
+                <div className="min-w-0"><div className="text-sm font-semibold text-slate-900 dark:text-white">{t(item.label)}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t(item.description)}</p></div>
+                <Switch checked={Boolean(draft[item.key])} onCheckedChange={(checked) => setDraft((current) => ({ ...current, [item.key]: checked }))} disabled={busy || !canUpdate} />
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:grid-cols-2">
+            <div className="space-y-2"><Label htmlFor="balance-threshold">{t("featureBalanceThreshold")}</Label><Input id="balance-threshold" inputMode="decimal" value={draft.balance_threshold} onChange={(event) => setDraft((current) => ({ ...current, balance_threshold: event.target.value }))} disabled={busy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("featureBalanceThresholdHint")}</p></div>
+            <div className="space-y-2"><Label htmlFor="recharge-url">{t("featureRechargeURL")}</Label><Input id="recharge-url" type="url" value={draft.recharge_url} onChange={(event) => setDraft((current) => ({ ...current, recharge_url: event.target.value }))} placeholder="https://aokede.com" disabled={busy || !canUpdate} /><p className="text-xs text-slate-500 dark:text-slate-400">{t("featureRechargeURLHint")}</p></div>
+          </div>
+          {message.text ? <Notice message={message} /> : null}
+          <div className="flex justify-end"><Button type="submit" disabled={busy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{busy ? t("featureSettingsSaving") : t("featureSettingsSave")}</Button></div>
+        </form>
+      </CardContent>
+    </Card>
+  );
 }
 
 function InputField({ id, label, value, onChange, type = "text", disabled = false, required = false }: { id: string; label: string; value: string; onChange: (value: string) => void; type?: string; disabled?: boolean; required?: boolean }) {

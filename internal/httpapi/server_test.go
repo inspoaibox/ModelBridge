@@ -317,6 +317,65 @@ func TestSensitiveAdminRoutesRequireStepUpMFA(t *testing.T) {
 	}
 }
 
+func TestAdminStepUpUsesOperationPolicy(t *testing.T) {
+	verifier := &fakeStepUpVerifier{}
+	settings := &fakeSystemSettingsService{
+		features: adminsettings.FeatureSettings{
+			TOTPEnabled:          true,
+			StepUpBillingEnabled: false,
+		},
+	}
+	handler := NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSync(
+		auth.NewMiddleware(testResolver{
+			"billing-admin": {
+				ID:       "11111111-1111-4111-8111-111111111111",
+				Type:     auth.PrincipalPlatformUser,
+				Audience: auth.AudienceAdmin,
+				Permissions: map[string]struct{}{
+					"price:publish": {},
+				},
+			},
+		}),
+		&auth.Services{StepUpMFA: verifier, SecuritySettings: settings},
+		nil,
+		false,
+		"../../web",
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		fakeBillingAdminService{},
+	)
+
+	withoutPolicy := httptest.NewRequest(http.MethodPost, "/admin/v1/prices/publish", strings.NewReader(`{"scope_type":"platform_default"}`))
+	withoutPolicy.Header.Set("Authorization", "Bearer billing-admin")
+	withoutPolicyRec := httptest.NewRecorder()
+	handler.ServeHTTP(withoutPolicyRec, withoutPolicy)
+	if withoutPolicyRec.Code != http.StatusCreated || verifier.calls != 0 {
+		t.Fatalf("disabled billing policy must not require step-up, got %d: %s calls=%d", withoutPolicyRec.Code, withoutPolicyRec.Body.String(), verifier.calls)
+	}
+
+	settings.features.StepUpBillingEnabled = true
+	missingCode := httptest.NewRequest(http.MethodPost, "/admin/v1/prices/publish", strings.NewReader(`{"scope_type":"platform_default"}`))
+	missingCode.Header.Set("Authorization", "Bearer billing-admin")
+	missingCodeRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingCodeRec, missingCode)
+	if missingCodeRec.Code != http.StatusForbidden || !strings.Contains(missingCodeRec.Body.String(), `"error":"STEP_UP_REQUIRED"`) {
+		t.Fatalf("enabled billing policy must require step-up, got %d: %s", missingCodeRec.Code, missingCodeRec.Body.String())
+	}
+
+	withCode := httptest.NewRequest(http.MethodPost, "/admin/v1/prices/publish", strings.NewReader(`{"scope_type":"platform_default"}`))
+	withCode.Header.Set("Authorization", "Bearer billing-admin")
+	withCode.Header.Set("X-MFA-Code", "123456")
+	withCodeRec := httptest.NewRecorder()
+	handler.ServeHTTP(withCodeRec, withCode)
+	if withCodeRec.Code != http.StatusCreated || verifier.calls != 1 {
+		t.Fatalf("enabled billing policy with a code must reach handler, got %d: %s calls=%d", withCodeRec.Code, withCodeRec.Body.String(), verifier.calls)
+	}
+}
+
 func TestLoginRouteDoesNotAcceptUnknownFields(t *testing.T) {
 	handler := New(auth.NewMiddleware(testResolver{}), &auth.Services{Login: fakeLoginService{}}, false, "../../web")
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", strings.NewReader(
@@ -1210,6 +1269,77 @@ func TestAdminModelStatusRouteRequiresOperationsPermission(t *testing.T) {
 	}
 }
 
+func TestAdminModelMonitorRoutesRequirePermissionAndConfiguredStepUp(t *testing.T) {
+	settings := &fakeSystemSettingsService{
+		features: adminsettings.FeatureSettings{
+			TOTPEnabled:               true,
+			StepUpChannelModelEnabled: true,
+		},
+	}
+	stepUp := &fakeStepUpVerifier{}
+	groupService := &fakeModelMonitorGroupService{}
+	handler := NewWithRelayAndGroups(
+		auth.NewMiddleware(testResolver{
+			"admin-monitor-read": {
+				ID:       "admin-1",
+				Type:     auth.PrincipalPlatformUser,
+				Audience: auth.AudienceAdmin,
+				Permissions: map[string]struct{}{
+					"operations:read": {},
+				},
+			},
+			"admin-monitor-write": {
+				ID:       "admin-2",
+				Type:     auth.PrincipalPlatformUser,
+				Audience: auth.AudienceAdmin,
+				Permissions: map[string]struct{}{
+					"operations:read":   {},
+					"operations:update": {},
+				},
+			},
+		}),
+		&auth.Services{SecuritySettings: settings, StepUpMFA: stepUp},
+		nil,
+		false,
+		"../../web",
+		groupService,
+	)
+
+	read := httptest.NewRequest(http.MethodGet, "/admin/v1/model-monitors", nil)
+	read.Header.Set("Authorization", "Bearer admin-monitor-read")
+	readRecord := httptest.NewRecorder()
+	handler.ServeHTTP(readRecord, read)
+	if readRecord.Code != http.StatusOK {
+		t.Fatalf("monitor read should be allowed, got %d: %s", readRecord.Code, readRecord.Body.String())
+	}
+
+	body := `{"group_id":"11111111-1111-4111-8111-111111111111","name":"Primary","selection_mode":"all","mode":"passive","enabled":true}`
+	denied := httptest.NewRequest(http.MethodPost, "/admin/v1/model-monitors", strings.NewReader(body))
+	denied.Header.Set("Authorization", "Bearer admin-monitor-read")
+	deniedRecord := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRecord, denied)
+	if deniedRecord.Code != http.StatusForbidden {
+		t.Fatalf("monitor write without permission should be rejected, got %d", deniedRecord.Code)
+	}
+
+	missingStepUp := httptest.NewRequest(http.MethodPost, "/admin/v1/model-monitors", strings.NewReader(body))
+	missingStepUp.Header.Set("Authorization", "Bearer admin-monitor-write")
+	missingStepUpRecord := httptest.NewRecorder()
+	handler.ServeHTTP(missingStepUpRecord, missingStepUp)
+	if missingStepUpRecord.Code != http.StatusForbidden || !strings.Contains(missingStepUpRecord.Body.String(), `"error":"STEP_UP_REQUIRED"`) {
+		t.Fatalf("monitor write without step-up should be rejected, got %d: %s", missingStepUpRecord.Code, missingStepUpRecord.Body.String())
+	}
+
+	allowed := httptest.NewRequest(http.MethodPost, "/admin/v1/model-monitors", strings.NewReader(body))
+	allowed.Header.Set("Authorization", "Bearer admin-monitor-write")
+	allowed.Header.Set("X-MFA-Code", "123456")
+	allowedRecord := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRecord, allowed)
+	if allowedRecord.Code != http.StatusCreated || groupService.createdBy != "admin-2" || stepUp.calls != 1 {
+		t.Fatalf("monitor write with step-up should succeed, got %d: %s calls=%d", allowedRecord.Code, allowedRecord.Body.String(), stepUp.calls)
+	}
+}
+
 func TestAdminSecuritySettingsRoutes(t *testing.T) {
 	settings := &fakeSecuritySettingsService{enabled: false}
 	handler := New(auth.NewMiddleware(testResolver{
@@ -1989,8 +2119,59 @@ type fakeGroupService struct {
 	createdBy string
 }
 
+type fakeModelMonitorGroupService struct {
+	fakeGroupService
+	createdBy string
+	item      groups.ModelMonitor
+}
+
 func (s *fakeGroupService) List(context.Context) ([]groups.Summary, error) {
 	return []groups.Summary{}, nil
+}
+
+func (s *fakeModelMonitorGroupService) ListAdminModelMonitors(context.Context) ([]groups.ModelMonitor, error) {
+	if s.item.ID == "" {
+		s.item = groups.ModelMonitor{
+			ID: "monitor-1", GroupID: "group-1", GroupCode: "standard", GroupName: "Standard",
+			Name: "Primary", SelectionMode: groups.MonitorSelectionAll, Mode: groups.MonitorModePassive,
+			ProbeIntervalSeconds: 300, Enabled: true, ModelNames: []string{"gpt-5"},
+		}
+	}
+	return []groups.ModelMonitor{s.item}, nil
+}
+
+func (s *fakeModelMonitorGroupService) CreateAdminModelMonitor(_ context.Context, actorID string, request groups.ModelMonitorMutation) (groups.ModelMonitor, error) {
+	s.createdBy = actorID
+	s.item = groups.ModelMonitor{
+		ID: "monitor-1", GroupID: request.GroupID, GroupCode: "standard", GroupName: "Standard",
+		Name: request.Name, SelectionMode: request.SelectionMode, Mode: request.Mode,
+		ProbeIntervalSeconds: request.ProbeIntervalSeconds, Enabled: request.Enabled,
+		ModelNames: request.ModelNames,
+	}
+	return s.item, nil
+}
+
+func (s *fakeModelMonitorGroupService) UpdateAdminModelMonitor(context.Context, string, string, groups.ModelMonitorMutation) (groups.ModelMonitor, error) {
+	return s.item, nil
+}
+
+func (*fakeModelMonitorGroupService) DeleteAdminModelMonitor(context.Context, string, string) error {
+	return nil
+}
+
+func (*fakeModelMonitorGroupService) ClaimDueActiveModelMonitor(context.Context) (*groups.ModelMonitor, error) {
+	return nil, nil
+}
+
+func (s *fakeModelMonitorGroupService) ClaimActiveModelMonitor(context.Context, string) (*groups.ModelMonitor, error) {
+	if s.item.ID == "" {
+		return nil, groups.ErrMonitorNotFound
+	}
+	return &s.item, nil
+}
+
+func (*fakeModelMonitorGroupService) CompleteActiveModelMonitor(context.Context, string, string, string) error {
+	return nil
 }
 
 func (*fakeGroupService) ListModelStatuses(context.Context, string) (groups.ModelStatusReport, error) {

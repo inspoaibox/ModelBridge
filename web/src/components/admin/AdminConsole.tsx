@@ -55,6 +55,8 @@ import {
   PriceMatrixSummary,
   OperationsSnapshot,
   ModelStatusReport,
+  ModelMonitor,
+  ModelMonitorFormState,
   AuditReport,
   Principal,
   ProfileFormState,
@@ -230,6 +232,19 @@ interface AdminConsoleProps {
   adminModelStatusBusy: boolean;
   adminModelStatusMessage: LoginMessage;
   refreshAdminModelStatus: (showPending?: boolean) => Promise<void>;
+  adminModelMonitors: ModelMonitor[];
+  adminModelMonitorsBusy: boolean;
+  adminModelMonitorsMessage: LoginMessage;
+  adminModelMonitorFormOpen: boolean;
+  adminModelMonitorForm: ModelMonitorFormState;
+  setAdminModelMonitorForm: React.Dispatch<React.SetStateAction<ModelMonitorFormState>>;
+  adminModelMonitorActionBusy: string;
+  openCreateAdminModelMonitor: () => void;
+  openEditAdminModelMonitor: (monitor: ModelMonitor) => void;
+  closeAdminModelMonitorForm: () => void;
+  saveAdminModelMonitor: (form: ModelMonitorFormState) => Promise<boolean>;
+  deleteAdminModelMonitor: (monitor: ModelMonitor) => Promise<void>;
+  probeAdminModelMonitor: (monitor: ModelMonitor) => Promise<void>;
   auditReport: AuditReport | null;
   auditBusy: boolean;
   auditMessage: LoginMessage;
@@ -388,6 +403,19 @@ export function AdminConsole({
   adminModelStatusBusy,
   adminModelStatusMessage,
   refreshAdminModelStatus,
+  adminModelMonitors,
+  adminModelMonitorsBusy,
+  adminModelMonitorsMessage,
+  adminModelMonitorFormOpen,
+  adminModelMonitorForm,
+  setAdminModelMonitorForm,
+  adminModelMonitorActionBusy,
+  openCreateAdminModelMonitor,
+  openEditAdminModelMonitor,
+  closeAdminModelMonitorForm,
+  saveAdminModelMonitor,
+  deleteAdminModelMonitor,
+  probeAdminModelMonitor,
   auditReport,
   auditBusy,
   auditMessage,
@@ -819,6 +847,20 @@ export function AdminConsole({
             busy={adminModelStatusBusy}
             message={adminModelStatusMessage}
             refresh={refreshAdminModelStatus}
+            groups={groups}
+            monitors={adminModelMonitors}
+            monitorsBusy={adminModelMonitorsBusy}
+            monitorsMessage={adminModelMonitorsMessage}
+            formOpen={adminModelMonitorFormOpen}
+            form={adminModelMonitorForm}
+            setForm={setAdminModelMonitorForm}
+            actionBusy={adminModelMonitorActionBusy}
+            openCreate={openCreateAdminModelMonitor}
+            openEdit={openEditAdminModelMonitor}
+            closeForm={closeAdminModelMonitorForm}
+            save={saveAdminModelMonitor}
+            remove={deleteAdminModelMonitor}
+            probe={probeAdminModelMonitor}
           />
         )}
 

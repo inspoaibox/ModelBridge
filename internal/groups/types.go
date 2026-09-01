@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"ai-token/internal/ids"
 )
 
 var (
@@ -15,6 +17,11 @@ var (
 	ErrChannelNotFound       = errors.New("group channel is not found")
 	ErrDefaultGroupProtected = errors.New("default group is protected")
 	ErrGroupInUse            = errors.New("group is assigned to active tokens")
+	ErrMonitorNotFound       = errors.New("model monitor is not found")
+	ErrMonitorInUse          = errors.New("group already has a model monitor")
+	ErrMonitorBusy           = errors.New("model monitor is already probing")
+	ErrMonitorGroupInactive  = errors.New("model monitor group is inactive")
+	ErrMonitorModeInvalid    = errors.New("active probing is not enabled for this monitor")
 )
 
 const (
@@ -60,6 +67,46 @@ type TokenGroupSummary struct {
 
 type TokenGroupLister interface {
 	ListTokenGroups(context.Context) ([]TokenGroupSummary, error)
+}
+
+type ModelMonitor struct {
+	ID                   string     `json:"id"`
+	GroupID              string     `json:"group_id"`
+	GroupCode            string     `json:"group_code"`
+	GroupName            string     `json:"group_name"`
+	Name                 string     `json:"name"`
+	SelectionMode        string     `json:"selection_mode"`
+	Mode                 string     `json:"mode"`
+	ProbeIntervalSeconds int        `json:"probe_interval_seconds"`
+	Enabled              bool       `json:"enabled"`
+	ModelNames           []string   `json:"model_names"`
+	AvailableModels      []string   `json:"available_models"`
+	LastProbeStartedAt   *time.Time `json:"last_probe_started_at,omitempty"`
+	LastProbeFinishedAt  *time.Time `json:"last_probe_finished_at,omitempty"`
+	LastProbeStatus      string     `json:"last_probe_status"`
+	LastProbeError       string     `json:"last_probe_error,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+type ModelMonitorMutation struct {
+	GroupID              string   `json:"group_id"`
+	Name                 string   `json:"name"`
+	SelectionMode        string   `json:"selection_mode"`
+	ModelNames           []string `json:"model_names"`
+	Mode                 string   `json:"mode"`
+	ProbeIntervalSeconds int      `json:"probe_interval_seconds"`
+	Enabled              bool     `json:"enabled"`
+}
+
+type ModelMonitorService interface {
+	ListAdminModelMonitors(context.Context) ([]ModelMonitor, error)
+	CreateAdminModelMonitor(context.Context, string, ModelMonitorMutation) (ModelMonitor, error)
+	UpdateAdminModelMonitor(context.Context, string, string, ModelMonitorMutation) (ModelMonitor, error)
+	DeleteAdminModelMonitor(context.Context, string, string) error
+	ClaimDueActiveModelMonitor(context.Context) (*ModelMonitor, error)
+	ClaimActiveModelMonitor(context.Context, string) (*ModelMonitor, error)
+	CompleteActiveModelMonitor(context.Context, string, string, string) error
 }
 
 type Mutation struct {
@@ -152,6 +199,69 @@ func cleanIDs(values []string) []string {
 	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+const (
+	MonitorSelectionAll      = "all"
+	MonitorSelectionSelected = "selected"
+	MonitorModePassive       = "passive"
+	MonitorModeActive        = "active"
+	MonitorProbeSuccess      = "success"
+	MonitorProbeFailed       = "failed"
+	MonitorProbeSkipped      = "skipped"
+)
+
+func (m ModelMonitorMutation) validate() (ModelMonitorMutation, error) {
+	m.GroupID = strings.TrimSpace(m.GroupID)
+	m.Name = strings.TrimSpace(m.Name)
+	m.SelectionMode = strings.ToLower(strings.TrimSpace(m.SelectionMode))
+	m.Mode = strings.ToLower(strings.TrimSpace(m.Mode))
+	m.ModelNames = cleanModelNames(m.ModelNames)
+	if m.SelectionMode == "" {
+		m.SelectionMode = MonitorSelectionAll
+	}
+	if m.Mode == "" {
+		m.Mode = MonitorModePassive
+	}
+	if m.ProbeIntervalSeconds == 0 {
+		m.ProbeIntervalSeconds = 300
+	}
+	if m.GroupID == "" || !ids.Valid(m.GroupID) || m.Name == "" || len(m.Name) > 128 {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if m.SelectionMode != MonitorSelectionAll && m.SelectionMode != MonitorSelectionSelected {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if m.Mode != MonitorModePassive && m.Mode != MonitorModeActive {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if m.ProbeIntervalSeconds < 60 || m.ProbeIntervalSeconds > 86400 {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if m.SelectionMode == MonitorSelectionSelected && len(m.ModelNames) == 0 {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if m.SelectionMode == MonitorSelectionAll {
+		m.ModelNames = nil
+	}
+	return m, nil
+}
+
+func cleanModelNames(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 256 {
 			continue
 		}
 		if _, ok := seen[value]; ok {

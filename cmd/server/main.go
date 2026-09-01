@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -211,6 +212,11 @@ func main() {
 		}); ok {
 			go runMediaJobReconciler(ctx, reconciler)
 		}
+		if monitorService, ok := groupService.(groups.ModelMonitorService); ok {
+			if prober, ok := relayService.(relay.ModelProbeService); ok {
+				go runModelMonitorProber(ctx, monitorService, prober)
+			}
+		}
 		tokenResolver = resolver
 		sessionResolver = resolver
 		services = auth.Services{
@@ -284,6 +290,64 @@ func runMediaJobReconciler(ctx context.Context, reconciler interface {
 			if err := reconciler.ReconcileMediaJobs(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("media job reconciler: %v", err)
 			}
+		}
+	}
+}
+
+func runModelMonitorProber(
+	ctx context.Context,
+	monitors groups.ModelMonitorService,
+	prober relay.ModelProbeService,
+) {
+	run := func() {
+		for {
+			monitor, err := monitors.ClaimDueActiveModelMonitor(ctx)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					log.Printf("model monitor claim failed: %v", err)
+				}
+				return
+			}
+			if monitor == nil {
+				return
+			}
+			status := groups.MonitorProbeSuccess
+			var failures []string
+			supported := 0
+			for _, model := range monitor.ModelNames {
+				probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				err := prober.ProbeModel(probeCtx, monitor.GroupID, model)
+				cancel()
+				if errors.Is(err, relay.ErrUnsupportedFeature) {
+					continue
+				}
+				supported++
+				if err != nil {
+					failures = append(failures, model+": "+err.Error())
+				}
+			}
+			if supported == 0 {
+				status = groups.MonitorProbeSkipped
+			} else if len(failures) > 0 {
+				status = groups.MonitorProbeFailed
+			}
+			probeError := strings.Join(failures, "; ")
+			if err := monitors.CompleteActiveModelMonitor(ctx, monitor.ID, status, probeError); err != nil &&
+				!errors.Is(err, context.Canceled) {
+				log.Printf("model monitor completion failed: %v", err)
+			}
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
 		}
 	}
 }

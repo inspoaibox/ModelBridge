@@ -33,16 +33,25 @@ type ModelStatus struct {
 }
 
 type ModelStatusGroup struct {
-	ID          string        `json:"group_id"`
-	Code        string        `json:"group_code"`
-	Name        string        `json:"group_name"`
-	Status      string        `json:"status"`
-	GroupStatus string        `json:"group_status"`
-	Multiplier  string        `json:"multiplier"`
-	RPMLimit    int           `json:"rpm_limit"`
-	BillingType string        `json:"billing_type"`
-	Models      []ModelStatus `json:"models"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	ID                   string        `json:"group_id"`
+	Code                 string        `json:"group_code"`
+	Name                 string        `json:"group_name"`
+	Status               string        `json:"status"`
+	GroupStatus          string        `json:"group_status"`
+	Multiplier           string        `json:"multiplier"`
+	RPMLimit             int           `json:"rpm_limit"`
+	BillingType          string        `json:"billing_type"`
+	MonitorID            string        `json:"monitor_id,omitempty"`
+	MonitorName          string        `json:"monitor_name,omitempty"`
+	MonitorMode          string        `json:"monitor_mode,omitempty"`
+	SelectionMode        string        `json:"selection_mode,omitempty"`
+	ProbeIntervalSeconds int           `json:"probe_interval_seconds,omitempty"`
+	LastProbeStartedAt   *time.Time    `json:"last_probe_started_at,omitempty"`
+	LastProbeFinishedAt  *time.Time    `json:"last_probe_finished_at,omitempty"`
+	LastProbeStatus      string        `json:"last_probe_status,omitempty"`
+	LastProbeError       string        `json:"last_probe_error,omitempty"`
+	Models               []ModelStatus `json:"models"`
+	UpdatedAt            time.Time     `json:"updated_at"`
 }
 
 type ModelStatusReport struct {
@@ -85,6 +94,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		       COUNT(m.id) FILTER (WHERE c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
+		       COUNT(m.id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable'))::int,
 		       COUNT(m.id) FILTER (WHERE cm.last_success_at IS NOT NULL
 		           OR cm.last_failure_at IS NOT NULL)::int,
 		       COALESCE(MAX(cm.consecutive_failures), 0)::int,
@@ -127,17 +137,17 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 	byID := make(map[string]groupIndex)
 	for rows.Next() {
 		var (
-			group                                        ModelStatusGroup
-			groupStatus                                  string
-			modelName, provider                          sql.NullString
-			totalRoutes, availableRoutes, observedRoutes int
-			failures                                     int
-			lastSuccess, lastFailure                     sql.NullTime
+			group                                                        ModelStatusGroup
+			groupStatus                                                  string
+			modelName, provider                                          sql.NullString
+			totalRoutes, availableRoutes, degradedRoutes, observedRoutes int
+			failures                                                     int
+			lastSuccess, lastFailure                                     sql.NullTime
 		)
 		if err := rows.Scan(
 			&group.ID, &group.Code, &group.Name, &groupStatus,
 			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.UpdatedAt,
-			&modelName, &provider, &totalRoutes, &availableRoutes, &observedRoutes,
+			&modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
 			&failures, &lastSuccess, &lastFailure,
 		); err != nil {
 			return ModelStatusReport{}, err
@@ -160,7 +170,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 			AvailableRoutes:     availableRoutes,
 			ObservedRoutes:      observedRoutes,
 			ConsecutiveFailures: failures,
-			Status:              modelRouteStatus(group.GroupStatus, totalRoutes, availableRoutes, observedRoutes),
+			Status:              modelRouteStatus(group.GroupStatus, totalRoutes, availableRoutes, degradedRoutes, observedRoutes),
 		}
 		if lastSuccess.Valid {
 			value := lastSuccess.Time.UTC()
@@ -181,12 +191,15 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 	return ModelStatusReport{UpdatedAt: time.Now().UTC(), Groups: groups}, nil
 }
 
-func modelRouteStatus(groupStatus string, totalRoutes, availableRoutes, observedRoutes int) string {
+func modelRouteStatus(groupStatus string, totalRoutes, availableRoutes, degradedRoutes, observedRoutes int) string {
 	if strings.TrimSpace(groupStatus) != StatusActive {
 		return "disabled"
 	}
 	if totalRoutes == 0 || availableRoutes == 0 {
 		return "unavailable"
+	}
+	if degradedRoutes > 0 {
+		return "degraded"
 	}
 	if availableRoutes < totalRoutes {
 		return "degraded"
@@ -240,76 +253,115 @@ func groupRouteStatus(groupStatus string, models []ModelStatus) string {
 
 var _ ModelStatusLister = (*SQLService)(nil)
 
-// ListAdminModelStatuses returns every non-deleted routing group and every
-// active model mapped to one of its channels. Request metrics are derived
-// from real model_requests rows; no upstream probe is performed here.
+// ListAdminModelStatuses returns only models covered by an enabled admin
+// monitor configuration. "all" configurations resolve their model set from
+// the current group mappings on every read, while "selected" configurations
+// retain explicitly selected model records even when all routes are down.
 func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusReport, error) {
 	if s == nil || s.db == nil {
 		return ModelStatusReport{}, ErrUnavailable
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT rg.id::text, rg.code, rg.name, rg.status,
-		       rg.multiplier::text, rg.rpm_limit, rg.billing_type, rg.updated_at,
-		       m.model_name, m.provider,
-		       COUNT(m.id)::int,
-		       COUNT(m.id) FILTER (WHERE cm.enabled = true
+		WITH monitor_models AS (
+			SELECT mmc.id AS monitor_id, mmc.name AS monitor_name,
+			       mmc.selection_mode, mmc.mode, mmc.probe_interval_seconds,
+			       mmc.last_probe_started_at, mmc.last_probe_finished_at,
+			       mmc.last_probe_status, mmc.last_probe_error,
+			       rg.id AS group_id, rg.code, rg.name, rg.status,
+			       rg.multiplier, rg.rpm_limit, rg.billing_type, rg.updated_at,
+			       m.id AS model_id, m.model_name, m.provider
+			FROM model_monitor_configs mmc
+			JOIN routing_groups rg ON rg.id = mmc.group_id
+			  AND rg.deleted_at IS NULL
+			JOIN models m ON m.status = 'active'
+			WHERE mmc.enabled = true
+			  AND (
+			      (mmc.selection_mode = 'all' AND EXISTS (
+			          SELECT 1
+			          FROM routing_group_channels rgc0
+			          JOIN channels c0 ON c0.id = rgc0.channel_id
+			            AND c0.deleted_at IS NULL
+			          JOIN channel_models cm0 ON cm0.channel_id = c0.id
+			            AND cm0.model_id = m.id
+			            AND cm0.enabled = true
+			          WHERE rgc0.group_id = mmc.group_id
+			      ))
+			      OR (mmc.selection_mode = 'selected' AND EXISTS (
+			          SELECT 1
+			          FROM model_monitor_config_models cmm0
+			          WHERE cmm0.config_id = mmc.id
+			            AND cmm0.model_id = m.id
+			      ))
+			  )
+		)
+		SELECT mm.monitor_id::text, mm.monitor_name, mm.selection_mode, mm.mode,
+		       mm.probe_interval_seconds, mm.last_probe_started_at,
+		       mm.last_probe_finished_at, mm.last_probe_status, mm.last_probe_error,
+		       mm.group_id::text, mm.code, mm.name, mm.status,
+		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.updated_at,
+		       mm.model_name, mm.provider,
+		       COUNT(cm.id)::int,
+		       COUNT(cm.id) FILTER (WHERE cm.enabled = true
 		           AND c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
-		       COUNT(m.id) FILTER (WHERE cm.last_success_at IS NOT NULL
+		       COUNT(cm.id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable'))::int,
+		       COUNT(cm.id) FILTER (WHERE cm.last_success_at IS NOT NULL
 		           OR cm.last_failure_at IS NOT NULL)::int,
 		       COALESCE(MAX(cm.consecutive_failures), 0)::int,
 		       MAX(cm.last_success_at), MAX(cm.last_failure_at),
 		       COALESCE((SELECT COUNT(*)::int
 		           FROM model_requests mr
-		           WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
 		           FROM model_requests mr
-		           WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT jsonb_agg(recent.status ORDER BY recent.created_at DESC, recent.id DESC)
 		           FROM (
 		               SELECT mr.id, mr.status, mr.created_at
 		               FROM model_requests mr
-		               WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		               WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		               ORDER BY mr.created_at DESC, mr.id DESC
 		               LIMIT 60
 		           ) recent), '[]'::jsonb),
 		       (SELECT mr.latency_ms
 		           FROM model_requests mr
-		           WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT mr.status
 		           FROM model_requests mr
-		           WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT mr.created_at
 		           FROM model_requests mr
-		           WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT COALESCE(mr.failure_reason, '')
 		           FROM model_requests mr
-		           WHERE mr.group_id = rg.id AND mr.model_id = m.id
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status = 'failed'
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1)
-		FROM routing_groups rg
-		LEFT JOIN routing_group_channels rgc ON rgc.group_id = rg.id
+		FROM monitor_models mm
+		LEFT JOIN routing_group_channels rgc ON rgc.group_id = mm.group_id
 		LEFT JOIN channels c ON c.id = rgc.channel_id AND c.deleted_at IS NULL
 		LEFT JOIN channel_models cm ON cm.channel_id = c.id
-		LEFT JOIN models m ON m.id = cm.model_id AND m.status = 'active'
-		WHERE rg.deleted_at IS NULL
-		GROUP BY rg.id, rg.code, rg.name, rg.status, rg.multiplier,
-		         rg.rpm_limit, rg.billing_type, rg.updated_at,
-		         m.id, m.model_name, m.provider
-		ORDER BY rg.priority DESC, rg.code ASC, m.provider ASC, m.model_name ASC
+		  AND cm.model_id = mm.model_id
+		GROUP BY mm.monitor_id, mm.monitor_name, mm.selection_mode, mm.mode,
+		         mm.probe_interval_seconds, mm.last_probe_started_at,
+		         mm.last_probe_finished_at, mm.last_probe_status,
+		         mm.last_probe_error, mm.group_id, mm.code, mm.name,
+		         mm.status, mm.multiplier, mm.rpm_limit, mm.billing_type,
+		         mm.updated_at, mm.model_id, mm.model_name, mm.provider
+		ORDER BY mm.code ASC, mm.provider ASC, mm.model_name ASC
 	`)
 	if err != nil {
 		return ModelStatusReport{}, err
@@ -320,25 +372,47 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 	byID := make(map[string]int)
 	for rows.Next() {
 		var (
-			group                                        ModelStatusGroup
-			groupStatus                                  string
-			modelName, provider                          sql.NullString
-			totalRoutes, availableRoutes, observedRoutes int
-			failures, requestCount7d, successfulCount7d  int
-			lastSuccess, lastFailure, lastRequestAt      sql.NullTime
-			lastLatency                                  sql.NullInt64
-			lastRequestStatus, lastFailureReason         sql.NullString
-			recentStatusesRaw                            []byte
+			group                                                        ModelStatusGroup
+			monitorID, monitorName, selectionMode                        string
+			monitorMode, lastProbeStatus, lastProbeError                 string
+			probeInterval                                                int
+			lastProbeStarted, lastProbeFinished                          sql.NullTime
+			groupStatus                                                  string
+			modelName, provider                                          sql.NullString
+			totalRoutes, availableRoutes, degradedRoutes, observedRoutes int
+			failures, requestCount7d, successfulCount7d                  int
+			lastSuccess, lastFailure, lastRequestAt                      sql.NullTime
+			lastLatency                                                  sql.NullInt64
+			lastRequestStatus, lastFailureReason                         sql.NullString
+			recentStatusesRaw                                            []byte
 		)
 		if err := rows.Scan(
+			&monitorID, &monitorName, &selectionMode, &monitorMode,
+			&probeInterval, &lastProbeStarted, &lastProbeFinished,
+			&lastProbeStatus, &lastProbeError,
 			&group.ID, &group.Code, &group.Name, &groupStatus,
 			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.UpdatedAt,
-			&modelName, &provider, &totalRoutes, &availableRoutes, &observedRoutes,
+			&modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
 			&failures, &lastSuccess, &lastFailure, &requestCount7d,
 			&successfulCount7d, &recentStatusesRaw, &lastLatency,
 			&lastRequestStatus, &lastRequestAt, &lastFailureReason,
 		); err != nil {
 			return ModelStatusReport{}, err
+		}
+		group.MonitorID = monitorID
+		group.MonitorName = monitorName
+		group.SelectionMode = selectionMode
+		group.MonitorMode = monitorMode
+		group.ProbeIntervalSeconds = probeInterval
+		group.LastProbeStatus = lastProbeStatus
+		group.LastProbeError = lastProbeError
+		if lastProbeStarted.Valid {
+			value := lastProbeStarted.Time.UTC()
+			group.LastProbeStartedAt = &value
+		}
+		if lastProbeFinished.Valid {
+			value := lastProbeFinished.Time.UTC()
+			group.LastProbeFinishedAt = &value
 		}
 		group.GroupStatus = strings.ToLower(strings.TrimSpace(groupStatus))
 		index, ok := byID[group.ID]
@@ -358,7 +432,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			AvailableRoutes:     availableRoutes,
 			ObservedRoutes:      observedRoutes,
 			ConsecutiveFailures: failures,
-			Status:              modelRouteStatus(group.GroupStatus, totalRoutes, availableRoutes, observedRoutes),
+			Status:              modelRouteStatus(group.GroupStatus, totalRoutes, availableRoutes, degradedRoutes, observedRoutes),
 			RequestCount7d:      requestCount7d,
 		}
 		if requestCount7d > 0 {

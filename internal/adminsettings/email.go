@@ -61,11 +61,30 @@ type SiteSettingsUpdate struct {
 	SiteFaviconURL string
 }
 
+type StepUpOperation string
+
+const (
+	StepUpOperationChannelModel StepUpOperation = "channel_model"
+	StepUpOperationGroup        StepUpOperation = "group"
+	StepUpOperationToken        StepUpOperation = "token"
+	StepUpOperationUser         StepUpOperation = "user"
+	StepUpOperationRole         StepUpOperation = "role"
+	StepUpOperationBilling      StepUpOperation = "billing"
+	StepUpOperationSystem       StepUpOperation = "system"
+)
+
 type FeatureSettings struct {
 	EmailEnabled                bool      `json:"email_enabled"`
 	RegistrationEnabled         bool      `json:"registration_enabled"`
 	ModelStatusEnabled          bool      `json:"model_status_enabled"`
 	TOTPEnabled                 bool      `json:"totp_enabled"`
+	StepUpChannelModelEnabled   bool      `json:"step_up_channel_model_enabled"`
+	StepUpGroupEnabled          bool      `json:"step_up_group_enabled"`
+	StepUpTokenEnabled          bool      `json:"step_up_token_enabled"`
+	StepUpUserEnabled           bool      `json:"step_up_user_enabled"`
+	StepUpRoleEnabled           bool      `json:"step_up_role_enabled"`
+	StepUpBillingEnabled        bool      `json:"step_up_billing_enabled"`
+	StepUpSystemEnabled         bool      `json:"step_up_system_enabled"`
 	EmailVerificationEnabled    bool      `json:"email_verification_enabled"`
 	EmailPasswordResetEnabled   bool      `json:"email_password_reset_enabled"`
 	EmailSubscriptionEnabled    bool      `json:"email_subscription_enabled"`
@@ -87,6 +106,13 @@ type FeatureSettingsUpdate struct {
 	RegistrationEnabled         bool   `json:"registration_enabled"`
 	ModelStatusEnabled          bool   `json:"model_status_enabled"`
 	TOTPEnabled                 *bool  `json:"totp_enabled"`
+	StepUpChannelModelEnabled   bool   `json:"step_up_channel_model_enabled"`
+	StepUpGroupEnabled          bool   `json:"step_up_group_enabled"`
+	StepUpTokenEnabled          bool   `json:"step_up_token_enabled"`
+	StepUpUserEnabled           bool   `json:"step_up_user_enabled"`
+	StepUpRoleEnabled           bool   `json:"step_up_role_enabled"`
+	StepUpBillingEnabled        bool   `json:"step_up_billing_enabled"`
+	StepUpSystemEnabled         bool   `json:"step_up_system_enabled"`
 	EmailVerificationEnabled    bool   `json:"email_verification_enabled"`
 	EmailPasswordResetEnabled   bool   `json:"email_password_reset_enabled"`
 	EmailSubscriptionEnabled    bool   `json:"email_subscription_enabled"`
@@ -220,6 +246,13 @@ func (s *Service) GetFeatureSettings(ctx context.Context) (FeatureSettings, erro
 		RegistrationEnabled:         parseSettingBool(values["registration_enabled"], false),
 		ModelStatusEnabled:          parseSettingBool(values["model_status_enabled"], true),
 		TOTPEnabled:                 parseSettingBool(values["totp_enabled"], false),
+		StepUpChannelModelEnabled:   parseSettingBool(values["step_up_channel_model_enabled"], false),
+		StepUpGroupEnabled:          parseSettingBool(values["step_up_group_enabled"], false),
+		StepUpTokenEnabled:          parseSettingBool(values["step_up_token_enabled"], false),
+		StepUpUserEnabled:           parseSettingBool(values["step_up_user_enabled"], false),
+		StepUpRoleEnabled:           parseSettingBool(values["step_up_role_enabled"], false),
+		StepUpBillingEnabled:        parseSettingBool(values["step_up_billing_enabled"], false),
+		StepUpSystemEnabled:         parseSettingBool(values["step_up_system_enabled"], false),
 		EmailVerificationEnabled:    parseSettingBool(values["email_verification_enabled"], true),
 		EmailPasswordResetEnabled:   parseSettingBool(values["email_password_reset_enabled"], true),
 		EmailSubscriptionEnabled:    parseSettingBool(values["email_subscription_enabled"], true),
@@ -235,6 +268,30 @@ func (s *Service) GetFeatureSettings(ctx context.Context) (FeatureSettings, erro
 	}
 	result.UpdatedAt, result.UpdatedBy = latestSettingUpdate(values)
 	return result, nil
+}
+
+func (settings FeatureSettings) StepUpRequired(operation StepUpOperation) bool {
+	if !settings.TOTPEnabled {
+		return false
+	}
+	switch operation {
+	case StepUpOperationChannelModel:
+		return settings.StepUpChannelModelEnabled
+	case StepUpOperationGroup:
+		return settings.StepUpGroupEnabled
+	case StepUpOperationToken:
+		return settings.StepUpTokenEnabled
+	case StepUpOperationUser:
+		return settings.StepUpUserEnabled
+	case StepUpOperationRole:
+		return settings.StepUpRoleEnabled
+	case StepUpOperationBilling:
+		return settings.StepUpBillingEnabled
+	case StepUpOperationSystem:
+		return settings.StepUpSystemEnabled
+	default:
+		return false
+	}
 }
 
 func (s *Service) UpdateEmailSettings(ctx context.Context, actorID string, request EmailSettingsUpdate) (EmailSettings, error) {
@@ -395,6 +452,13 @@ func (s *Service) UpdateFeatureSettings(ctx context.Context, actorID string, req
 		{"registration_enabled", strconv.FormatBool(request.RegistrationEnabled)},
 		{"model_status_enabled", strconv.FormatBool(request.ModelStatusEnabled)},
 		{"totp_enabled", strconv.FormatBool(totpEnabled)},
+		{"step_up_channel_model_enabled", strconv.FormatBool(request.StepUpChannelModelEnabled)},
+		{"step_up_group_enabled", strconv.FormatBool(request.StepUpGroupEnabled)},
+		{"step_up_token_enabled", strconv.FormatBool(request.StepUpTokenEnabled)},
+		{"step_up_user_enabled", strconv.FormatBool(request.StepUpUserEnabled)},
+		{"step_up_role_enabled", strconv.FormatBool(request.StepUpRoleEnabled)},
+		{"step_up_billing_enabled", strconv.FormatBool(request.StepUpBillingEnabled)},
+		{"step_up_system_enabled", strconv.FormatBool(request.StepUpSystemEnabled)},
 		{"email_verification_enabled", strconv.FormatBool(request.EmailVerificationEnabled)},
 		{"email_password_reset_enabled", strconv.FormatBool(request.EmailPasswordResetEnabled)},
 		{"email_subscription_enabled", strconv.FormatBool(request.EmailSubscriptionEnabled)},

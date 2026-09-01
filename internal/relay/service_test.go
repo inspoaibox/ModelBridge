@@ -734,6 +734,79 @@ func TestServiceFreeGroupSkipsBilling(t *testing.T) {
 	}
 }
 
+func TestProbeModelUsesMinimalProviderCompatibleRequestWithoutBilling(t *testing.T) {
+	tests := []struct {
+		name                    string
+		provider                string
+		wantMaxTokens           bool
+		wantMaxCompletionTokens bool
+	}{
+		{name: "openai", provider: ProviderOpenAI, wantMaxCompletionTokens: true},
+		{name: "grok", provider: ProviderGrok, wantMaxTokens: true},
+		{name: "anthropic", provider: ProviderAnthropic, wantMaxTokens: true},
+		{name: "gemini", provider: ProviderGemini, wantMaxCompletionTokens: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &recordingProvider{}
+			biller := &fakeBillingService{reservation: billing.Reservation{ID: "must-not-be-used"}}
+			service, err := NewService(
+				&fakeChannelRouter{candidates: []Channel{{
+					ID: "channel-1", Provider: test.provider, CredentialRef: "env:KEY", Priority: 100, Weight: 100,
+				}}},
+				EnvCredentialResolver{Lookup: func(string) string { return "sk-probe" }},
+				map[string]Provider{test.provider: provider},
+				biller,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := service.ProbeModel(context.Background(), "group-1", "gpt-5"); err != nil {
+				t.Fatalf("ProbeModel() error = %v", err)
+			}
+			if len(biller.events) != 0 {
+				t.Fatalf("probe must not create billing events: %#v", biller.events)
+			}
+			if len(provider.received.Request.Messages) != 1 || provider.received.Request.Messages[0].Content != "x" {
+				t.Fatalf("probe request must use one-character input: %#v", provider.received.Request)
+			}
+			if provider.received.Request.Temperature != nil {
+				t.Fatalf("probe must not set temperature: %#v", provider.received.Request)
+			}
+			if (provider.received.Request.MaxTokens != nil) != test.wantMaxTokens {
+				t.Fatalf("max_tokens presence = %v, want %v", provider.received.Request.MaxTokens != nil, test.wantMaxTokens)
+			}
+			if (provider.received.Request.MaxCompletionTokens != nil) != test.wantMaxCompletionTokens {
+				t.Fatalf("max_completion_tokens presence = %v, want %v", provider.received.Request.MaxCompletionTokens != nil, test.wantMaxCompletionTokens)
+			}
+		})
+	}
+}
+
+func TestProbeModelSkipsUnsupportedMediaModel(t *testing.T) {
+	provider := &recordingProvider{}
+	service, err := NewService(
+		&fakeChannelRouter{candidates: []Channel{{
+			ID: "channel-1", Provider: ProviderOpenAI, CredentialRef: "env:KEY", Priority: 100, Weight: 100,
+		}}},
+		EnvCredentialResolver{Lookup: func(string) string { return "sk-probe" }},
+		map[string]Provider{ProviderOpenAI: provider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = service.ProbeModel(context.Background(), "group-1", "dall-e-3")
+	if !errors.Is(err, ErrUnsupportedFeature) {
+		t.Fatalf("ProbeModel() error = %v, want ErrUnsupportedFeature", err)
+	}
+	if provider.called {
+		t.Fatal("unsupported media model must not call the upstream provider")
+	}
+}
+
 func (r *fakeChannelRouter) DiscoveryConfig(_ context.Context, _ string) (ChannelDiscoveryConfig, error) {
 	if r.discoveryConfig.Provider == "" {
 		return ChannelDiscoveryConfig{

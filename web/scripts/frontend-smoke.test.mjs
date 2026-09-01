@@ -45,3 +45,12 @@ test("feature settings updates do not send read-only audit metadata", () => {
   assert.match(app, /body: JSON\.stringify\(featureSettingsUpdatePayload\(next\)\)/);
   assert.doesNotMatch(app, /body: JSON\.stringify\(next\)/);
 });
+
+test("TOTP operation policies are submitted and only shown after TOTP is enabled", () => {
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  const panel = readFileSync(resolve(root, "src", "components", "admin", "AdminSettingsPanel.tsx"), "utf8");
+  assert.match(app, /step_up_channel_model_enabled: settings\.step_up_channel_model_enabled/);
+  assert.match(app, /step_up_billing_enabled: settings\.step_up_billing_enabled/);
+  assert.match(panel, /featureStepUpPoliciesTitle/);
+  assert.match(panel, /draft\.totp_enabled \? \(/);
+});

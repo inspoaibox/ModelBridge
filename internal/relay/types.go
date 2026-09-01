@@ -132,6 +132,13 @@ type ChannelModelHealthRecorder interface {
 	RecordChannelModelSuccess(context.Context, string, string) error
 }
 
+// ModelProbeService performs an explicit, non-tenant probe against the
+// configured upstream route. It must never create a billing reservation or a
+// customer usage record.
+type ModelProbeService interface {
+	ProbeModel(context.Context, string, string) error
+}
+
 // ChannelDiscoveryConfigReader returns the persisted provider and endpoint for
 // an existing channel. Discovery must use this configuration when a channel ID
 // is supplied so a caller cannot redirect the channel credential elsewhere.
@@ -883,6 +890,104 @@ func (s *Service) channelCandidates(ctx context.Context, principal *auth.Princip
 		return nil, err
 	}
 	return []Channel{channel}, nil
+}
+
+// ProbeModel sends the smallest supported text request through the same
+// group-aware candidate order used by customer traffic. The request is
+// intentionally outside ChatCompletions so it cannot consume tenant quota or
+// write a billing record.
+func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
+	if s == nil || s.router == nil || s.credentials == nil {
+		return ErrUnavailable
+	}
+	groupID = strings.TrimSpace(groupID)
+	model = strings.TrimSpace(model)
+	if groupID == "" || model == "" {
+		return ErrInvalidRequest
+	}
+	if !probeableTextModel(model) {
+		return ErrUnsupportedFeature
+	}
+	groupRouter, ok := s.router.(GroupChannelCandidateRouter)
+	if !ok {
+		return ErrUnavailable
+	}
+	candidates, err := groupRouter.SelectCandidatesForGroup(ctx, model, groupID)
+	if err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return ErrModelNotFound
+	}
+
+	one := int64(1)
+	request := ChatCompletionRequest{
+		Model:    model,
+		Messages: []ChatMessage{{Role: "user", Content: "x"}},
+	}
+	attempted := map[string]struct{}{}
+	var lastErr error
+	for len(attempted) < len(candidates) {
+		channel, found := pickWeightedChannel(candidates, attempted)
+		if !found {
+			break
+		}
+		attempted[channelKey(channel)] = struct{}{}
+		provider := s.providers[canonicalProvider(channel.Provider)]
+		if provider == nil {
+			lastErr = ErrProviderUnsupported
+			continue
+		}
+		apiKey, resolveErr := s.credentials.Resolve(ctx, channel.CredentialRef)
+		if resolveErr != nil {
+			lastErr = resolveErr
+			s.recordChannelFailure(ctx, channel, resolveErr)
+			continue
+		}
+		upstreamModel := strings.TrimSpace(channel.UpstreamModelName)
+		if upstreamModel == "" {
+			upstreamModel = model
+		}
+		probeRequest := request
+		// OpenAI's newer reasoning models use max_completion_tokens, while
+		// OpenAI-compatible Grok endpoints commonly expect max_tokens.
+		// Anthropic and Gemini adapters accept either field, so select the
+		// spelling per upstream provider for broad compatibility.
+		if canonicalProvider(channel.Provider) == ProviderOpenAI || canonicalProvider(channel.Provider) == ProviderGemini {
+			probeRequest.MaxCompletionTokens = &one
+		} else {
+			probeRequest.MaxTokens = &one
+		}
+		_, callErr := provider.ChatCompletions(ctx, UpstreamChatCompletionRequest{
+			Channel: channel, APIKey: apiKey, Request: probeRequest, UpstreamModel: upstreamModel,
+		})
+		if callErr == nil {
+			s.recordChannelSuccess(ctx, channel)
+			return nil
+		}
+		lastErr = callErr
+		s.recordChannelFailure(ctx, channel, callErr)
+		if ctx.Err() != nil || !retryableUpstreamError(callErr) {
+			break
+		}
+	}
+	if lastErr == nil {
+		return ErrUpstream
+	}
+	return lastErr
+}
+
+func probeableTextModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	for _, marker := range []string{
+		"embedding", "embed-", "image", "dall-e", "imagen", "video",
+		"veo", "sora", "audio", "whisper", "transcri", "speech", "tts",
+	} {
+		if strings.Contains(name, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func pickWeightedChannel(candidates []Channel, attempted map[string]struct{}) (Channel, bool) {

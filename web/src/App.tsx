@@ -47,6 +47,8 @@ import {
   ProfileFormState,
   PriceMatrixSummary,
   ModelPriceFormState,
+  ModelMonitor,
+  ModelMonitorFormState,
   ModelStatusReport,
   PublicFeatureSettings,
   PlatformRole,
@@ -264,6 +266,13 @@ function defaultFeatureSettings(): FeatureSettings {
 		registration_enabled: true,
 		model_status_enabled: true,
 		totp_enabled: false,
+		step_up_channel_model_enabled: false,
+		step_up_group_enabled: false,
+		step_up_token_enabled: false,
+		step_up_user_enabled: false,
+		step_up_role_enabled: false,
+		step_up_billing_enabled: false,
+		step_up_system_enabled: false,
 		email_verification_enabled: true,
 		email_password_reset_enabled: true,
 		email_subscription_enabled: true,
@@ -291,6 +300,32 @@ function defaultGroupForm(): GroupFormState {
     billing_type: "prepaid",
     priority: 100,
     channel_ids: [],
+  };
+}
+
+function defaultModelMonitorForm(): ModelMonitorFormState {
+  return {
+    id: "",
+    group_id: "",
+    name: "",
+    selection_mode: "all",
+    model_names: [],
+    mode: "passive",
+    probe_interval_seconds: 300,
+    enabled: true,
+  };
+}
+
+function modelMonitorFormFromItem(item: ModelMonitor): ModelMonitorFormState {
+  return {
+    id: item.id,
+    group_id: item.group_id,
+    name: item.name,
+    selection_mode: item.selection_mode,
+    model_names: item.selection_mode === "all" ? [] : [...item.model_names],
+    mode: item.mode,
+    probe_interval_seconds: item.probe_interval_seconds,
+    enabled: item.enabled,
   };
 }
 
@@ -444,6 +479,13 @@ function featureSettingsUpdatePayload(settings: FeatureSettings) {
     registration_enabled: settings.registration_enabled,
     model_status_enabled: settings.model_status_enabled,
     totp_enabled: settings.totp_enabled,
+    step_up_channel_model_enabled: settings.step_up_channel_model_enabled,
+    step_up_group_enabled: settings.step_up_group_enabled,
+    step_up_token_enabled: settings.step_up_token_enabled,
+    step_up_user_enabled: settings.step_up_user_enabled,
+    step_up_role_enabled: settings.step_up_role_enabled,
+    step_up_billing_enabled: settings.step_up_billing_enabled,
+    step_up_system_enabled: settings.step_up_system_enabled,
     email_verification_enabled: settings.email_verification_enabled,
     email_password_reset_enabled: settings.email_password_reset_enabled,
     email_subscription_enabled: settings.email_subscription_enabled,
@@ -490,6 +532,12 @@ export default function App() {
   const [adminModelStatusReport, setAdminModelStatusReport] = useState<ModelStatusReport | null>(null);
   const [adminModelStatusBusy, setAdminModelStatusBusy] = useState(false);
   const [adminModelStatusMessage, setAdminModelStatusMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [adminModelMonitors, setAdminModelMonitors] = useState<ModelMonitor[]>([]);
+  const [adminModelMonitorsBusy, setAdminModelMonitorsBusy] = useState(false);
+  const [adminModelMonitorsMessage, setAdminModelMonitorsMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [adminModelMonitorFormOpen, setAdminModelMonitorFormOpen] = useState(false);
+  const [adminModelMonitorForm, setAdminModelMonitorForm] = useState<ModelMonitorFormState>(() => defaultModelMonitorForm());
+  const [adminModelMonitorActionBusy, setAdminModelMonitorActionBusy] = useState("");
   const [publicFeatures, setPublicFeatures] = useState<PublicFeatureSettings | null>(null);
   const [consoleProfile, setConsoleProfile] = useState<ConsoleProfile | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileFormState>(() => defaultProfileForm());
@@ -903,7 +951,7 @@ export default function App() {
   }, [route.view, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "groups" && adminSection !== "tokens")) {
+    if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "groups" && adminSection !== "tokens" && adminSection !== "model-status")) {
       return;
     }
     refreshGroups(true);
@@ -1021,6 +1069,7 @@ export default function App() {
 
 	useEffect(() => {
 		if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "model-status") return;
+		void refreshAdminModelMonitors(true);
 		void refreshAdminModelStatus(true);
 		const interval = window.setInterval(() => void refreshAdminModelStatus(false), 15_000);
 		return () => window.clearInterval(interval);
@@ -2299,6 +2348,155 @@ export default function App() {
     }
   }
 
+  async function refreshAdminModelMonitors(showPending = false) {
+    if (!signedIn || audience !== "admin") return;
+    setAdminModelMonitorsBusy(true);
+    if (showPending) setAdminModelMonitorsMessage({ kind: "pending", text: t("adminModelMonitorLoading") });
+    try {
+      const response = await fetch("/admin/v1/model-monitors", {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as { monitors?: ModelMonitor[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "model monitors unavailable");
+      setAdminModelMonitors(result.monitors || []);
+      setAdminModelMonitorsMessage({ kind: "", text: "" });
+    } catch {
+      setAdminModelMonitorsMessage({ kind: "error", text: t("adminModelMonitorUnavailable") });
+    } finally {
+      setAdminModelMonitorsBusy(false);
+    }
+  }
+
+  function openCreateAdminModelMonitor() {
+    const firstGroup = groups.find((group) => group.status === "active") || groups[0];
+    setAdminModelMonitorForm({
+      ...defaultModelMonitorForm(),
+      group_id: firstGroup?.id || "",
+      name: firstGroup ? `${firstGroup.name} ${t("adminModelMonitorDefaultName")}` : "",
+    });
+    setAdminModelMonitorFormOpen(true);
+    setAdminModelMonitorsMessage({ kind: "", text: "" });
+  }
+
+  function openEditAdminModelMonitor(item: ModelMonitor) {
+    setAdminModelMonitorForm(modelMonitorFormFromItem(item));
+    setAdminModelMonitorFormOpen(true);
+    setAdminModelMonitorsMessage({ kind: "", text: "" });
+  }
+
+  function closeAdminModelMonitorForm() {
+    setAdminModelMonitorFormOpen(false);
+    setAdminModelMonitorForm(defaultModelMonitorForm());
+  }
+
+  async function saveAdminModelMonitor(form: ModelMonitorFormState) {
+    if (!form.group_id || !form.name.trim()) {
+      setAdminModelMonitorsMessage({ kind: "error", text: t("adminModelMonitorValidation") });
+      return false;
+    }
+    if (form.selection_mode === "selected" && form.model_names.length === 0) {
+      setAdminModelMonitorsMessage({ kind: "error", text: t("adminModelMonitorSelectModel") });
+      return false;
+    }
+    setAdminModelMonitorActionBusy(form.id ? `update:${form.id}` : "create");
+    setAdminModelMonitorsMessage({ kind: "pending", text: t("adminModelMonitorSaving") });
+    try {
+      const response = await fetchAdminSensitive(
+        form.id ? `/admin/v1/model-monitors/${encodeURIComponent(form.id)}` : "/admin/v1/model-monitors",
+        {
+          method: form.id ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            group_id: form.group_id,
+            name: form.name.trim(),
+            selection_mode: form.selection_mode,
+            model_names: form.selection_mode === "all" ? [] : form.model_names,
+            mode: form.mode,
+            probe_interval_seconds: Math.max(60, Number(form.probe_interval_seconds) || 300),
+            enabled: form.enabled,
+          }),
+        },
+      );
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "model monitor save failed");
+      await refreshAdminModelMonitors(false);
+      await refreshAdminModelStatus(false);
+      closeAdminModelMonitorForm();
+      setAdminModelMonitorsMessage({ kind: "success", text: t("adminModelMonitorSaved") });
+      return true;
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      setAdminModelMonitorsMessage({
+        kind: "error",
+        text: code === "MODEL_MONITOR_GROUP_ALREADY_CONFIGURED"
+          ? t("adminModelMonitorGroupAlreadyConfigured")
+          : code === "MODEL_MONITOR_GROUP_NOT_FOUND"
+          ? t("adminModelMonitorGroupNotFound")
+          : code === "MODEL_MONITOR_GROUP_INACTIVE"
+          ? t("adminModelMonitorGroupInactive")
+          : t("adminModelMonitorValidation"),
+      });
+      return false;
+    } finally {
+      setAdminModelMonitorActionBusy("");
+    }
+  }
+
+  async function deleteAdminModelMonitor(item: ModelMonitor) {
+    if (!window.confirm(t("adminModelMonitorDeleteConfirm"))) return;
+    setAdminModelMonitorActionBusy(`delete:${item.id}`);
+    setAdminModelMonitorsMessage({ kind: "pending", text: t("adminModelMonitorDeleting") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/model-monitors/${encodeURIComponent(item.id)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "model monitor delete failed");
+      await refreshAdminModelMonitors(false);
+      await refreshAdminModelStatus(false);
+      setAdminModelMonitorsMessage({ kind: "success", text: t("adminModelMonitorDeleted") });
+    } catch {
+      setAdminModelMonitorsMessage({ kind: "error", text: t("adminModelMonitorUnavailable") });
+    } finally {
+      setAdminModelMonitorActionBusy("");
+    }
+  }
+
+  async function probeAdminModelMonitor(item: ModelMonitor) {
+    setAdminModelMonitorActionBusy(`probe:${item.id}`);
+    setAdminModelMonitorsMessage({ kind: "pending", text: t("adminModelMonitorProbing") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/model-monitors/${encodeURIComponent(item.id)}/probe`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "model monitor probe failed");
+      await refreshAdminModelMonitors(false);
+      await refreshAdminModelStatus(false);
+      setAdminModelMonitorsMessage({ kind: "success", text: t("adminModelMonitorProbeCompleted") });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      setAdminModelMonitorsMessage({
+        kind: "error",
+        text: code === "MODEL_MONITOR_ACTIVE_PROBE_REQUIRED"
+          ? t("adminModelMonitorActiveRequired")
+          : code === "MODEL_MONITOR_BUSY"
+          ? t("adminModelMonitorBusy")
+          : code === "MODEL_MONITOR_GROUP_INACTIVE"
+          ? t("adminModelMonitorGroupInactive")
+          : t("adminModelMonitorProbeFailed"),
+      });
+    } finally {
+      setAdminModelMonitorActionBusy("");
+    }
+  }
+
   async function refreshModelCatalog(showPending = false) {
     setModelCatalogBusy(true);
     if (showPending) setModelCatalogMessage({ kind: "pending", text: t("modelsLoading") });
@@ -3206,6 +3404,12 @@ export default function App() {
     setAdminModelStatusReport(null);
     setAdminModelStatusMessage({ kind: "", text: "" });
     setAdminModelStatusBusy(false);
+    setAdminModelMonitors([]);
+    setAdminModelMonitorsMessage({ kind: "", text: "" });
+    setAdminModelMonitorsBusy(false);
+    setAdminModelMonitorFormOpen(false);
+    setAdminModelMonitorForm(defaultModelMonitorForm());
+    setAdminModelMonitorActionBusy("");
     setOfficialPriceSyncBusy(false);
     cancelAdminStepUp();
     setChannelFormOpen(false);
@@ -3594,6 +3798,19 @@ export default function App() {
 			 adminModelStatusBusy={adminModelStatusBusy}
 			 adminModelStatusMessage={adminModelStatusMessage}
 			 refreshAdminModelStatus={refreshAdminModelStatus}
+			 adminModelMonitors={adminModelMonitors}
+			 adminModelMonitorsBusy={adminModelMonitorsBusy}
+			 adminModelMonitorsMessage={adminModelMonitorsMessage}
+			 adminModelMonitorFormOpen={adminModelMonitorFormOpen}
+			 adminModelMonitorForm={adminModelMonitorForm}
+			 setAdminModelMonitorForm={setAdminModelMonitorForm}
+			 adminModelMonitorActionBusy={adminModelMonitorActionBusy}
+			 openCreateAdminModelMonitor={openCreateAdminModelMonitor}
+			 openEditAdminModelMonitor={openEditAdminModelMonitor}
+			 closeAdminModelMonitorForm={closeAdminModelMonitorForm}
+			 saveAdminModelMonitor={saveAdminModelMonitor}
+			 deleteAdminModelMonitor={deleteAdminModelMonitor}
+			 probeAdminModelMonitor={probeAdminModelMonitor}
 			 operationsSnapshot={operationsSnapshot}
 			 operationsBusy={operationsBusy}
              refreshOperations={refreshOperations}

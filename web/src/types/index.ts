@@ -165,6 +165,13 @@ export interface FeatureSettings {
   registration_enabled: boolean;
   model_status_enabled: boolean;
   totp_enabled: boolean;
+  step_up_channel_model_enabled: boolean;
+  step_up_group_enabled: boolean;
+  step_up_token_enabled: boolean;
+  step_up_user_enabled: boolean;
+  step_up_role_enabled: boolean;
+  step_up_billing_enabled: boolean;
+  step_up_system_enabled: boolean;
   email_verification_enabled: boolean;
   email_password_reset_enabled: boolean;
   email_subscription_enabled: boolean;
@@ -336,6 +343,15 @@ export interface ModelStatusGroup {
   multiplier: string;
   rpm_limit: number;
   billing_type: "prepaid" | "free";
+  monitor_id?: string;
+  monitor_name?: string;
+  monitor_mode?: "passive" | "active";
+  selection_mode?: "all" | "selected";
+  probe_interval_seconds?: number;
+  last_probe_started_at?: string;
+  last_probe_finished_at?: string;
+  last_probe_status?: "success" | "failed" | "skipped" | "";
+  last_probe_error?: string;
   models: ModelStatus[];
   updated_at: string;
 }
@@ -343,6 +359,40 @@ export interface ModelStatusGroup {
 export interface ModelStatusReport {
   updated_at: string;
   groups: ModelStatusGroup[];
+}
+
+export type ModelMonitorSelectionMode = "all" | "selected";
+export type ModelMonitorMode = "passive" | "active";
+
+export interface ModelMonitor {
+  id: string;
+  group_id: string;
+  group_code: string;
+  group_name: string;
+  name: string;
+  selection_mode: ModelMonitorSelectionMode;
+  mode: ModelMonitorMode;
+  probe_interval_seconds: number;
+  enabled: boolean;
+  model_names: string[];
+  available_models: string[];
+  last_probe_started_at?: string;
+  last_probe_finished_at?: string;
+  last_probe_status?: "success" | "failed" | "skipped" | "";
+  last_probe_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelMonitorFormState {
+  id: string;
+  group_id: string;
+  name: string;
+  selection_mode: ModelMonitorSelectionMode;
+  model_names: string[];
+  mode: ModelMonitorMode;
+  probe_interval_seconds: number;
+  enabled: boolean;
 }
 
 export interface GroupFormState {

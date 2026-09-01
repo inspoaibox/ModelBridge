@@ -214,9 +214,9 @@ func newHandler(
 	if len(billers) > 0 {
 		billingService = billers[0]
 	}
-	protectStepUp := func(handler http.Handler, permissions ...string) http.Handler {
+	protectStepUp := func(operation adminsettings.StepUpOperation, handler http.Handler, permissions ...string) http.Handler {
 		return authMiddleware.Protect(auth.AudienceAdmin, permissions...)(
-			requireAdminStepUpWhenEnforced(services.SecuritySettings, services.StepUpMFA)(handler),
+			requireAdminStepUpForOperation(services.SecuritySettings, services.StepUpMFA, operation)(handler),
 		)
 	}
 
@@ -343,77 +343,77 @@ func newHandler(
 		"security:read",
 	)(securitySettingsReadHandler(services.SecuritySettings)))
 
-	mux.Handle("PUT /admin/v1/security/settings", protectStepUp(securitySettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/security/settings", protectStepUp(adminsettings.StepUpOperationSystem, securitySettingsUpdateHandler(services.SecuritySettings), "security:update"))
 
 	mux.Handle("GET /admin/v1/settings", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
 	)(systemSettingsReadHandler(services.SecuritySettings)))
 
-	mux.Handle("PUT /admin/v1/settings", protectStepUp(systemSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings", protectStepUp(adminsettings.StepUpOperationSystem, systemSettingsUpdateHandler(services.SecuritySettings), "security:update"))
 
-	mux.Handle("PUT /admin/v1/settings/site", protectStepUp(siteSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings/site", protectStepUp(adminsettings.StepUpOperationSystem, siteSettingsUpdateHandler(services.SecuritySettings), "security:update"))
 	mux.Handle("GET /admin/v1/settings/email", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
 	)(emailSettingsReadHandler(services.SecuritySettings)))
-	mux.Handle("PUT /admin/v1/settings/email", protectStepUp(emailSettingsUpdateHandler(services.SecuritySettings), "security:update"))
-	mux.Handle("POST /admin/v1/settings/email/test-connection", protectStepUp(emailSMTPConnectionTestHandler(services.SecuritySettings), "security:update"))
-	mux.Handle("POST /admin/v1/settings/email/test-message", protectStepUp(emailTestMessageHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings/email", protectStepUp(adminsettings.StepUpOperationSystem, emailSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("POST /admin/v1/settings/email/test-connection", protectStepUp(adminsettings.StepUpOperationSystem, emailSMTPConnectionTestHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("POST /admin/v1/settings/email/test-message", protectStepUp(adminsettings.StepUpOperationSystem, emailTestMessageHandler(services.SecuritySettings), "security:update"))
 	mux.Handle("GET /admin/v1/settings/email/templates", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
 	)(emailTemplateListHandler(services.SecuritySettings)))
-	mux.Handle("POST /admin/v1/settings/email/templates", protectStepUp(emailTemplateCreateHandler(services.SecuritySettings), "security:update"))
-	mux.Handle("PUT /admin/v1/settings/email/templates/{templateID}", protectStepUp(emailTemplateUpdateHandler(services.SecuritySettings), "security:update"))
-	mux.Handle("DELETE /admin/v1/settings/email/templates/{templateID}", protectStepUp(emailTemplateDeleteHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("POST /admin/v1/settings/email/templates", protectStepUp(adminsettings.StepUpOperationSystem, emailTemplateCreateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings/email/templates/{templateID}", protectStepUp(adminsettings.StepUpOperationSystem, emailTemplateUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("DELETE /admin/v1/settings/email/templates/{templateID}", protectStepUp(adminsettings.StepUpOperationSystem, emailTemplateDeleteHandler(services.SecuritySettings), "security:update"))
 	mux.Handle("GET /admin/v1/settings/features", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
 	)(featureSettingsReadHandler(services.SecuritySettings)))
-	mux.Handle("PUT /admin/v1/settings/features", protectStepUp(featureSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings/features", protectStepUp(adminsettings.StepUpOperationSystem, featureSettingsUpdateHandler(services.SecuritySettings), "security:update"))
 
 	mux.Handle("GET /admin/v1/channels", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"channel:read",
 	)(relayChannelsHandler(relayService)))
 
-	mux.Handle("POST /admin/v1/channels/discover-models", protectStepUp(relayChannelModelDiscoveryHandler(relayService), "channel:update"))
+	mux.Handle("POST /admin/v1/channels/discover-models", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelModelDiscoveryHandler(relayService), "channel:update"))
 
-	mux.Handle("POST /admin/v1/channels", protectStepUp(relayChannelCreateHandler(relayService), "channel:update"))
+	mux.Handle("POST /admin/v1/channels", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelCreateHandler(relayService), "channel:update"))
 
-	mux.Handle("PUT /admin/v1/channels/{channelID}", protectStepUp(relayChannelUpdateHandler(relayService), "channel:update"))
+	mux.Handle("PUT /admin/v1/channels/{channelID}", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelUpdateHandler(relayService), "channel:update"))
 
-	mux.Handle("POST /admin/v1/channels/{channelID}/pause", protectStepUp(relayChannelStatusHandler(relayService, "disabled"), "channel:update"))
+	mux.Handle("POST /admin/v1/channels/{channelID}/pause", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelStatusHandler(relayService, "disabled"), "channel:update"))
 
-	mux.Handle("POST /admin/v1/channels/{channelID}/enable", protectStepUp(relayChannelStatusHandler(relayService, "active"), "channel:update"))
+	mux.Handle("POST /admin/v1/channels/{channelID}/enable", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelStatusHandler(relayService, "active"), "channel:update"))
 
-	mux.Handle("DELETE /admin/v1/channels/{channelID}", protectStepUp(relayChannelDeleteHandler(relayService), "channel:update"))
+	mux.Handle("DELETE /admin/v1/channels/{channelID}", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelDeleteHandler(relayService), "channel:update"))
 
 	mux.Handle("GET /admin/v1/groups", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"group:read",
 	)(groupListHandler(groupService)))
 
-	mux.Handle("POST /admin/v1/groups", protectStepUp(groupCreateHandler(groupService), "group:update"))
+	mux.Handle("POST /admin/v1/groups", protectStepUp(adminsettings.StepUpOperationGroup, groupCreateHandler(groupService), "group:update"))
 
-	mux.Handle("PUT /admin/v1/groups/{groupID}", protectStepUp(groupUpdateHandler(groupService), "group:update"))
+	mux.Handle("PUT /admin/v1/groups/{groupID}", protectStepUp(adminsettings.StepUpOperationGroup, groupUpdateHandler(groupService), "group:update"))
 
-	mux.Handle("DELETE /admin/v1/groups/{groupID}", protectStepUp(groupDeleteHandler(groupService), "group:update"))
+	mux.Handle("DELETE /admin/v1/groups/{groupID}", protectStepUp(adminsettings.StepUpOperationGroup, groupDeleteHandler(groupService), "group:update"))
 
 	mux.Handle("GET /admin/v1/tokens", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"token:read",
 	)(tokenListHandler(tokenService)))
 
-	mux.Handle("PUT /admin/v1/tokens/{tokenID}/group", protectStepUp(tokenGroupUpdateHandler(tokenService), "token:update"))
+	mux.Handle("PUT /admin/v1/tokens/{tokenID}/group", protectStepUp(adminsettings.StepUpOperationToken, tokenGroupUpdateHandler(tokenService), "token:update"))
 
 	mux.Handle("POST /admin/v1/tokens", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"token:create",
 	)(adminTokenCreationDisabledHandler()))
 
-	mux.Handle("DELETE /admin/v1/tokens/{tokenID}", protectStepUp(tokenRevokeHandler(tokenService), "token:revoke"))
+	mux.Handle("DELETE /admin/v1/tokens/{tokenID}", protectStepUp(adminsettings.StepUpOperationToken, tokenRevokeHandler(tokenService), "token:revoke"))
 
 	// Tenant members and projects are managed by the tenant owner/admin. The
 	// tenant path guard prevents a valid console session from crossing tenants;
@@ -472,9 +472,9 @@ func newHandler(
 		"user:create",
 	)(adminUserCreationDisabledHandler()))
 
-	mux.Handle("PUT /admin/v1/users/{userID}", protectStepUp(userUpdateHandler(userService), "user:update"))
+	mux.Handle("PUT /admin/v1/users/{userID}", protectStepUp(adminsettings.StepUpOperationUser, userUpdateHandler(userService), "user:update"))
 
-	mux.Handle("PUT /admin/v1/users/{userID}/status", protectStepUp(userStatusUpdateHandler(userService), "user:update"))
+	mux.Handle("PUT /admin/v1/users/{userID}/status", protectStepUp(adminsettings.StepUpOperationUser, userStatusUpdateHandler(userService), "user:update"))
 
 	// Platform role definitions and administrator bindings are separate from
 	// customer registration. The service additionally requires platform_owner,
@@ -486,13 +486,13 @@ func newHandler(
 		mux.Handle("GET /admin/v1/permissions", authMiddleware.Protect(
 			auth.AudienceAdmin, "role:read",
 		)(platformPermissionsHandler(roleService)))
-		mux.Handle("POST /admin/v1/roles", protectStepUp(platformRoleCreateHandler(roleService), "role:update"))
-		mux.Handle("PUT /admin/v1/roles/{roleID}", protectStepUp(platformRoleUpdateHandler(roleService), "role:update"))
-		mux.Handle("POST /admin/v1/roles/{roleID}/disable", protectStepUp(platformRoleDisableHandler(roleService), "role:update"))
+		mux.Handle("POST /admin/v1/roles", protectStepUp(adminsettings.StepUpOperationRole, platformRoleCreateHandler(roleService), "role:update"))
+		mux.Handle("PUT /admin/v1/roles/{roleID}", protectStepUp(adminsettings.StepUpOperationRole, platformRoleUpdateHandler(roleService), "role:update"))
+		mux.Handle("POST /admin/v1/roles/{roleID}/disable", protectStepUp(adminsettings.StepUpOperationRole, platformRoleDisableHandler(roleService), "role:update"))
 		mux.Handle("GET /admin/v1/users/{userID}/roles", authMiddleware.Protect(
 			auth.AudienceAdmin, "role:read",
 		)(platformUserRolesHandler(roleService)))
-		mux.Handle("PUT /admin/v1/users/{userID}/roles", protectStepUp(platformUserRolesUpdateHandler(roleService), "role:update"))
+		mux.Handle("PUT /admin/v1/users/{userID}/roles", protectStepUp(adminsettings.StepUpOperationRole, platformUserRolesUpdateHandler(roleService), "role:update"))
 	}
 
 	mux.Handle("GET /admin/v1/prices", authMiddleware.Protect(
@@ -500,9 +500,9 @@ func newHandler(
 		"price:read",
 	)(billingPriceListHandler(billingService)))
 
-	mux.Handle("POST /admin/v1/prices/publish", protectStepUp(billingPricePublishHandler(billingService), "price:publish"))
+	mux.Handle("POST /admin/v1/prices/publish", protectStepUp(adminsettings.StepUpOperationBilling, billingPricePublishHandler(billingService), "price:publish"))
 
-	mux.Handle("POST /admin/v1/prices/sync-official", protectStepUp(officialPriceSyncHandler(priceSyncService), "price:publish"))
+	mux.Handle("POST /admin/v1/prices/sync-official", protectStepUp(adminsettings.StepUpOperationBilling, officialPriceSyncHandler(priceSyncService), "price:publish"))
 
 	mux.Handle("GET /admin/v1/usage", authMiddleware.Protect(
 		auth.AudienceAdmin,
@@ -517,6 +517,30 @@ func newHandler(
 		auth.AudienceAdmin,
 		"operations:read",
 	)(adminModelStatusHandler(groupService)))
+	mux.Handle("GET /admin/v1/model-monitors", authMiddleware.Protect(
+		auth.AudienceAdmin,
+		"operations:read",
+	)(adminModelMonitorListHandler(groupService)))
+	mux.Handle("POST /admin/v1/model-monitors", protectStepUp(
+		adminsettings.StepUpOperationChannelModel,
+		adminModelMonitorCreateHandler(groupService),
+		"operations:update",
+	))
+	mux.Handle("PUT /admin/v1/model-monitors/{monitorID}", protectStepUp(
+		adminsettings.StepUpOperationChannelModel,
+		adminModelMonitorUpdateHandler(groupService),
+		"operations:update",
+	))
+	mux.Handle("DELETE /admin/v1/model-monitors/{monitorID}", protectStepUp(
+		adminsettings.StepUpOperationChannelModel,
+		adminModelMonitorDeleteHandler(groupService),
+		"operations:update",
+	))
+	mux.Handle("POST /admin/v1/model-monitors/{monitorID}/probe", protectStepUp(
+		adminsettings.StepUpOperationChannelModel,
+		adminModelMonitorProbeHandler(groupService, relayService),
+		"operations:update",
+	))
 	mux.Handle("GET /admin/v1/ops", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"operations:read",
@@ -537,9 +561,9 @@ func newHandler(
 		"billing:read",
 	)(billingAccountReadHandler(billingService)))
 
-	mux.Handle("POST /admin/v1/tenants/{tenantID}/billing/credit", protectStepUp(billingAccountCreditHandler(billingService), "billing:update"))
+	mux.Handle("POST /admin/v1/tenants/{tenantID}/billing/credit", protectStepUp(adminsettings.StepUpOperationBilling, billingAccountCreditHandler(billingService), "billing:update"))
 
-	mux.Handle("POST /admin/v1/usage/{requestID}/settle", protectStepUp(billingSettlementHandler(billingService), "billing:update"))
+	mux.Handle("POST /admin/v1/usage/{requestID}/settle", protectStepUp(adminsettings.StepUpOperationBilling, billingSettlementHandler(billingService), "billing:update"))
 
 	mux.Handle("GET /console/v1/tenants/{tenantID}/usage", authMiddleware.Protect(
 		auth.AudienceConsole,
@@ -1309,15 +1333,30 @@ func mfaStatusForFeatureHandler(service auth.SecuritySettingsProvider, mfaServic
 	})
 }
 
-func requireAdminStepUpWhenEnforced(service auth.SecuritySettingsProvider, verifier auth.MFAVerifier) func(http.Handler) http.Handler {
+func requireAdminStepUpForOperation(service auth.SecuritySettingsProvider, verifier auth.MFAVerifier, operation adminsettings.StepUpOperation) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if service == nil {
-				// A partially wired deployment fails closed for sensitive
-				// administrator operations.
+				// A partially wired deployment fails closed for sensitive administrator operations.
 				auth.RequireStepUp(verifier)(next).ServeHTTP(w, r)
 				return
 			}
+			if provider, ok := service.(adminsettings.FeatureSettingsProvider); ok && provider != nil {
+				features, err := provider.GetFeatureSettings(r.Context())
+				if err != nil {
+					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MFA_UNAVAILABLE"})
+					return
+				}
+				if !features.StepUpRequired(operation) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				auth.RequireStepUp(verifier)(next).ServeHTTP(w, r)
+				return
+			}
+
+			// Older embedders that predate feature settings retain the original
+			// administrator-wide policy.
 			settings, err := service.GetAdminSecuritySettings(r.Context())
 			if err != nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MFA_UNAVAILABLE"})
@@ -3082,6 +3121,165 @@ func adminModelStatusHandler(service groups.Service) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, report)
 	})
+}
+
+func adminModelMonitorListHandler(service groups.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		monitors, ok := service.(groups.ModelMonitorService)
+		if !ok || monitors == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+			return
+		}
+		items, err := monitors.ListAdminModelMonitors(r.Context())
+		if err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"monitors": items})
+	})
+}
+
+func adminModelMonitorCreateHandler(service groups.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		monitors, ok := service.(groups.ModelMonitorService)
+		if !ok || monitors == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+			return
+		}
+		var payload groups.ModelMonitorMutation
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_MODEL_MONITOR_REQUEST"})
+			return
+		}
+		item, err := monitors.CreateAdminModelMonitor(r.Context(), principalID(r), payload)
+		if err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+}
+
+func adminModelMonitorUpdateHandler(service groups.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		monitors, ok := service.(groups.ModelMonitorService)
+		if !ok || monitors == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+			return
+		}
+		var payload groups.ModelMonitorMutation
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_MODEL_MONITOR_REQUEST"})
+			return
+		}
+		item, err := monitors.UpdateAdminModelMonitor(r.Context(), principalID(r), r.PathValue("monitorID"), payload)
+		if err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func adminModelMonitorDeleteHandler(service groups.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		monitors, ok := service.(groups.ModelMonitorService)
+		if !ok || monitors == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+			return
+		}
+		if err := monitors.DeleteAdminModelMonitor(r.Context(), principalID(r), r.PathValue("monitorID")); err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})
+}
+
+func adminModelMonitorProbeHandler(groupService groups.Service, relayService relay.ChatCompletionService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		monitors, ok := groupService.(groups.ModelMonitorService)
+		if !ok || monitors == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+			return
+		}
+		prober, ok := relayService.(relay.ModelProbeService)
+		if !ok || prober == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_PROBE_UNAVAILABLE"})
+			return
+		}
+		monitor, err := monitors.ClaimActiveModelMonitor(r.Context(), r.PathValue("monitorID"))
+		if err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		probeCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		status := groups.MonitorProbeSuccess
+		var failures []string
+		supported := 0
+		for _, model := range monitor.ModelNames {
+			err := prober.ProbeModel(probeCtx, monitor.GroupID, model)
+			if errors.Is(err, relay.ErrUnsupportedFeature) {
+				continue
+			}
+			supported++
+			if err != nil {
+				failures = append(failures, model+": "+err.Error())
+			}
+		}
+		if supported == 0 {
+			status = groups.MonitorProbeSkipped
+		} else if len(failures) > 0 {
+			status = groups.MonitorProbeFailed
+		}
+		if err := monitors.CompleteActiveModelMonitor(r.Context(), monitor.ID, status, strings.Join(failures, "; ")); err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		item, err := monitorByID(r.Context(), monitors, monitor.ID)
+		if err != nil {
+			writeModelMonitorError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func monitorByID(ctx context.Context, service groups.ModelMonitorService, monitorID string) (groups.ModelMonitor, error) {
+	items, err := service.ListAdminModelMonitors(ctx)
+	if err != nil {
+		return groups.ModelMonitor{}, err
+	}
+	for _, item := range items {
+		if item.ID == monitorID {
+			return item, nil
+		}
+	}
+	return groups.ModelMonitor{}, groups.ErrMonitorNotFound
+}
+
+func writeModelMonitorError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, groups.ErrInvalidRequest):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_MODEL_MONITOR_REQUEST"})
+	case errors.Is(err, groups.ErrGroupNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "MODEL_MONITOR_GROUP_NOT_FOUND"})
+	case errors.Is(err, groups.ErrMonitorNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "MODEL_MONITOR_NOT_FOUND"})
+	case errors.Is(err, groups.ErrMonitorInUse):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "MODEL_MONITOR_GROUP_ALREADY_CONFIGURED"})
+	case errors.Is(err, groups.ErrMonitorModeInvalid):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "MODEL_MONITOR_ACTIVE_PROBE_REQUIRED"})
+	case errors.Is(err, groups.ErrMonitorBusy):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "MODEL_MONITOR_BUSY"})
+	case errors.Is(err, groups.ErrMonitorGroupInactive):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "MODEL_MONITOR_GROUP_INACTIVE"})
+	case errors.Is(err, groups.ErrUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_MONITORS_UNAVAILABLE"})
+	}
 }
 
 func tokenConsoleCreateHandler(service tokens.ConsoleService) http.Handler {
