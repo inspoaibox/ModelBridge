@@ -375,6 +375,42 @@ func TestLoginSetsHttpOnlySessionCookieWithoutReturningSecret(t *testing.T) {
 	}
 }
 
+func TestAdminLoginRequiresHiddenEntryTicket(t *testing.T) {
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
+	t.Setenv("SESSION_PEPPER", "session-pepper-with-at-least-thirty-two-characters")
+	handler := New(auth.NewMiddleware(testResolver{}), &auth.Services{Login: fakeLoginService{}}, false, "../../web")
+
+	direct := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", strings.NewReader(
+		`{"email":"admin@example.com","password":"correct password"}`,
+	))
+	directRec := httptest.NewRecorder()
+	handler.ServeHTTP(directRec, direct)
+	if directRec.Code != http.StatusNotFound || !strings.Contains(directRec.Body.String(), "ADMIN_ENTRY_REQUIRED") {
+		t.Fatalf("direct admin login must be hidden, got %d: %s", directRec.Code, directRec.Body.String())
+	}
+
+	entry := httptest.NewRequest(http.MethodGet, "/admin-0123456789abcdef", nil)
+	entryRec := httptest.NewRecorder()
+	handler.ServeHTTP(entryRec, entry)
+	if entryRec.Code != http.StatusOK {
+		t.Fatalf("expected hidden entry to serve the frontend, got %d: %s", entryRec.Code, entryRec.Body.String())
+	}
+	cookies := entryRec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != adminEntryCookieName || !cookies[0].HttpOnly {
+		t.Fatalf("expected short-lived HttpOnly entry cookie, got %#v", cookies)
+	}
+
+	allowed := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", strings.NewReader(
+		`{"email":"admin@example.com","password":"correct password"}`,
+	))
+	allowed.AddCookie(cookies[0])
+	allowedRec := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRec, allowed)
+	if allowedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("entry ticket should reach the normal login handler, got %d: %s", allowedRec.Code, allowedRec.Body.String())
+	}
+}
+
 func TestPasswordResetRequiresNotifier(t *testing.T) {
 	handler := New(auth.NewMiddleware(testResolver{}), &auth.Services{
 		PasswordReset: fakePasswordResetService{},

@@ -236,6 +236,7 @@ DB_PASSWORD="$(openssl rand -hex 24)"
 TOKEN_PEPPER="$(openssl rand -hex 48)"
 SESSION_PEPPER="$(openssl rand -hex 48)"
 MFA_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+ADMIN_ENTRY_SUFFIX="$(openssl rand -hex 16)"
 
 runuser -u postgres -- psql -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
@@ -275,13 +276,15 @@ LOGIN_FAILURE_WINDOW=15m
 LOGIN_LOCK_DURATION=15m
 CORS_ALLOWED_ORIGINS=https://$DOMAIN
 TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
+ADMIN_ENTRY_PATH=/admin-$ADMIN_ENTRY_SUFFIX
 REGISTRATION_ENABLED=true
 REGISTRATION_EMAIL_VERIFICATION_REQUIRED=true
 EOF
 
 chown root:root /etc/ai-token/ai-token.env
 chmod 0600 /etc/ai-token/ai-token.env
-unset DB_PASSWORD TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY
+printf '请保存管理员入口：https://%s/admin-%s\n' "$DOMAIN" "$ADMIN_ENTRY_SUFFIX"
+unset DB_PASSWORD TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY ADMIN_ENTRY_SUFFIX
 
 stat -c '环境文件权限：%a %U:%G' /etc/ai-token/ai-token.env
 ```
@@ -416,6 +419,10 @@ https://你的域名
 “系统设置 → 邮件设置 / 功能开关”中配置；不需要，也不应该把 SMTP 密码写入
 `/etc/ai-token/ai-token.env`。
 
+管理员入口由环境文件中的 `ADMIN_ENTRY_PATH` 控制，例如
+`https://你的域名/admin-随机后缀`。它不是前台菜单的一部分；只有访问这个路径后才可
+以提交管理员登录。将完整地址保存到密码管理器，勿发布到公开文档、客服页面或前端菜单。
+
 ## 10. 上线后最小验收
 
 ```bash
@@ -478,6 +485,14 @@ CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 chmod 0755 deploy/pm2/start.sh
 test -x bin/ai-token
 test -f web/dist/index.html
+
+if ! grep -q '^ADMIN_ENTRY_PATH=' /etc/ai-token/ai-token.env; then
+  ADMIN_ENTRY_SUFFIX="$(openssl rand -hex 16)"
+  printf '\nADMIN_ENTRY_PATH=/admin-%s\n' "$ADMIN_ENTRY_SUFFIX" >> /etc/ai-token/ai-token.env
+  chmod 0600 /etc/ai-token/ai-token.env
+  printf '请保存管理员入口：https://%s/admin-%s\n' "$DOMAIN" "$ADMIN_ENTRY_SUFFIX"
+  unset ADMIN_ENTRY_SUFFIX
+fi
 
 ln -sfn "$RELEASE_DIR" /opt/ai-token/current
 PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \

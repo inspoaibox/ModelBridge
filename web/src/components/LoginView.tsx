@@ -17,15 +17,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Audience, Language, LoginMessage, Principal, TranslationKey } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
 
 interface LoginViewProps {
   language: Language;
-  audience: Audience;
-  setAudience: (a: Audience) => void;
+  loginAudience: Audience;
   email: string;
   setEmail: (v: string) => void;
   password: string;
@@ -45,8 +43,7 @@ interface LoginViewProps {
 
 export function LoginView({
   language,
-  audience,
-  setAudience,
+  loginAudience,
   email,
   setEmail,
   password,
@@ -168,25 +165,12 @@ export function LoginView({
                 </div>
                 <CardDescription className="text-slate-500 dark:text-slate-400">{t("authSignInSubtitle")}</CardDescription>
 
-                {/* Audience Tabs */}
-                <Tabs value={audience} onValueChange={(val) => setAudience(val as Audience)} className="pt-2">
-                  <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="admin" className="gap-2 text-xs">
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                      <span>{t("tabAdmin")}</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="console" className="gap-2 text-xs">
-                      <Building className="h-3.5 w-3.5" />
-                      <span>{t("tabTenant")}</span>
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
               </CardHeader>
 
               <CardContent className="space-y-5">
                 <form onSubmit={handleLogin} className="space-y-4">
                   {/* Tenant ID for Tenant Mode */}
-                  {audience === "console" && (
+                  {loginAudience === "console" && (
                     <div className="space-y-2 animate-in fade-in duration-200">
                       <Label htmlFor="tenantId" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                         {t("fieldTenantId")}
@@ -254,7 +238,7 @@ export function LoginView({
                         {t("fieldMfaCode")}
                       </Label>
                       <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {audience === "admin" ? t("mfaHintAdmin") : t("mfaHintTenant")}
+                        {loginAudience === "admin" ? t("mfaHintAdmin") : t("mfaHintTenant")}
                       </span>
                     </div>
                     <div className="relative">
@@ -300,24 +284,28 @@ export function LoginView({
                       </>
                     )}
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" className="w-full" onClick={() => routeTo("#reset")}>
-                    {language === "zh" ? "忘记密码？" : "Forgot password?"}
-                  </Button>
+                  {loginAudience === "console" ? (
+                    <Button type="button" variant="ghost" size="sm" className="w-full" onClick={() => routeTo("#reset")}>
+                      {language === "zh" ? "忘记密码？" : "Forgot password?"}
+                    </Button>
+                  ) : null}
                 </form>
 
                 {/* Footer Switch */}
-                <div className="text-center pt-2">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {t("noAccountText")}{" "}
-                    <button
-                      type="button"
-                      onClick={() => routeTo("#register")}
-                      className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                    >
-                      {t("registerLink")}
-                    </button>
-                  </span>
-                </div>
+                {loginAudience === "console" ? (
+                  <div className="text-center pt-2">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {t("noAccountText")}{" "}
+                      <button
+                        type="button"
+                        onClick={() => routeTo("#register")}
+                        className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      >
+                        {t("registerLink")}
+                      </button>
+                    </span>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           )}

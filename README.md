@@ -7,6 +7,7 @@
 - 租户路径范围检查
 - Session Cookie 和 API Token 的数据库签发、解析与撤销接口
 - 管理员安全设置（MFA 开关）、TOTP、加密 SecretBox 和追加式审计写入器
+- 管理员隐藏入口：生产环境通过 `ADMIN_ENTRY_PATH=/admin-随机后缀` 隔离管理员登录页，后台登录 API 还要求同路径签发的短时 HttpOnly 通行 Cookie
 - PBKDF2-SHA256 密码哈希，禁止明文密码落库
 - PostgreSQL 迁移和启动 wiring
 - OpenAI、Anthropic、Grok、Gemini 官方渠道的同步/流式文本对话转发

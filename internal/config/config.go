@@ -38,6 +38,7 @@ type Config struct {
 	SMTPUsername                         string
 	SMTPPassword                         string
 	TrustedProxyCIDRs                    string
+	AdminEntryPath                       string
 }
 
 func Load() (Config, error) {
@@ -109,6 +110,10 @@ func Load() (Config, error) {
 	if err := validateTrustedProxyCIDRs(trustedProxyCIDRs); err != nil {
 		return Config{}, err
 	}
+	adminEntryPath := strings.TrimSpace(os.Getenv("ADMIN_ENTRY_PATH"))
+	if err := validateAdminEntryPath(adminEntryPath); err != nil {
+		return Config{}, err
+	}
 	allowedOrigins := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	if err := validateCORSAllowedOrigins(allowedOrigins, deploymentMode == "production"); err != nil {
 		return Config{}, err
@@ -154,6 +159,9 @@ func Load() (Config, error) {
 		if trustedProxyCIDRs == "" {
 			return Config{}, errors.New("TRUSTED_PROXY_CIDRS must be explicitly configured in production")
 		}
+		if adminEntryPath == "" {
+			return Config{}, errors.New("ADMIN_ENTRY_PATH must be explicitly configured in production")
+		}
 	}
 
 	return Config{
@@ -181,6 +189,7 @@ func Load() (Config, error) {
 		SMTPUsername:                         smtpUsername,
 		SMTPPassword:                         smtpPassword,
 		TrustedProxyCIDRs:                    trustedProxyCIDRs,
+		AdminEntryPath:                       adminEntryPath,
 	}, nil
 }
 
@@ -195,6 +204,25 @@ func validateTrustedProxyCIDRs(value string) error {
 		}
 		if prefix.Bits() == 0 {
 			return errors.New("TRUSTED_PROXY_CIDRS must not contain a default route")
+		}
+	}
+	return nil
+}
+
+func validateAdminEntryPath(value string) error {
+	if value == "" {
+		return nil
+	}
+	if !strings.HasPrefix(value, "/admin-") || len(value) < len("/admin-")+16 || len(value) > 160 {
+		return errors.New("ADMIN_ENTRY_PATH must use /admin- followed by at least 16 URL-safe characters")
+	}
+	for _, char := range value[len("/admin-"):] {
+		if (char < 'a' || char > 'z') &&
+			(char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') &&
+			char != '-' &&
+			char != '_' {
+			return errors.New("ADMIN_ENTRY_PATH must contain URL-safe characters only")
 		}
 	}
 	return nil

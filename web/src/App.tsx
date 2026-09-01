@@ -74,8 +74,17 @@ import {
 } from "@/types";
 import { translations } from "@/locales/translations";
 
+const adminEntryPathPattern = /^\/admin-[A-Za-z0-9_-]{16,160}$/;
+
+function isAdminEntryLocation() {
+  return adminEntryPathPattern.test(window.location.pathname);
+}
+
 function parseRoute(hash: string): SectionRoute {
   const raw = hash.replace(/^#/, "");
+  if (isAdminEntryLocation() && (raw === "" || raw === "admin-login")) {
+    return { view: "admin-login", section: "dashboard" };
+  }
   if (raw === "" || raw === "home") {
     return { view: "home", section: "dashboard" };
   }
@@ -97,6 +106,9 @@ function parseRoute(hash: string): SectionRoute {
     return { view: "models", section: "dashboard" };
   }
   if (raw === "admin" || raw.startsWith("admin/")) {
+    if (!isAdminEntryLocation()) {
+      return { view: "not-found", section: "dashboard" };
+    }
     const [, section = "dashboard"] = raw.split("/");
     return { view: "admin", section: normalizeSection(section) };
   }
@@ -412,7 +424,7 @@ export default function App() {
   const [language, setLanguage] = useState<Language>(() =>
     window.localStorage.getItem("ai-token-language") === "en" ? "en" : "zh"
   );
-  const [audience, setAudience] = useState<Audience>("admin");
+  const [audience, setAudience] = useState<Audience>("console");
   const [signedIn, setSignedIn] = useState(false);
   const [principal, setPrincipal] = useState<Principal | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
@@ -731,21 +743,8 @@ export default function App() {
     let cancelled = false;
     async function restoreSession() {
       try {
-        const response = await fetch("/admin/v1/me", {
-          headers: { Accept: "application/json" },
-          credentials: "same-origin",
-        });
-        if (!response.ok) {
-          throw new Error("unauthorized");
-        }
-        const profile = (await response.json()) as Principal;
-        if (cancelled) return;
-        setSignedIn(true);
-        setAudience("admin");
-        setPrincipal(profile);
-      } catch {
-        try {
-          const response = await fetch("/console/v1/me", {
+        if (isAdminEntryLocation()) {
+          const response = await fetch("/admin/v1/me", {
             headers: { Accept: "application/json" },
             credentials: "same-origin",
           });
@@ -753,13 +752,25 @@ export default function App() {
           const profile = (await response.json()) as Principal;
           if (cancelled) return;
           setSignedIn(true);
-          setAudience("console");
+          setAudience("admin");
           setPrincipal(profile);
-        } catch {
-          if (!cancelled) {
-            setSignedIn(false);
-            setPrincipal(null);
-          }
+          return;
+        }
+
+        const response = await fetch("/console/v1/me", {
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+        });
+        if (!response.ok) throw new Error("unauthorized");
+        const profile = (await response.json()) as Principal;
+        if (cancelled) return;
+        setSignedIn(true);
+        setAudience("console");
+        setPrincipal(profile);
+      } catch {
+        if (!cancelled) {
+          setSignedIn(false);
+          setPrincipal(null);
         }
       } finally {
         if (!cancelled) {
@@ -775,6 +786,19 @@ export default function App() {
 
   useEffect(() => {
     if (!sessionReady) return;
+    if (route.view === "admin-login") {
+      if (signedIn && audience === "admin") {
+        window.location.hash = "#admin/dashboard";
+      } else if (signedIn && audience === "console") {
+        window.location.replace("/#console/dashboard");
+      } else {
+        setAudience("admin");
+      }
+      return;
+    }
+    if (route.view === "login") {
+      setAudience("console");
+    }
     if (route.view === "admin" && (!signedIn || audience !== "admin")) {
       window.location.hash = signedIn && audience === "console" ? "#console/dashboard" : "#login";
       return;
@@ -956,6 +980,13 @@ export default function App() {
 	}, [signedIn, audience, route.view, adminSection, language]);
 
   const routeTo = (target: string) => {
+    if (
+      isAdminEntryLocation() &&
+      (target === "#home" || target === "#login" || target === "#register" || target === "#models")
+    ) {
+      window.location.assign(`/${target}`);
+      return;
+    }
     window.location.hash = target;
   };
 
@@ -964,11 +995,12 @@ export default function App() {
     setLoginMessage({ kind: "pending", text: t("signingIn") });
     setFormBusy(true);
     try {
+      const loginAudience: Audience = route.view === "admin-login" ? "admin" : "console";
       const payload: Record<string, string> = { email, password, mfa_code: mfaCode };
-      if (audience === "console") {
+      if (loginAudience === "console") {
         payload.tenant_id = tenantId;
       }
-      const response = await fetch(`/${audience}/v1/auth/login`, {
+      const response = await fetch(`/${loginAudience}/v1/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
@@ -979,7 +1011,8 @@ export default function App() {
         throw new Error(resolveLoginError(response.status, result.error, t));
       }
       setSignedIn(true);
-      if (audience === "admin") {
+      setAudience(loginAudience);
+      if (loginAudience === "admin") {
         const profile = await fetchAdminProfile();
         setPrincipal(profile);
         window.location.hash = "#admin/dashboard";
@@ -3146,6 +3179,10 @@ export default function App() {
 	setFinanceTo("");
     setReportOffset(0);
     setLoginMessage({ kind: "success", text: t("signedOut") });
+    if (logoutAudience === "admin" && isAdminEntryLocation()) {
+      window.location.replace("/#home");
+      return;
+    }
     window.location.hash = "#home";
   }
 
@@ -3233,11 +3270,10 @@ export default function App() {
             message={modelCatalogMessage}
             refresh={refreshModelCatalog}
           />
-        ) : currentView === "login" ? (
+        ) : currentView === "login" || currentView === "admin-login" ? (
           <LoginView
             language={language}
-            audience={audience}
-            setAudience={setAudience}
+            loginAudience={currentView === "admin-login" ? "admin" : "console"}
             email={email}
             setEmail={setEmail}
             password={password}

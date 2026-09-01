@@ -6,7 +6,7 @@ export type Audience = "admin" | "console";
 export type TranslationKey = keyof (typeof translations)["zh"];
 export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "settings";
 export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "profile" | "docs";
-export type View = "home" | "models" | "login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
+export type View = "home" | "models" | "login" | "admin-login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
 
 export interface Principal {
   id: string;

@@ -64,6 +64,14 @@ func TestLoadRejectsBroadTrustedProxyCIDR(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidAdminEntryPath(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-too-short")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected invalid admin entry path to be rejected")
+	}
+}
+
 func TestLoadRejectsInvalidProductionCORSOrigin(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("APP_ENV", "production")
@@ -74,6 +82,7 @@ func TestLoadRejectsInvalidProductionCORSOrigin(t *testing.T) {
 	t.Setenv("MFA_ENCRYPTION_KEY", hex.EncodeToString(make([]byte, 32)))
 	t.Setenv("CORS_ALLOWED_ORIGINS", "http://gateway.example.com")
 	t.Setenv("REGISTRATION_ENABLED", "false")
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
 	t.Setenv("PUBLIC_BASE_URL", "https://gateway.example.com")
 	t.Setenv("SMTP_ADDR", "smtp.example.com:587")
 	t.Setenv("SMTP_FROM", "no-reply@example.com")
@@ -102,6 +111,7 @@ func TestLoadRejectsPublicHTTPAddrAndResetBaseURLInProduction(t *testing.T) {
 	t.Setenv("MFA_ENCRYPTION_KEY", hex.EncodeToString(make([]byte, 32)))
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://gateway.example.com")
 	t.Setenv("REGISTRATION_ENABLED", "false")
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
 	t.Setenv("PUBLIC_BASE_URL", "http://gateway.example.com")
 	t.Setenv("SMTP_ADDR", "smtp.example.com:587")
 	t.Setenv("SMTP_FROM", "no-reply@example.com")
@@ -121,6 +131,7 @@ func TestLoadAcceptsCompleteProductionConfig(t *testing.T) {
 	t.Setenv("MFA_ENCRYPTION_KEY", hex.EncodeToString(make([]byte, 32)))
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://gateway.example.com")
 	t.Setenv("REGISTRATION_ENABLED", "false")
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
 	t.Setenv("PUBLIC_BASE_URL", "https://gateway.example.com")
 	t.Setenv("SMTP_ADDR", "smtp.example.com:587")
 	t.Setenv("SMTP_FROM", "no-reply@example.com")
@@ -145,6 +156,7 @@ func TestLoadRejectsPublicRegistrationWithoutEmailVerification(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://gateway.example.com")
 	t.Setenv("REGISTRATION_ENABLED", "true")
 	t.Setenv("REGISTRATION_EMAIL_VERIFICATION_REQUIRED", "false")
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
 	t.Setenv("PUBLIC_BASE_URL", "https://gateway.example.com")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
 	if _, err := Load(); err == nil {
@@ -162,7 +174,7 @@ func clearConfigEnv(t *testing.T) {
 		"REGISTRATION_ENABLED", "PUBLIC_BASE_URL", "SMTP_ADDR", "SMTP_FROM",
 		"SMTP_USERNAME", "SMTP_PASSWORD",
 		"REGISTRATION_EMAIL_VERIFICATION_REQUIRED",
-		"TRUSTED_PROXY_CIDRS",
+		"TRUSTED_PROXY_CIDRS", "ADMIN_ENTRY_PATH",
 	} {
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)

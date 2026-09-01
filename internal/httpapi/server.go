@@ -2,7 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -205,6 +208,7 @@ func newHandler(
 		webDir = "web"
 	}
 	webDir = resolveWebDir(webDir)
+	adminEntryPath := configuredAdminEntryPath()
 	mux := http.NewServeMux()
 	var billingService billing.AdminService
 	if len(billers) > 0 {
@@ -225,7 +229,7 @@ func newHandler(
 	mux.HandleFunc("GET /public/v1/settings", publicSystemSettingsHandler(services.SecuritySettings))
 	mux.HandleFunc("GET /public/v1/features", publicFeatureSettingsHandler(services.SecuritySettings))
 
-	mux.HandleFunc("POST /admin/v1/auth/login", loginHandler(services.Login, auth.AudienceAdmin, secureCookies))
+	mux.HandleFunc("POST /admin/v1/auth/login", adminLoginHandler(services.Login, secureCookies, adminEntryPath))
 	mux.HandleFunc("POST /console/v1/auth/login", loginHandler(services.Login, auth.AudienceConsole, secureCookies))
 	mux.HandleFunc("POST /console/v1/auth/register", registrationHandler(services.Registration))
 	mux.HandleFunc("POST /console/v1/auth/email/verify", emailVerificationHandler(services.Registration))
@@ -655,6 +659,12 @@ func newHandler(
 	)(relayVideoContentHandler(relayService)))
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if adminEntryPath != "" && r.URL.Path == adminEntryPath {
+			issueAdminEntryCookie(w, adminEntryPath, secureCookies)
+			w.Header().Set("Cache-Control", "no-store")
+			frontendHandler(webDir).ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/favicon.ico" {
 			frontendHandler(webDir).ServeHTTP(w, r)
 			return
@@ -703,6 +713,69 @@ func frontendHandler(webDir string) http.Handler {
 		}
 		http.ServeFile(w, r, indexPath)
 	})
+}
+
+const adminEntryCookieName = "admin_entry"
+
+func configuredAdminEntryPath() string {
+	value := strings.TrimSpace(os.Getenv("ADMIN_ENTRY_PATH"))
+	if !strings.HasPrefix(value, "/admin-") || len(value) < len("/admin-")+16 || len(value) > 160 {
+		return ""
+	}
+	for _, char := range value[len("/admin-"):] {
+		if (char < 'a' || char > 'z') &&
+			(char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') &&
+			char != '-' &&
+			char != '_' {
+			return ""
+		}
+	}
+	return value
+}
+
+func adminEntryTicket(path string) string {
+	if path == "" {
+		return ""
+	}
+	secret := strings.TrimSpace(os.Getenv("SESSION_PEPPER"))
+	if secret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte("admin-entry:" + path))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func issueAdminEntryCookie(w http.ResponseWriter, path string, secure bool) {
+	ticket := adminEntryTicket(path)
+	if ticket == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminEntryCookieName,
+		Value:    ticket,
+		Path:     "/admin/v1/auth/",
+		MaxAge:   15 * 60,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func hasAdminEntryCookie(r *http.Request, path string) bool {
+	if path == "" {
+		return true
+	}
+	ticket := adminEntryTicket(path)
+	if ticket == "" {
+		return false
+	}
+	cookie, err := r.Cookie(adminEntryCookieName)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookie.Value)), []byte(ticket)) == 1
 }
 
 func withRecovery(next http.Handler) http.Handler {
@@ -999,6 +1072,17 @@ func loginHandler(service auth.LoginProvider, audience auth.Audience, secureCook
 			"audience":   audience,
 			"expires_at": session.ExpiresAt,
 		})
+	}
+}
+
+func adminLoginHandler(service auth.LoginProvider, secureCookies bool, entryPath string) http.HandlerFunc {
+	handler := loginHandler(service, auth.AudienceAdmin, secureCookies)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !hasAdminEntryCookie(r, entryPath) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "ADMIN_ENTRY_REQUIRED"})
+			return
+		}
+		handler(w, r)
 	}
 }
 
