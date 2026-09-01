@@ -4,8 +4,8 @@
 
 > **给第一次部署的用户**
 >
-> 推荐只阅读并执行本文，不要同时执行 `docs/09-linux-deployment.md`。
-> 本文按从零开始的顺序编排，请按章节一步一步执行，不要把整篇文档一次性粘贴到终端。
+> 不要手工执行后面的长流程，也不要同时执行 `docs/09-linux-deployment.md`。
+> 首次安装只执行下面“快速安装”中的一个命令。后续章节仅用于排障、升级和手动部署。
 >
 > 代码块右上角的类型决定执行方式：
 >
@@ -19,6 +19,23 @@
 >
 > 看到 `REPLACE_...`、`gateway.example.com` 或 `YOUR_...` 时，必须替换成自己的值。
 > 文档中的 `$RELEASE` 是当前发布版本变量，不是要原样输入的文字。
+
+## 快速安装
+
+DNS 已将域名指向服务器后，在 root 终端执行下面整段命令。只需要把
+`gateway.example.com` 改成真实域名；脚本会在终端中询问管理员邮箱和密码，并自动
+完成依赖安装、PostgreSQL、代码下载、编译、环境文件、Caddy 追加配置、PM2 和首个
+管理员创建。
+
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/inspoaibox/ModelBridge/main/deploy/install-root.sh \
+  -o /root/ai-token-install.sh
+chmod 0700 /root/ai-token-install.sh
+bash /root/ai-token-install.sh --domain gateway.example.com
+~~~
+
+脚本安装成功后访问 `https://你的域名`，使用刚创建的管理员账号登录。SMTP 不在脚本
+或环境文件中填写；登录后从“系统设置 → 邮件设置”配置。
 
 ### 终端身份和编辑器
 
