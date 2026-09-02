@@ -43,7 +43,7 @@ export function AdminUsagePanel({ language, report, busy, message, refresh, sear
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label={t("usageRecordsTotalRequests")} value={formatInteger(summary?.total_records || 0)} icon={Activity} tone="indigo" />
         <StatCard label={t("usageRecordsTotalTokens")} value={formatInteger(summary?.total_tokens || 0)} icon={Database} tone="cyan" />
-        <StatCard label={t("usageRecordsTotalCost")} value={`${currencyLabel(summary?.total_cost, report?.records[0]?.currency)} ${formatDecimal(summary?.total_cost)}`} icon={Clock3} tone="emerald" />
+        <StatCard label={t("usageRecordsTotalCost")} value={summary ? formatCostSummary(summary, t("usageRecordsMultipleCurrencies")) : "-"} icon={Clock3} tone="emerald" />
         <StatCard label={t("usageRecordsPageRange")} value={report ? `${report.records.length} / ${report.summary.total_records}` : "-"} icon={Activity} tone="amber" />
       </div>
 
@@ -76,8 +76,8 @@ export function AdminUsagePanel({ language, report, busy, message, refresh, sear
                   <TableCell><Badge variant="outline">{record.group_name || record.group_code || t("usageRecordsDefaultGroup")}</Badge></TableCell>
                   <TableCell><Badge variant="secondary">{record.request_type === "sync" ? t("usageRecordsSync") : record.request_type || "-"}</Badge></TableCell>
                   <TableCell><Badge variant={record.billing_type === "free" ? "success" : "cyan"}>{record.billing_type === "free" ? t("usageRecordsFree") : t("usageRecordsPrepaid")}</Badge></TableCell>
-                  <TableCell><TokenBreakdown input={record.input_tokens} output={record.output_tokens} cached={record.cached_input_tokens} reasoning={record.reasoning_tokens} /><MeterBreakdown metrics={record.usage_metrics} /></TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-xs font-semibold text-emerald-700 dark:text-emerald-300">{record.currency} {formatDecimal(record.cost)}</TableCell>
+                  <TableCell><TokenBreakdown input={record.input_tokens} output={record.output_tokens} cached={record.cached_input_tokens} reasoning={record.reasoning_tokens} t={t} /><MeterBreakdown metrics={record.usage_metrics} language={language} label={t("usageRecordsOtherMetrics")} /></TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs font-semibold text-emerald-700 dark:text-emerald-300"><div>{record.currency} {record.status === "settlement_pending" ? `~${formatDecimal(record.estimated_cost)}` : formatDecimal(record.cost)}</div>{record.status === "settlement_pending" ? <div className="text-[10px] font-normal text-amber-600 dark:text-amber-300">{t("usageRecordsReservedCost")}</div> : null}<ChargeBreakdown lines={record.charge_breakdown} language={language} t={t} /></TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-slate-600 dark:text-slate-300">{record.latency_ms > 0 ? `${(record.latency_ms / 1000).toFixed(2)}s` : "-"}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{formatDate(record.created_at, language)}</TableCell>
                 </TableRow>)}
@@ -95,14 +95,15 @@ function StatCard({ label, value, icon: Icon, tone }: { label: string; value: st
   return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardContent className="flex items-center justify-between p-4"><div><div className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</div><div className="mt-2 font-mono text-xl font-bold text-slate-950 dark:text-white">{value}</div></div><div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", tone === "cyan" ? "bg-cyan-500/10 text-cyan-600 dark:text-cyan-300" : tone === "emerald" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" : tone === "amber" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300" : "bg-indigo-500/10 text-indigo-600 dark:text-indigo-300")}><Icon className="h-5 w-5" /></div></CardContent></Card>;
 }
 
-function TokenBreakdown({ input, output, cached, reasoning }: { input: number; output: number; cached: number; reasoning: number }) {
-  return <div className="space-y-1 whitespace-nowrap font-mono text-[11px]"><div><span className="text-cyan-600">↓</span> {formatInteger(input)} <span className="ml-2 text-indigo-600">↑</span> {formatInteger(output)}</div>{cached > 0 || reasoning > 0 ? <div className="text-[10px] text-slate-400">{cached > 0 ? `cache ${formatInteger(cached)}` : ""}{reasoning > 0 ? ` · reason ${formatInteger(reasoning)}` : ""}</div> : null}</div>;
+function TokenBreakdown({ input, output, cached, reasoning, t }: { input: number; output: number; cached: number; reasoning: number; t: (key: TranslationKey) => string }) {
+  if (input <= 0 && output <= 0 && cached <= 0 && reasoning <= 0) return <span className="text-[10px] text-slate-400">{t("usageRecordsNoTokenMeter")}</span>;
+  return <div className="space-y-1 whitespace-nowrap font-mono text-[11px]"><div><span className="text-cyan-600">↓</span> {t("consoleUsageInputShort")} {formatInteger(input)} <span className="ml-2 text-indigo-600">↑</span> {t("consoleUsageOutputShort")} {formatInteger(output)}</div>{cached > 0 || reasoning > 0 ? <div className="text-[10px] text-slate-400">{cached > 0 ? `${t("consoleUsageCachedShort")} ${formatInteger(cached)}` : ""}{reasoning > 0 ? ` · ${t("consoleUsageReasoningShort")} ${formatInteger(reasoning)}` : ""}</div> : null}</div>;
 }
 
-function MeterBreakdown({ metrics }: { metrics?: Record<string, string> }) {
-  const entries = Object.entries(metrics || {}).filter(([key, value]) => !["input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens"].includes(key) && value !== "0");
+function MeterBreakdown({ metrics, language, label }: { metrics?: Record<string, string>; language: Language; label: string }) {
+  const entries = metricEntries(metrics);
   if (entries.length === 0) return null;
-  return <div className="mt-1 max-w-[180px] truncate text-[10px] text-slate-400" title={entries.map(([key, value]) => `${key}: ${value}`).join(" · ")}>{entries.map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`).join(" · ")}</div>;
+  return <div className="mt-1 max-w-[180px] truncate text-[10px] text-slate-400" title={entries.map(([key, value]) => `${metricLabel(key, language)}: ${formatUsageQuantity(value)}`).join(" · ")}><span className="mr-1">{label}:</span>{entries.map(([key, value]) => `${metricLabel(key, language)} ${formatUsageQuantity(value)}`).join(" · ")}</div>;
 }
 
 function formatInteger(value: number) {
@@ -110,13 +111,46 @@ function formatInteger(value: number) {
 }
 
 function formatDecimal(value?: string) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return "0.000000";
-  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 6, maximumFractionDigits: 6 }).format(parsed);
+  return formatUsageQuantity(value || "0");
 }
 
-function currencyLabel(value?: string, fallback?: string) {
-  return fallback || (Number(value) === 0 ? "USD" : "USD");
+function ChargeBreakdown({ lines, language, t }: { lines?: UsageRecord["charge_breakdown"]; language: Language; t: (key: TranslationKey) => string }) {
+  if (!lines || lines.length === 0) return null;
+  return <details className="mt-1 max-w-[170px] text-[10px] font-normal text-slate-500 dark:text-slate-400"><summary className="cursor-pointer list-none truncate">{t("usageRecordsChargeDetails")} · {lines.length} {t("usageRecordsChargeLines")}</summary><div className="mt-1 space-y-0.5 whitespace-normal font-mono">{lines.map((line) => <div key={`${line.component_code}-${line.unit}`}><span>{metricLabel(line.component_code, language)}</span> {formatUsageQuantity(line.quantity)} × {formatUsageQuantity(line.price_per_unit)} = {formatUsageQuantity(line.amount)}</div>)}</div></details>;
+}
+
+function metricEntries(metrics?: Record<string, string>) {
+  return Object.entries(metrics || {}).filter(([key, value]) => !["input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens"].includes(key) && !isZeroUsageQuantity(value));
+}
+
+function metricLabel(key: string, language: Language) {
+  const labels: Record<string, [string, string]> = {
+    input_images: ["输入图片", "input images"], output_images: ["输出图片", "output images"], input_audio_seconds: ["输入音频秒数", "input audio seconds"], output_audio_seconds: ["输出音频秒数", "output audio seconds"], input_video_seconds: ["输入视频秒数", "output video seconds"], output_video_seconds: ["输出视频秒数", "output video seconds"], input_characters: ["输入字符", "input characters"], output_characters: ["输出字符", "output characters"], requests: ["请求", "requests"], queries: ["查询", "queries"], sessions: ["会话", "sessions"], pages: ["页数", "pages"], storage_gb_days: ["存储 GB-天", "storage GB-days"],
+  };
+  return labels[key]?.[language === "zh" ? 0 : 1] || key.replace(/_/g, " ");
+}
+
+function formatUsageQuantity(value: string) {
+  const normalized = String(value ?? "").trim();
+  const match = normalized.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return normalized || "0";
+  const integerPart = match[2].replace(/^0+(?=\d)/, "");
+  const fractionPart = (match[3] || "").replace(/0+$/, "");
+  return `${match[1] === "-" ? "-" : ""}${integerPart}${fractionPart ? `.${fractionPart}` : ""}`;
+}
+
+function isZeroUsageQuantity(value: string) {
+  return /^[-+]?0(?:\.0*)?$/.test(String(value ?? "").trim());
+}
+
+function formatCostSummary(summary: UsageReport["summary"], multipleLabel: string) {
+  const entries = Object.entries(summary.cost_by_currency || {}).sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) return "0";
+  if (entries.length === 1) {
+    const [currency, amount] = entries[0];
+    return `${currency} ${formatDecimal(amount)}`;
+  }
+  return `${multipleLabel}: ${entries.map(([currency, amount]) => `${currency} ${formatDecimal(amount)}`).join(" · ")}`;
 }
 
 function formatDate(value: string, language: Language) {

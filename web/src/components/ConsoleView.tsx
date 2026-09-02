@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, TenantMember, TokenSummary, TranslationKey, UsageReport } from "@/types";
+import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, TenantMember, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
 import { ProfilePanel } from "@/components/ProfilePanel";
@@ -234,7 +234,7 @@ export function ConsoleView({
 
           {displayedSection === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
           {displayedSection === "model-status" ? <ModelStatusPanel language={language} report={modelStatusReport} busy={modelStatusBusy} message={modelStatusMessage} refresh={refreshModelStatus} /> : null}
-          {displayedSection === "usage" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} tokens={tokens} /> : null}
+          {displayedSection === "usage" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} /> : null}
           {displayedSection === "projects" ? <TenantWorkspacePanel language={language} canManageTenant={canManageTenant} canManageProjects={canManageProjects} projects={projects} projectsBusy={projectsBusy} projectsMessage={projectsMessage} refreshProjects={refreshProjects} saveProject={saveProject} deleteProject={deleteProject} projectActionBusy={projectActionBusy} projectDeleteConfirm={projectDeleteConfirm} members={members} membersBusy={membersBusy} membersMessage={membersMessage} refreshMembers={refreshMembers} addMember={addMember} updateMember={updateMember} removeMember={removeMember} memberActionBusy={memberActionBusy} projectMembers={projectMembers} projectMembersBusy={projectMembersBusy} projectMembersMessage={projectMembersMessage} selectedProjectID={selectedProjectID} selectProject={selectProject} refreshProjectMembers={refreshProjectMembers} addProjectMember={addProjectMember} updateProjectMember={updateProjectMember} removeProjectMember={removeProjectMember} projectMemberActionBusy={projectMemberActionBusy} /> : null}
           {displayedSection === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} revokeToken={revokeToken} revokeConfirm={revokeConfirm} openCreateToken={openCreateToken} canCreateToken={canCreateToken} canRevokeToken={canRevokeToken} apiEndpoints={apiEndpoints} /> : null}
           {displayedSection === "billing" ? <BillingPanel language={language} t={t} billingAccount={billingAccount} billingBusy={billingBusy} billingMessage={billingMessage} refreshBilling={refreshBilling} /> : null}
@@ -251,12 +251,98 @@ function DashboardPanel({ t, tokens, activeTokens, projectCount, principal, usag
   return <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map((card) => <Card key={card.label} className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardDescription>{card.label}</CardDescription><div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", card.tone === "emerald" ? "bg-emerald-500/10 text-emerald-600" : card.tone === "cyan" ? "bg-cyan-500/10 text-cyan-600" : card.tone === "amber" ? "bg-amber-500/10 text-amber-600" : "bg-indigo-500/10 text-indigo-600")}><card.icon className="h-4 w-4" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-slate-950 dark:text-white">{card.value}</div></CardContent></Card>)}</div><div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]"><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleOverviewTitle")}</CardTitle><CardDescription>{t("consoleOverviewHint")}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleTenantID")}</span><code className="max-w-[65%] truncate text-xs text-slate-700 dark:text-slate-300">{principal?.tenant_id || "-"}</code></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleRoles")}</span><span className="font-medium text-slate-800 dark:text-slate-200">{principal?.roles?.join(", ") || "-"}</span></div></CardContent></Card><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Network className="h-5 w-5 text-cyan-600" />{t("consoleQuickActions")}</CardTitle></CardHeader><CardContent className="space-y-2">{canCreateToken ? <button type="button" onClick={() => onNavigate("tokens")} className="flex w-full items-center gap-3 rounded-xl bg-indigo-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-indigo-500/10 dark:text-slate-300"><KeyRound className="h-4 w-4 text-indigo-600" />{t("consoleQuickToken")}</button> : null}<button type="button" onClick={() => onNavigate("usage")} className="flex w-full items-center gap-3 rounded-xl bg-cyan-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-cyan-500/10 dark:text-slate-300"><Activity className="h-4 w-4 text-cyan-600" />{t("consoleQuickUsage")}</button></CardContent></Card></div></div>;
 }
 
-function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMessage, refreshUsage, tokens }: { language: Language; t: (key: TranslationKey) => string; usageStatus: ConsoleUsageStatus | null; usageReport: UsageReport | null; usageBusy: boolean; usageMessage: LoginMessage; refreshUsage: (showPending?: boolean) => Promise<void>; tokens: TokenSummary[] }) {
+function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMessage, refreshUsage }: { language: Language; t: (key: TranslationKey) => string; usageStatus: ConsoleUsageStatus | null; usageReport: UsageReport | null; usageBusy: boolean; usageMessage: LoginMessage; refreshUsage: (showPending?: boolean) => Promise<void> }) {
   const report = usageReport;
-  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-start justify-between gap-4"><div><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleUsageTitle")}</CardTitle><CardDescription>{t("consoleUsageDescription")}</CardDescription></div><Button variant="outline" size="sm" onClick={() => void refreshUsage(true)} disabled={usageBusy} className="gap-2"><RefreshCw className={cn("h-4 w-4", usageBusy ? "animate-spin" : "")} />{t("consoleRefresh")}</Button></CardHeader><CardContent className="space-y-5">{usageMessage.text ? <div className="rounded-xl border border-rose-500/30 bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{usageMessage.text}</div> : null}<div className="grid gap-4 sm:grid-cols-3"><UsageMetric label={t("consoleUsageAPIStatus")} value={usageStatus?.status === "ready" ? t("consoleReady") : t("consolePending")} /><UsageMetric label={t("consoleUsageTokenCount")} value={String(report?.summary.total_records ?? tokens.length)} /><UsageMetric label={t("consoleUsageTotalTokens")} value={formatInteger(report?.summary.total_tokens || 0)} /></div><div className="grid gap-4 sm:grid-cols-2"><UsageMetric label={t("consoleUsageTotalCost")} value={report ? `${formatUsageCost(report.summary.total_cost)} USD` : "-"} /><UsageMetric label={t("consoleUsageInputOutput")} value={report ? `${formatInteger(report.summary.input_tokens)} / ${formatInteger(report.summary.output_tokens)}` : "-"} /></div><div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"><Table><TableHeader><TableRow><TableHead>{t("consoleUsageModel")}</TableHead><TableHead>{t("consoleUsageTokens")}</TableHead><TableHead>{t("consoleUsageCost")}</TableHead><TableHead>{t("consoleUsageStatus")}</TableHead><TableHead>{t("consoleUsageTime")}</TableHead></TableRow></TableHeader><TableBody>{usageBusy && !report ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-4 w-4 animate-spin" />{t("consoleUsageLoading")}</TableCell></TableRow> : !report || report.records.length === 0 ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-sm text-slate-500">{t("consoleUsageEmpty")}</TableCell></TableRow> : report.records.map((record) => <TableRow key={record.id}><TableCell><div className="font-semibold text-slate-900 dark:text-white">{record.model}</div><div className="text-[10px] text-slate-500">{record.group_name || record.group_code || "-"}</div></TableCell><TableCell className="font-mono text-xs">{formatInteger(record.total_tokens)}</TableCell><TableCell className="font-mono text-xs text-emerald-700 dark:text-emerald-300">{record.currency} {formatUsageCost(record.cost)}</TableCell><TableCell><UsageStatusBadge status={record.status} failureReason={record.failure_reason} t={t} /></TableCell><TableCell className="whitespace-nowrap text-xs text-slate-500">{formatDate(record.created_at, language)}</TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>;
+  const summary = report?.summary;
+  return (
+    <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
+      <CardHeader className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 dark:border-slate-800/80 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleUsageTitle")}</CardTitle>
+          <CardDescription>{t("consoleUsageDescription")}</CardDescription>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="hidden text-right sm:block">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{t("consoleUsageAPIStatus")}</div>
+            <div className="mt-1 text-xs font-medium text-slate-700 dark:text-slate-300">{usageStatus?.status === "ready" ? t("consoleReady") : t("consolePending")}</div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => void refreshUsage(true)} disabled={usageBusy} className="gap-2"><RefreshCw className={cn("h-4 w-4", usageBusy ? "animate-spin" : "")} />{t("consoleRefresh")}</Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5 pt-5">
+        {usageMessage.text ? <div className="rounded-xl border border-rose-500/30 bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{usageMessage.text}</div> : null}
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <UsageMetric label={t("consoleUsageRequests")} value={summary ? formatInteger(summary.total_records) : "-"} tone="indigo" icon={Activity} />
+          <UsageMetric label={t("consoleUsageTotalTokens")} value={summary ? formatInteger(summary.total_tokens) : "-"} tone="cyan" icon={Gauge} />
+          <UsageMetric label={t("consoleUsageInputOutput")} value={summary ? `${formatInteger(summary.input_tokens)} / ${formatInteger(summary.output_tokens)}` : "-"} detail={summary ? `${t("consoleUsageCachedTokens")} ${formatInteger(summary.cached_input_tokens)} · ${t("consoleUsageReasoningTokens")} ${formatInteger(summary.reasoning_tokens)}` : undefined} tone="amber" icon={Network} />
+          <UsageMetric label={t("consoleUsageTotalCost")} value={summary ? formatCostSummary(summary, t("consoleUsageMultipleCurrencies")) : "-"} tone="emerald" icon={BadgeDollarSign} />
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs dark:border-slate-800 dark:bg-slate-950/35">
+          <span className="font-semibold text-slate-700 dark:text-slate-200">{t("consoleUsageDetailStatus")}</span>
+          <span className="text-slate-500 dark:text-slate-400">{report ? `${report.records.length} / ${report.limit}` : "-"}</span>
+          <span className="text-slate-300 dark:text-slate-700">|</span>
+          <span className="text-slate-500 dark:text-slate-400">{t("consoleUsageInputOutput")}: {summary ? `${formatInteger(summary.input_tokens)} / ${formatInteger(summary.output_tokens)}` : "-"}</span>
+        </div>
+        <SummaryMeterBreakdown metrics={summary?.usage_metrics} language={language} label={t("consoleUsageOtherMetrics")} />
+        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+          <Table className="min-w-[1180px]">
+            <TableHeader><TableRow><TableHead className="w-[150px]">{t("consoleUsageTime")}</TableHead><TableHead className="w-[180px]">{t("consoleUsageTokenName")}</TableHead><TableHead className="w-[190px]">{t("consoleUsageModel")}</TableHead><TableHead className="w-[180px]">{t("consoleUsageGroup")}</TableHead><TableHead className="w-[92px]">{t("consoleUsageLatency")}</TableHead><TableHead className="w-[190px]">{t("consoleUsageTokens")}</TableHead><TableHead className="w-[125px]">{t("consoleUsageCost")}</TableHead><TableHead className="w-[130px]">{t("consoleUsageStatus")}</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {usageBusy && !report ? <TableRow><TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-4 w-4 animate-spin" />{t("consoleUsageLoading")}</TableCell></TableRow> : !report || report.records.length === 0 ? <TableRow><TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500">{t("consoleUsageEmpty")}</TableCell></TableRow> : report.records.map((record) => <TableRow key={record.id}>
+                <TableCell className="whitespace-nowrap"><div className="font-mono text-xs font-medium text-slate-700 dark:text-slate-200">{formatDate(record.created_at, language)}</div><div className="mt-1 max-w-[135px] truncate font-mono text-[10px] text-slate-400" title={record.endpoint}>{record.endpoint || "-"}</div></TableCell>
+                <TableCell><div className="max-w-[155px] truncate font-semibold text-slate-900 dark:text-white" title={record.token_name || undefined}>{record.token_name || t("consoleUsageUnnamedToken")}</div><div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{record.token_prefix ? `${record.token_prefix}...` : "-"}</div></TableCell>
+                <TableCell><div className="max-w-[170px] truncate font-semibold text-slate-900 dark:text-white" title={record.model}>{record.model || t("consoleUsageUnknownModel")}</div><div className="mt-1 text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{record.provider || "-"}</div></TableCell>
+                <TableCell><Badge variant="cyan" className="max-w-[165px] truncate" title={record.group_name || record.group_code || undefined}>{record.group_name || record.group_code || t("consoleUsageNoGroup")}</Badge><div className="mt-1 max-w-[165px] truncate font-mono text-[10px] text-slate-500 dark:text-slate-400">{record.group_code || "-"}</div></TableCell>
+                <TableCell className="whitespace-nowrap"><div className="font-mono text-xs text-slate-700 dark:text-slate-200">{record.latency_ms > 0 ? `${(record.latency_ms / 1000).toFixed(2)}s` : "-"}</div><div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">{record.request_type || t("consoleUsageUnknownRequest")}</div></TableCell>
+                <TableCell><UsageTokenBreakdown record={record} t={t} /><MeterBreakdown metrics={record.usage_metrics} language={language} label={t("consoleUsageOtherMetrics")} /></TableCell>
+                <TableCell className="whitespace-nowrap font-mono text-xs font-semibold text-emerald-700 dark:text-emerald-300"><div>{record.currency} {record.status === "settlement_pending" ? `~${formatUsageCost(record.estimated_cost)}` : formatUsageCost(record.cost)}</div>{record.status === "settlement_pending" ? <div className="text-[10px] font-normal text-amber-600 dark:text-amber-300">{t("consoleUsageReservedCost")}</div> : null}<ChargeBreakdown lines={record.charge_breakdown} language={language} t={t} /></TableCell>
+                <TableCell><UsageStatusBadge status={record.status} failureReason={record.failure_reason} t={t} /></TableCell>
+              </TableRow>)}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
-function UsageMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/30"><div className="text-xs text-slate-500">{label}</div><div className="mt-2 text-xl font-bold text-slate-900 dark:text-white">{value}</div></div>; }
+function UsageMetric({ label, value, detail, tone, icon: Icon }: { label: string; value: string; detail?: string; tone: "indigo" | "cyan" | "amber" | "emerald"; icon: typeof Activity }) { return <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-950/30"><div className="flex items-center justify-between gap-3"><div className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</div><div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", tone === "cyan" ? "bg-cyan-500/10 text-cyan-600 dark:text-cyan-300" : tone === "amber" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300" : tone === "emerald" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" : "bg-indigo-500/10 text-indigo-600 dark:text-indigo-300")}><Icon className="h-4 w-4" /></div></div><div className="mt-3 font-mono text-xl font-bold text-slate-900 dark:text-white">{value}</div>{detail ? <div className="mt-1 truncate text-[10px] text-slate-500 dark:text-slate-400" title={detail}>{detail}</div> : null}</div>; }
+function UsageTokenBreakdown({ record, t }: { record: UsageRecord; t: (key: TranslationKey) => string }) {
+  const hasTokens = record.input_tokens > 0 || record.output_tokens > 0 || record.cached_input_tokens > 0 || record.reasoning_tokens > 0;
+  if (!hasTokens) return <span className="text-[10px] text-slate-400">{t("consoleUsageNoTokenMeter")}</span>;
+  return <div className="grid grid-cols-2 gap-x-4 gap-y-1 whitespace-nowrap font-mono text-[11px]"><span><span className="mr-1 text-cyan-600">↓</span>{t("consoleUsageInputShort")} {formatInteger(record.input_tokens)}</span><span><span className="mr-1 text-indigo-600">↑</span>{t("consoleUsageOutputShort")} {formatInteger(record.output_tokens)}</span><span className="text-slate-500 dark:text-slate-400">{t("consoleUsageCachedShort")} {formatInteger(record.cached_input_tokens)}</span><span className="text-slate-500 dark:text-slate-400">{t("consoleUsageReasoningShort")} {formatInteger(record.reasoning_tokens)}</span></div>;
+}
+function SummaryMeterBreakdown({ metrics, language, label }: { metrics?: Record<string, string>; language: Language; label: string }) {
+  const entries = metricEntries(metrics);
+  if (entries.length === 0) return null;
+  return <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs dark:border-slate-800 dark:bg-slate-950/35"><span className="mr-3 font-semibold text-slate-700 dark:text-slate-200">{label}</span><span className="inline-flex flex-wrap gap-x-4 gap-y-1 text-slate-500 dark:text-slate-400">{entries.map(([key, value]) => <span key={key}><span className="text-slate-700 dark:text-slate-300">{metricLabel(key, language)}</span> {formatUsageQuantity(value)}</span>)}</span></div>;
+}
+function MeterBreakdown({ metrics, language, label }: { metrics?: Record<string, string>; language: Language; label: string }) {
+  const entries = metricEntries(metrics);
+  if (entries.length === 0) return null;
+  return <div className="mt-1 max-w-[190px] truncate text-[10px] text-slate-400" title={entries.map(([key, value]) => `${metricLabel(key, language)}: ${formatUsageQuantity(value)}`).join(" · ")}><span className="mr-1">{label}:</span>{entries.map(([key, value]) => `${metricLabel(key, language)} ${formatUsageQuantity(value)}`).join(" · ")}</div>;
+}
+function ChargeBreakdown({ lines, language, t }: { lines?: UsageRecord["charge_breakdown"]; language: Language; t: (key: TranslationKey) => string }) {
+  if (!lines || lines.length === 0) return null;
+  return <details className="mt-1 max-w-[170px] text-[10px] font-normal text-slate-500 dark:text-slate-400"><summary className="cursor-pointer list-none truncate">{t("consoleUsageChargeDetails")} · {lines.length} {t("consoleUsageChargeLines")}</summary><div className="mt-1 space-y-0.5 whitespace-normal font-mono">{lines.map((line) => <div key={`${line.component_code}-${line.unit}`}><span>{metricLabel(line.component_code, language)}</span> {formatUsageQuantity(line.quantity)} × {formatUsageQuantity(line.price_per_unit)} = {formatUsageQuantity(line.amount)}</div>)}</div></details>;
+}
+function metricEntries(metrics?: Record<string, string>) {
+  return Object.entries(metrics || {}).filter(([key, value]) => !["input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens"].includes(key) && !isZeroUsageQuantity(value));
+}
+function metricLabel(key: string, language: Language) {
+  const labels: Record<string, [string, string]> = {
+    input_images: ["输入图片", "input images"], output_images: ["输出图片", "output images"], input_audio_seconds: ["输入音频秒数", "input audio seconds"], output_audio_seconds: ["输出音频秒数", "output audio seconds"], input_video_seconds: ["输入视频秒数", "input video seconds"], output_video_seconds: ["输出视频秒数", "output video seconds"], input_characters: ["输入字符", "input characters"], output_characters: ["输出字符", "output characters"], requests: ["请求", "requests"], queries: ["查询", "queries"], sessions: ["会话", "sessions"], pages: ["页数", "pages"], storage_gb_days: ["存储 GB-天", "storage GB-days"],
+  };
+  return labels[key]?.[language === "zh" ? 0 : 1] || key.replace(/_/g, " ");
+}
+function formatUsageQuantity(value: string) {
+  const normalized = String(value ?? "").trim();
+  const match = normalized.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return normalized || "0";
+  const integerPart = match[2].replace(/^0+(?=\d)/, "");
+  const fractionPart = (match[3] || "").replace(/0+$/, "");
+  return `${match[1] === "-" ? "-" : ""}${integerPart}${fractionPart ? `.${fractionPart}` : ""}`;
+}
 function formatInteger(value: number) { return new Intl.NumberFormat("en-US", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0); }
 function formatMoney(value?: string) {
   const parsed = Number(value);
@@ -272,6 +358,18 @@ function formatUsageCost(value?: string) {
   const fractionPart = (match[3] || "").replace(/0+$/, "");
   if (/^0+$/.test(integerPart) && fractionPart.length === 0) return "0";
   return `${match[1] === "-" ? "-" : ""}${integerPart}${fractionPart ? `.${fractionPart}` : ""}`;
+}
+function isZeroUsageQuantity(value: string) {
+  return /^[-+]?0(?:\.0*)?$/.test(String(value ?? "").trim());
+}
+function formatCostSummary(summary: UsageReport["summary"], multipleLabel: string) {
+  const entries = Object.entries(summary.cost_by_currency || {}).sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) return "0";
+  if (entries.length === 1) {
+    const [currency, amount] = entries[0];
+    return `${currency} ${formatUsageCost(amount)}`;
+  }
+  return `${multipleLabel}: ${entries.map(([currency, amount]) => `${currency} ${formatUsageCost(amount)}`).join(" · ")}`;
 }
 function UsageStatusBadge({ status, failureReason, t }: { status: string; failureReason?: string; t: (key: TranslationKey) => string }) {
   const normalized = status.trim().toLowerCase();

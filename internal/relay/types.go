@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -624,6 +625,9 @@ func (s *Service) ChatCompletions(
 
 	var reservation billing.Reservation
 	var freeRequestID string
+	defer func() {
+		s.recordRelayRequestMetrics(ctx, reservation, freeRequestID, startedAt)
+	}()
 	var lastErr error
 	billingEnabled := s.billing != nil && groupPolicy.BillingType != "free"
 	attempted := map[string]struct{}{}
@@ -649,7 +653,7 @@ func (s *Service) ChatCompletions(
 		if billingEnabled && reservation.ID == "" {
 			reservation, err = s.billing.Reserve(ctx, billing.Request{
 				RequestID:             request.RequestID,
-				IdempotencyKey:        request.IdempotencyKey,
+				IdempotencyKey:        scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey),
 				TenantID:              principal.TenantID,
 				ProjectID:             principalProjectID(principal),
 				TokenID:               principal.TokenID,
@@ -668,6 +672,10 @@ func (s *Service) ChatCompletions(
 				BillingType:           groupPolicy.BillingType,
 			})
 			if err != nil {
+				if errors.Is(err, billing.ErrPriceNotConfigured) {
+					lastErr = err
+					continue
+				}
 				return ChatCompletionResponse{}, err
 			}
 		}
@@ -675,7 +683,7 @@ func (s *Service) ChatCompletions(
 			if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
 				freeRequestID, err = recorder.StartFreeRequest(ctx, billing.Request{
 					RequestID:       request.RequestID,
-					IdempotencyKey:  request.IdempotencyKey,
+					IdempotencyKey:  scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey),
 					TenantID:        principal.TenantID,
 					ProjectID:       principalProjectID(principal),
 					TokenID:         principal.TokenID,
@@ -695,6 +703,14 @@ func (s *Service) ChatCompletions(
 					return ChatCompletionResponse{}, err
 				}
 			}
+		}
+		if err := s.bindReservationToCandidate(ctx, reservation, channel.ID); err != nil {
+			lastErr = err
+			if errors.Is(err, billing.ErrPriceNotConfigured) {
+				continue
+			}
+			s.failRelayBilling(ctx, reservation, freeRequestID, "billing_channel_bind_failed")
+			return ChatCompletionResponse{}, err
 		}
 
 		upstreamModel := strings.TrimSpace(channel.UpstreamModelName)
@@ -732,15 +748,42 @@ func (s *Service) ChatCompletions(
 		}
 		source := "upstream"
 		hadUpstreamUsage := chatUsageHasValues(response.Usage)
-		if !hadUpstreamUsage && (billingEnabled || !canEstimateChatUsage(request)) {
+		if !hadUpstreamUsage {
 			if billingEnabled {
-				s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
-			} else {
-				s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
+				if err := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_usage_unavailable"); err != nil {
+					return ChatCompletionResponse{}, err
+				}
+				return response, nil
 			}
-			// Do not release a paid reservation. A non-text provider may have
-			// charged usage even when the adapter did not receive a usage block.
-			return ChatCompletionResponse{}, ErrUsageUnavailable
+			if !canEstimateChatUsage(request) {
+				s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
+				return ChatCompletionResponse{}, ErrUsageUnavailable
+			}
+		}
+		if hadUpstreamUsage && !chatUsageIsComplete(response.Usage, chatResponseHasOutput(response)) {
+			if billingEnabled {
+				if err := s.markRelayBillingPendingWithUsage(
+					ctx,
+					reservation,
+					freeRequestID,
+					"upstream_usage_incomplete",
+					chatBillingUsage(response.Usage, "upstream"),
+					response.ID,
+				); err != nil {
+					return ChatCompletionResponse{}, err
+				}
+				return response, nil
+			}
+			if !canEstimateChatUsage(request) {
+				s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_usage_incomplete")
+				return ChatCompletionResponse{}, ErrUsageUnavailable
+			}
+			if input, _, output, _ := response.Usage.billingBreakdown(); input <= 0 {
+				response.Usage.PromptTokens = estimateInputTokens(request)
+			} else if output <= 0 && chatResponseHasOutput(response) {
+				response.Usage.CompletionTokens = estimateResponseTokens(response)
+			}
+			source = "local_estimate"
 		}
 		if !hadUpstreamUsage {
 			response.Usage.PromptTokens = estimateInputTokens(request)
@@ -748,54 +791,13 @@ func (s *Service) ChatCompletions(
 			source = "local_estimate"
 		}
 		response.Usage.TotalTokens = response.Usage.PromptTokens + response.Usage.CompletionTokens
-		inputTokens, cachedInputTokens, outputTokens, reasoningTokens := response.Usage.billingBreakdown()
-		usageRaw := marshalUsageForBilling(response.Usage)
-		if billingEnabled {
-			if rebinder, ok := s.billing.(billing.ReservationChannelRebinder); ok {
-				if err := rebinder.RebindReservationChannel(ctx, reservation.ID, channel.ID); err != nil {
-					return ChatCompletionResponse{}, err
-				}
-			}
-			if err := s.billing.Settle(ctx, reservation.ID, billing.Usage{
-				InputTokens:       inputTokens,
-				OutputTokens:      outputTokens,
-				CachedInputTokens: cachedInputTokens,
-				ReasoningTokens:   reasoningTokens,
-				Metrics:           response.Usage.meteredUsage(),
-				PricingTier:       response.Usage.PricingTier,
-				Source:            source,
-				Raw:               usageRaw,
-			}, response.ID); err != nil {
-				// Keep the reservation held for reconciliation/reaping. Releasing it
-				// here could turn a transient billing failure into a free request.
+		if billingEnabled || freeRequestID != "" {
+			if err := s.completeRelayBilling(ctx, reservation, freeRequestID, response.Usage, response.ID, channel.ID, source); err != nil {
+				// A successful upstream response must never become an untracked
+				// or free request when the accounting write fails. Paid requests
+				// remain pending with the Usage snapshot for reconciliation.
 				return ChatCompletionResponse{}, err
 			}
-		}
-		if !billingEnabled && freeRequestID != "" {
-			if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
-				if err := recorder.RebindRequestChannel(ctx, freeRequestID, channel.ID); err != nil {
-					return ChatCompletionResponse{}, err
-				}
-				if err := recorder.CompleteFreeRequest(ctx, freeRequestID, billing.Usage{
-					InputTokens:       inputTokens,
-					OutputTokens:      outputTokens,
-					CachedInputTokens: cachedInputTokens,
-					ReasoningTokens:   reasoningTokens,
-					Metrics:           response.Usage.meteredUsage(),
-					PricingTier:       response.Usage.PricingTier,
-					Source:            source,
-					Raw:               usageRaw,
-				}, response.ID); err != nil {
-					return ChatCompletionResponse{}, err
-				}
-			}
-		}
-		requestRecordID := reservation.ModelRequestID
-		if requestRecordID == "" {
-			requestRecordID = freeRequestID
-		}
-		if recorder, ok := s.billing.(billing.RequestMetricsRecorder); ok && requestRecordID != "" {
-			_ = recorder.RecordRequestMetrics(ctx, requestRecordID, time.Since(startedAt).Milliseconds())
 		}
 		return response, nil
 	}
@@ -1557,6 +1559,22 @@ func estimateOutputTokens(request ChatCompletionRequest) int64 {
 		return *request.MaxTokens
 	}
 	return defaultAnthropicMaxTokens
+}
+
+// scopedBillingIdempotencyKey prevents one tenant's user-supplied
+// Idempotency-Key from colliding with another tenant or endpoint. The database
+// stores only the opaque digest, never the caller-provided key.
+func scopedBillingIdempotencyKey(principal *auth.Principal, metadata RequestMetadata, key string) string {
+	tokenID := ""
+	if principal != nil {
+		tokenID = strings.TrimSpace(principal.TokenID)
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = strings.TrimSpace(metadata.RequestID)
+	}
+	sum := sha256.Sum256([]byte(tokenID + "\x00" + strings.TrimSpace(metadata.Endpoint) + "\x00" + key))
+	return "relay:" + hex.EncodeToString(sum[:])
 }
 
 func normalizeRole(role string) string {

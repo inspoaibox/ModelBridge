@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"ai-token/internal/billing"
 )
 
 func TestOpenAIImageGenerationForwardsModelAndReturnsImageUsage(t *testing.T) {
@@ -93,6 +95,44 @@ func TestParseGeminiMediaUsageMapsUsageMetadata(t *testing.T) {
 	usage := parseGeminiMediaUsage([]byte(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":6,"totalTokenCount":16,"promptTokensDetails":[{"modality":"AUDIO","tokenCount":7}],"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":4}]}}`))
 	if usage.InputTokens != 10 || usage.OutputTokens != 6 || usage.Metrics["input_audio_tokens"] != "7" || usage.Metrics["output_image_tokens"] != "4" {
 		t.Fatalf("Gemini usage metadata was not mapped: %#v", usage)
+	}
+}
+
+func TestParseGeminiMediaUsageReadsNestedOperationAndSumsDetails(t *testing.T) {
+	usage := parseGeminiMediaUsage([]byte(`{
+		"response":{
+			"usageMetadata":{
+				"promptTokenCount":10,
+				"toolUsePromptTokenCount":2,
+				"candidatesTokenCount":5,
+				"totalTokenCount":17,
+				"cachedContentTokenCount":3,
+				"promptTokensDetails":[{"modality":"AUDIO","tokenCount":2},{"modality":"AUDIO","tokenCount":1}],
+				"toolUsePromptTokensDetails":[{"modality":"IMAGE","tokenCount":4}],
+				"cacheTokensDetails":[{"modality":"VIDEO","tokenCount":2}],
+				"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":3},{"modality":"IMAGE","tokenCount":2}]
+			}
+		}
+	}`))
+	if !usage.UsageProvided || usage.InputTokens != 12 || usage.OutputTokens != 5 || usage.CachedInputTokens != 1 {
+		t.Fatalf("nested Gemini usage was not parsed: %#v", usage)
+	}
+	if usage.Metrics["input_audio_tokens"] != "3" ||
+		usage.Metrics["input_image_tokens"] != "4" ||
+		usage.Metrics["cached_video_tokens"] != "2" ||
+		usage.Metrics["output_image_tokens"] != "5" {
+		t.Fatalf("Gemini detail meters were not accumulated: %#v", usage.Metrics)
+	}
+}
+
+func TestMergeMediaUsageDoesNotOverlayProviderUsage(t *testing.T) {
+	usage := mergeMediaUsage(MediaUsage{
+		UsageProvided: true,
+		Metrics:       billing.MeteredUsage{"output_video_tokens": "12"},
+		Source:        "upstream",
+	}, billing.MeteredUsage{"output_seconds": "5"})
+	if len(usage.Metrics) != 1 || usage.Metrics["output_seconds"] != "" || usage.Source != "upstream" {
+		t.Fatalf("provider usage must not be mixed with local estimate: %#v", usage)
 	}
 }
 

@@ -255,10 +255,11 @@ func priceComponentsFor(price Price) []PriceComponent {
 }
 
 func usageMetricsFor(usage Usage) MeteredUsage {
-	if len(usage.Metrics) > 0 {
-		return usage.Metrics
+	normalized := normalizeUsage(usage)
+	if len(normalized.Metrics) > 0 {
+		return normalized.Metrics
 	}
-	return usageFromLegacy(usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens, usage.ReasoningTokens)
+	return usageFromLegacy(normalized.InputTokens, normalized.OutputTokens, normalized.CachedInputTokens, normalized.ReasoningTokens)
 }
 
 func requestMetricsFor(request Request) MeteredUsage {

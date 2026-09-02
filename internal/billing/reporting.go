@@ -63,14 +63,15 @@ type UsageQuery struct {
 }
 
 type UsageSummary struct {
-	TotalRecords     int64        `json:"total_records"`
-	InputTokens      int64        `json:"input_tokens"`
-	OutputTokens     int64        `json:"output_tokens"`
-	CachedInputToken int64        `json:"cached_input_tokens"`
-	ReasoningTokens  int64        `json:"reasoning_tokens"`
-	TotalTokens      int64        `json:"total_tokens"`
-	TotalCost        string       `json:"total_cost"`
-	UsageMetrics     MeteredUsage `json:"usage_metrics,omitempty"`
+	TotalRecords     int64             `json:"total_records"`
+	InputTokens      int64             `json:"input_tokens"`
+	OutputTokens     int64             `json:"output_tokens"`
+	CachedInputToken int64             `json:"cached_input_tokens"`
+	ReasoningTokens  int64             `json:"reasoning_tokens"`
+	TotalTokens      int64             `json:"total_tokens"`
+	TotalCost        string            `json:"total_cost"`
+	CostByCurrency   map[string]string `json:"cost_by_currency,omitempty"`
+	UsageMetrics     MeteredUsage      `json:"usage_metrics,omitempty"`
 }
 
 type UsageReport struct {
@@ -161,8 +162,7 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		       COALESCE(SUM(mr.output_tokens), 0)::bigint,
 		       COALESCE(SUM(mr.cached_input_tokens), 0)::bigint,
 		       COALESCE(SUM(mr.reasoning_tokens), 0)::bigint,
-		       COALESCE(SUM(mr.input_tokens + mr.output_tokens), 0)::bigint,
-		       COALESCE(SUM(mr.settled_amount), 0)::text
+		       COALESCE(SUM(mr.input_tokens + mr.output_tokens), 0)::bigint
 		FROM model_requests mr
 		JOIN api_tokens tok ON tok.id = mr.token_id
 		JOIN tenants ten ON ten.id = mr.tenant_id
@@ -175,11 +175,53 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		&summary.CachedInputToken,
 		&summary.ReasoningTokens,
 		&summary.TotalTokens,
-		&summary.TotalCost,
 	); err != nil {
 		return UsageReport{}, err
 	}
-	summary.TotalCost = normalizeDecimalText(summary.TotalCost)
+	costRows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(UPPER(mr.currency), 'UNKNOWN'), COALESCE(SUM(mr.settled_amount), 0)::text
+		FROM model_requests mr
+		JOIN api_tokens tok ON tok.id = mr.token_id
+		JOIN tenants ten ON ten.id = mr.tenant_id
+		JOIN models mod ON mod.id = mr.model_id
+		LEFT JOIN routing_groups grp ON grp.id = mr.group_id
+		WHERE `+where+`
+		GROUP BY COALESCE(UPPER(mr.currency), 'UNKNOWN')
+		ORDER BY COALESCE(UPPER(mr.currency), 'UNKNOWN')
+	`, args...)
+	if err != nil {
+		return UsageReport{}, err
+	}
+	summary.CostByCurrency = make(map[string]string)
+	for costRows.Next() {
+		var currency, total string
+		if err := costRows.Scan(&currency, &total); err != nil {
+			costRows.Close()
+			return UsageReport{}, err
+		}
+		currency = strings.ToUpper(strings.TrimSpace(currency))
+		if currency == "" {
+			currency = "UNKNOWN"
+		}
+		summary.CostByCurrency[currency] = normalizeDecimalText(total)
+	}
+	if err := costRows.Err(); err != nil {
+		costRows.Close()
+		return UsageReport{}, err
+	}
+	costRows.Close()
+	switch len(summary.CostByCurrency) {
+	case 0:
+		summary.TotalCost = "0"
+	case 1:
+		for _, total := range summary.CostByCurrency {
+			summary.TotalCost = total
+		}
+	default:
+		// Different currencies are intentionally never added together. The
+		// caller can render CostByCurrency as separate totals.
+		summary.TotalCost = ""
+	}
 	var summaryMetricsRaw []byte
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(jsonb_object_agg(metric, total), '{}'::jsonb)

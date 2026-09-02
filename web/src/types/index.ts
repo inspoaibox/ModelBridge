@@ -640,6 +640,8 @@ export interface UsageSummary {
   reasoning_tokens: number;
   total_tokens: number;
   total_cost: string;
+  cost_by_currency?: Record<string, string>;
+  usage_metrics?: Record<string, string>;
 }
 
 export interface UsageReport {

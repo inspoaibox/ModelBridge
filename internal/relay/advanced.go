@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 
 	"ai-token/internal/auth"
 	"ai-token/internal/billing"
@@ -30,7 +31,13 @@ func (s *Service) StreamChatCompletions(
 	if s == nil || s.router == nil || s.credentials == nil || emit == nil {
 		return ErrUnavailable
 	}
+	startedAt := time.Now()
 	request.Stream = true
+	var reservation billing.Reservation
+	var freeRequestID string
+	defer func() {
+		s.recordRelayRequestMetrics(ctx, reservation, freeRequestID, startedAt)
+	}()
 	if err := validateChatRequest(request); err != nil {
 		return err
 	}
@@ -69,8 +76,6 @@ func (s *Service) StreamChatCompletions(
 	billingEnabled := s.billing != nil && groupPolicy.BillingType != "free"
 	attempted := map[string]struct{}{}
 	var lastErr error
-	var reservation billing.Reservation
-	var freeRequestID string
 	for len(attempted) < len(candidates) {
 		channel, ok := pickWeightedChannel(candidates, attempted)
 		if !ok {
@@ -93,8 +98,20 @@ func (s *Service) StreamChatCompletions(
 		if reservation.ID == "" && freeRequestID == "" {
 			reservation, freeRequestID, err = s.startRelayBilling(ctx, principal, request, metadata, groupPolicy, channel, billingEnabled)
 			if err != nil {
+				if billingEnabled && errors.Is(err, billing.ErrPriceNotConfigured) {
+					lastErr = err
+					continue
+				}
 				return err
 			}
+		}
+		if err := s.bindReservationToCandidate(ctx, reservation, channel.ID); err != nil {
+			lastErr = err
+			if errors.Is(err, billing.ErrPriceNotConfigured) {
+				continue
+			}
+			s.failRelayBilling(ctx, reservation, freeRequestID, "billing_channel_bind_failed")
+			return err
 		}
 		upstreamModel := channel.UpstreamModelName
 		if strings.TrimSpace(upstreamModel) == "" {
@@ -152,16 +169,14 @@ func (s *Service) StreamChatCompletions(
 			lastErr = streamErr
 			s.recordChannelFailure(ctx, channel, streamErr)
 			if delivered {
-				if gotUsage {
-					_ = s.completeRelayBilling(ctx, reservation, freeRequestID, usage, providerRequestID, channel.ID, "upstream")
-				} else if !billingEnabled && canEstimateChatUsage(request) {
-					estimatedInput := estimateInputTokens(request)
-					usage = ChatUsage{PromptTokens: estimatedInput, CompletionTokens: int64(len([]rune(output.String()))), TotalTokens: estimatedInput + int64(len([]rune(output.String())))}
-					_ = s.completeRelayBilling(ctx, reservation, freeRequestID, usage, providerRequestID, channel.ID, "local_estimate")
-				} else if billingEnabled {
-					s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
+				if billingEnabled {
+					if gotUsage {
+						s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_interrupted", chatBillingUsage(usage, "upstream"), providerRequestID)
+					} else {
+						s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
+					}
 				} else {
-					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
+					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_interrupted")
 				}
 			}
 			if delivered || ctx.Err() != nil || !retryableUpstreamError(streamErr) {
@@ -175,8 +190,10 @@ func (s *Service) StreamChatCompletions(
 		source := "upstream"
 		if !gotUsage {
 			if billingEnabled {
-				s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
-				return ErrUsageUnavailable
+				if err := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); err != nil {
+					return err
+				}
+				return nil
 			}
 			if !canEstimateChatUsage(request) {
 				if billingEnabled {
@@ -192,8 +209,10 @@ func (s *Service) StreamChatCompletions(
 			inputTokens, _, outputTokens, _ := usage.billingBreakdown()
 			if inputTokens <= 0 || (outputTokens <= 0 && output.Len() > 0) {
 				if billingEnabled {
-					s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_incomplete")
-					return ErrUsageUnavailable
+					if err := s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_usage_incomplete", chatBillingUsage(usage, "upstream"), providerRequestID); err != nil {
+						return err
+					}
+					return nil
 				}
 				if !canEstimateChatUsage(request) {
 					if billingEnabled {
@@ -340,7 +359,7 @@ func (s *Service) startRelayBilling(
 		requestType = "sync"
 	}
 	billingRequest := billing.Request{
-		RequestID: request.RequestID, IdempotencyKey: request.IdempotencyKey,
+		RequestID: request.RequestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey),
 		TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID,
 		Model: request.Model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID,
 		GroupID: policy.ID, GroupMultiplier: policy.Multiplier,
@@ -360,25 +379,83 @@ func (s *Service) startRelayBilling(
 }
 
 func (s *Service) completeRelayBilling(ctx context.Context, reservation billing.Reservation, freeID string, usage ChatUsage, providerRequestID, channelID, source string) error {
-	input, cached, output, reasoning := usage.billingBreakdown()
-	raw := marshalUsageForBilling(usage)
+	billingUsage := chatBillingUsage(usage, source)
 	if reservation.ID != "" {
-		if rebinder, ok := s.billing.(billing.ReservationChannelRebinder); ok {
-			if err := rebinder.RebindReservationChannel(ctx, reservation.ID, channelID); err != nil {
-				return err
+		if err := s.bindReservationToCandidate(ctx, reservation, channelID); err != nil {
+			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_rebind_failed", billingUsage, providerRequestID); pendingErr == nil {
+				return nil
 			}
+			return err
 		}
-		return s.billing.Settle(ctx, reservation.ID, billing.Usage{InputTokens: input, OutputTokens: output, CachedInputTokens: cached, ReasoningTokens: reasoning, Metrics: usage.meteredUsage(), PricingTier: usage.PricingTier, Source: source, Raw: raw}, providerRequestID)
+		if err := s.billing.Settle(ctx, reservation.ID, billingUsage, providerRequestID); err != nil {
+			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_settlement_failed", billingUsage, providerRequestID); pendingErr == nil {
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 	if freeID != "" {
 		if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
 			if err := recorder.RebindRequestChannel(ctx, freeID, channelID); err != nil {
+				_ = recorder.FailFreeRequest(ctx, freeID, "billing_rebind_failed")
 				return err
 			}
-			return recorder.CompleteFreeRequest(ctx, freeID, billing.Usage{InputTokens: input, OutputTokens: output, CachedInputTokens: cached, ReasoningTokens: reasoning, Metrics: usage.meteredUsage(), PricingTier: usage.PricingTier, Source: source, Raw: raw}, providerRequestID)
+			if err := recorder.CompleteFreeRequest(ctx, freeID, billingUsage, providerRequestID); err != nil {
+				_ = recorder.FailFreeRequest(ctx, freeID, "billing_completion_failed")
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func (s *Service) bindReservationToCandidate(ctx context.Context, reservation billing.Reservation, channelID string) error {
+	if reservation.ID == "" || s == nil || s.billing == nil {
+		return nil
+	}
+	rebinder, ok := s.billing.(billing.ReservationChannelRebinder)
+	if !ok {
+		return nil
+	}
+	return rebinder.RebindReservationChannel(ctx, reservation.ID, channelID)
+}
+
+func chatBillingUsage(usage ChatUsage, source string) billing.Usage {
+	input, cached, output, reasoning := usage.billingBreakdown()
+	return billing.Usage{
+		InputTokens: input, OutputTokens: output, CachedInputTokens: cached, ReasoningTokens: reasoning,
+		Metrics: usage.meteredUsage(), PricingTier: usage.PricingTier, Source: source, Raw: marshalUsageForBilling(usage),
+	}
+}
+
+func chatUsageIsComplete(usage ChatUsage, hasOutput bool) bool {
+	inputTokens, _, outputTokens, _ := usage.billingBreakdown()
+	return inputTokens > 0 && (!hasOutput || outputTokens > 0)
+}
+
+func chatResponseHasOutput(response ChatCompletionResponse) bool {
+	for _, choice := range response.Choices {
+		if strings.TrimSpace(choice.Message.Content) != "" ||
+			(len(choice.Message.ToolCalls) > 0 && string(choice.Message.ToolCalls) != "null") ||
+			(len(choice.Message.FunctionCall) > 0 && string(choice.Message.FunctionCall) != "null") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) recordRelayRequestMetrics(ctx context.Context, reservation billing.Reservation, freeID string, startedAt time.Time) {
+	if s == nil || s.billing == nil {
+		return
+	}
+	requestID := reservation.ModelRequestID
+	if requestID == "" {
+		requestID = freeID
+	}
+	if recorder, ok := s.billing.(billing.RequestMetricsRecorder); ok && requestID != "" {
+		_ = recorder.RecordRequestMetrics(ctx, requestID, time.Since(startedAt).Milliseconds())
+	}
 }
 
 func (s *Service) failRelayBilling(ctx context.Context, reservation billing.Reservation, freeID, reason string) {
@@ -392,24 +469,67 @@ func (s *Service) failRelayBilling(ctx context.Context, reservation billing.Rese
 	}
 }
 
-func (s *Service) markRelayBillingPending(ctx context.Context, reservation billing.Reservation, freeID, reason string) {
+func (s *Service) markRelayBillingPending(ctx context.Context, reservation billing.Reservation, freeID, reason string) error {
 	if reservation.ID != "" && s.billing != nil {
 		if marker, ok := s.billing.(billing.ReservationPendingMarker); ok {
-			_ = marker.MarkSettlementPending(ctx, reservation.ID, reason)
+			return marker.MarkSettlementPending(ctx, reservation.ID, reason)
 		}
-		return
+		return billing.ErrUnavailable
 	}
 	if freeID != "" && s.billing != nil {
 		if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
-			_ = recorder.FailFreeRequest(ctx, freeID, reason)
+			return recorder.FailFreeRequest(ctx, freeID, reason)
 		}
 	}
+	return nil
+}
+
+func (s *Service) markRelayBillingPendingWithUsage(
+	ctx context.Context,
+	reservation billing.Reservation,
+	freeID, reason string,
+	usage billing.Usage,
+	providerRequestID string,
+) error {
+	if reservation.ID != "" && s.billing != nil {
+		var markerErr error
+		if marker, ok := s.billing.(billing.ReservationPendingUsageMarker); ok {
+			if err := marker.MarkSettlementPendingWithUsage(ctx, reservation.ID, reason, usage, providerRequestID); err == nil {
+				return nil
+			} else {
+				markerErr = err
+			}
+		}
+		if marker, ok := s.billing.(billing.ReservationPendingMarker); ok {
+			if err := marker.MarkSettlementPending(ctx, reservation.ID, reason); err == nil {
+				return nil
+			} else if markerErr == nil {
+				markerErr = err
+			}
+		}
+		if markerErr != nil {
+			return markerErr
+		}
+		return billing.ErrUnavailable
+	}
+	if freeID != "" {
+		if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
+			return recorder.FailFreeRequest(ctx, freeID, reason)
+		}
+	}
+	return nil
 }
 
 func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principal, request EmbeddingRequest) (EmbeddingResponse, error) {
 	if s == nil || s.router == nil || s.credentials == nil {
 		return EmbeddingResponse{}, ErrUnavailable
 	}
+	startedAt := time.Now()
+	var reservation billing.Reservation
+	var freeID string
+	defer func() {
+		s.recordRelayRequestMetrics(ctx, reservation, freeID, startedAt)
+	}()
 	if err := request.validate(); err != nil {
 		return EmbeddingResponse{}, err
 	}
@@ -447,8 +567,6 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 	billingEnabled := s.billing != nil && policy.BillingType != "free"
 	attempted := map[string]struct{}{}
 	var lastErr error
-	var reservation billing.Reservation
-	var freeID string
 	for len(attempted) < len(candidates) {
 		channel, ok := pickWeightedChannel(candidates, attempted)
 		if !ok {
@@ -468,7 +586,7 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 			continue
 		}
 		billingRequest := billing.Request{
-			RequestID: request.RequestID, IdempotencyKey: request.IdempotencyKey, TenantID: principal.TenantID,
+			RequestID: request.RequestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey), TenantID: principal.TenantID,
 			ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: request.Model,
 			Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID,
 			GroupMultiplier: policy.Multiplier, EstimatedInputTokens: estimateEmbeddingTokens(request),
@@ -483,6 +601,18 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 			}
 		}
 		if err != nil {
+			if billingEnabled && errors.Is(err, billing.ErrPriceNotConfigured) {
+				lastErr = err
+				continue
+			}
+			return EmbeddingResponse{}, err
+		}
+		if err := s.bindReservationToCandidate(ctx, reservation, channel.ID); err != nil {
+			lastErr = err
+			if errors.Is(err, billing.ErrPriceNotConfigured) {
+				continue
+			}
+			s.failRelayBilling(ctx, reservation, freeID, "billing_channel_bind_failed")
 			return EmbeddingResponse{}, err
 		}
 		upstreamModel := channel.UpstreamModelName
@@ -507,9 +637,11 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 		source := "upstream"
 		if response.Usage.PromptTokens <= 0 {
 			if billingEnabled {
-				s.markRelayBillingPending(ctx, reservation, freeID, "upstream_embedding_usage_unavailable")
-				lastErr = ErrUsageUnavailable
-				break
+				if err := s.markRelayBillingPending(ctx, reservation, freeID, "upstream_embedding_usage_unavailable"); err != nil {
+					return EmbeddingResponse{}, err
+				}
+				s.recordChannelSuccess(ctx, channel)
+				return response, nil
 			}
 			source = "local_estimate"
 			response.Usage.PromptTokens = estimateEmbeddingTokens(request)

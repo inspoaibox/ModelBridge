@@ -4035,6 +4035,8 @@ func writeRelayError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BILLING_ACCOUNT_NOT_FOUND"})
 	case errors.Is(err, billing.ErrPriceNotConfigured):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PRICE_NOT_CONFIGURED"})
+	case errors.Is(err, billing.ErrUsageUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "UPSTREAM_USAGE_UNAVAILABLE"})
 	case errors.Is(err, billing.ErrDuplicateRequest):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "DUPLICATE_REQUEST"})
 	case errors.Is(err, tokens.ErrTokenRateLimited):

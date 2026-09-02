@@ -390,6 +390,7 @@ func (GeminiProvider) CreateVideo(ctx context.Context, upstream UpstreamVideoReq
 	if err != nil {
 		return MediaJSONResponse{}, err
 	}
+	response.Usage = parseGeminiMediaUsage(data)
 	response.ID = extractJSONString(data, "name")
 	response.Status = "queued"
 	return response, nil
@@ -409,6 +410,7 @@ func (GeminiProvider) GetVideo(ctx context.Context, upstream UpstreamVideoReques
 	if err != nil {
 		return MediaJSONResponse{}, err
 	}
+	response.Usage = parseGeminiMediaUsage(data)
 	response.ID = name
 	response.Status = geminiOperationStatus(data)
 	return response, nil
@@ -452,12 +454,15 @@ func geminiTranscribeAudio(ctx context.Context, upstream UpstreamAudioRequest, t
 	}
 	responseBody, _ := json.Marshal(map[string]any{"text": text})
 	usage := parseGeminiMediaUsage(data)
-	if len(usage.Metrics) == 0 {
+	if !usage.UsageProvided {
 		usage = parseMediaUsage(data)
 	}
 	if _, ok := usage.Metrics["input_audio_seconds"]; !ok {
 		if seconds := wavDurationSeconds(upstream.Request.File); seconds != "" {
 			usage.Metrics["input_audio_seconds"] = seconds
+			if !usage.UsageProvided {
+				usage.Source = "local_estimate"
+			}
 		}
 	}
 	usage.Raw = append(json.RawMessage(nil), data...)
@@ -539,7 +544,7 @@ func geminiImageResponse(data []byte, status int, header http.Header, count int6
 	}
 	responseBody, _ := json.Marshal(map[string]any{"created": time.Now().Unix(), "data": items})
 	usage := parseGeminiMediaUsage(data)
-	if len(usage.Metrics) == 0 {
+	if !usage.UsageProvided {
 		usage = MediaUsage{Metrics: billing.MeteredUsage{}, Source: "upstream"}
 	}
 	usage.Metrics["output_images"] = strconv.Itoa(len(items))
@@ -629,7 +634,12 @@ func MediaJSONBinarySpeech(ctx context.Context, upstream UpstreamSpeechRequest) 
 	if err != nil {
 		return MediaBinaryResponse{}, ErrUpstream
 	}
-	usage := MediaUsage{Metrics: billing.MeteredUsage{"input_characters": strconv.Itoa(len([]rune(upstream.Request.Input)))}, Source: "local_estimate", Raw: data}
+	usage := parseGeminiMediaUsage(data)
+	if !usage.UsageProvided {
+		usage = MediaUsage{Metrics: billing.MeteredUsage{"input_characters": strconv.Itoa(len([]rune(upstream.Request.Input)))}, Source: "local_estimate", Raw: data}
+	} else {
+		usage.Raw = append(json.RawMessage(nil), data...)
+	}
 	return MediaBinaryResponse{Body: decoded, ContentType: firstNonEmpty(mimeType, "audio/wav"), ProviderRequestID: header.Get("x-request-id"), Usage: usage}, nil
 }
 
@@ -688,44 +698,105 @@ func extractGeminiText(data []byte) string {
 
 func parseGeminiMediaUsage(data []byte) MediaUsage {
 	usage := MediaUsage{Metrics: billing.MeteredUsage{}, Source: "upstream", Raw: append(json.RawMessage(nil), data...)}
-	var value struct {
-		Usage struct {
-			PromptTokenCount        int64 `json:"promptTokenCount"`
-			CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
-			TotalTokenCount         int64 `json:"totalTokenCount"`
-			CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
-			PromptTokensDetails     []struct {
-				Modality   string `json:"modality"`
-				TokenCount int64  `json:"tokenCount"`
-			} `json:"promptTokensDetails"`
-			CandidatesTokensDetails []struct {
-				Modality   string `json:"modality"`
-				TokenCount int64  `json:"tokenCount"`
-			} `json:"candidatesTokensDetails"`
-		} `json:"usageMetadata"`
-	}
-	if json.Unmarshal(data, &value) != nil || value.Usage.PromptTokenCount <= 0 && value.Usage.CandidatesTokenCount <= 0 && value.Usage.TotalTokenCount <= 0 {
+	var envelope any
+	if json.Unmarshal(data, &envelope) != nil {
 		return usage
 	}
-	usage.InputTokens = value.Usage.PromptTokenCount
-	usage.OutputTokens = value.Usage.CandidatesTokenCount
+	rawUsage, ok := findNestedJSONValue(envelope, "usageMetadata")
+	if !ok {
+		return usage
+	}
+	var value struct {
+		PromptTokenCount        int64 `json:"promptTokenCount"`
+		ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount"`
+		CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
+		TotalTokenCount         int64 `json:"totalTokenCount"`
+		CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
+		PromptTokensDetails     []struct {
+			Modality   string `json:"modality"`
+			TokenCount int64  `json:"tokenCount"`
+		} `json:"promptTokensDetails"`
+		ToolUsePromptTokensDetails []struct {
+			Modality   string `json:"modality"`
+			TokenCount int64  `json:"tokenCount"`
+		} `json:"toolUsePromptTokensDetails"`
+		CacheTokensDetails []struct {
+			Modality   string `json:"modality"`
+			TokenCount int64  `json:"tokenCount"`
+		} `json:"cacheTokensDetails"`
+		CandidatesTokensDetails []struct {
+			Modality   string `json:"modality"`
+			TokenCount int64  `json:"tokenCount"`
+		} `json:"candidatesTokensDetails"`
+	}
+	raw, _ := json.Marshal(rawUsage)
+	if json.Unmarshal(raw, &value) != nil ||
+		value.PromptTokenCount <= 0 && value.ToolUsePromptTokenCount <= 0 &&
+			value.CandidatesTokenCount <= 0 && value.TotalTokenCount <= 0 {
+		return usage
+	}
+	usage.UsageProvided = true
+	usage.InputTokens = value.PromptTokenCount + value.ToolUsePromptTokenCount
+	usage.OutputTokens = value.CandidatesTokenCount
+	if usage.InputTokens == 0 && usage.OutputTokens > 0 && value.TotalTokenCount > usage.OutputTokens {
+		usage.InputTokens = value.TotalTokenCount - usage.OutputTokens
+	}
+	if usage.OutputTokens == 0 && usage.InputTokens > 0 && value.TotalTokenCount > usage.InputTokens {
+		usage.OutputTokens = value.TotalTokenCount - usage.InputTokens
+	}
 	if usage.InputTokens > 0 {
 		usage.Metrics["input_tokens"] = strconv.FormatInt(usage.InputTokens, 10)
 	}
 	if usage.OutputTokens > 0 {
 		usage.Metrics["output_tokens"] = strconv.FormatInt(usage.OutputTokens, 10)
 	}
-	if value.Usage.CachedContentTokenCount > 0 {
-		usage.CachedInputTokens = value.Usage.CachedContentTokenCount
-		usage.Metrics["cached_input_tokens"] = strconv.FormatInt(value.Usage.CachedContentTokenCount, 10)
-	}
-	for _, detail := range value.Usage.PromptTokensDetails {
+	for _, detail := range value.PromptTokensDetails {
 		setGeminiMediaUsageMetric(usage.Metrics, "input", detail.Modality, detail.TokenCount)
 	}
-	for _, detail := range value.Usage.CandidatesTokensDetails {
+	for _, detail := range value.ToolUsePromptTokensDetails {
+		setGeminiMediaUsageMetric(usage.Metrics, "input", detail.Modality, detail.TokenCount)
+	}
+	for _, detail := range value.CacheTokensDetails {
+		setGeminiMediaUsageMetric(usage.Metrics, "cached", detail.Modality, detail.TokenCount)
+	}
+	for _, detail := range value.CandidatesTokensDetails {
 		setGeminiMediaUsageMetric(usage.Metrics, "output", detail.Modality, detail.TokenCount)
 	}
+	genericCached := value.CachedContentTokenCount
+	for _, code := range []string{"cached_audio_tokens", "cached_image_tokens", "cached_video_tokens"} {
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(usage.Metrics[code]), 10, 64); err == nil {
+			genericCached -= parsed
+		}
+	}
+	if genericCached < 0 {
+		genericCached = 0
+	}
+	usage.CachedInputTokens = genericCached
+	if genericCached > 0 {
+		usage.Metrics["cached_input_tokens"] = strconv.FormatInt(genericCached, 10)
+	}
 	return usage
+}
+
+func findNestedJSONValue(value any, key string) (any, bool) {
+	switch current := value.(type) {
+	case map[string]any:
+		if child, ok := current[key]; ok {
+			return child, true
+		}
+		for _, child := range current {
+			if found, ok := findNestedJSONValue(child, key); ok {
+				return found, true
+			}
+		}
+	case []any:
+		for _, child := range current {
+			if found, ok := findNestedJSONValue(child, key); ok {
+				return found, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func setGeminiMediaUsageMetric(metrics billing.MeteredUsage, direction, modality string, value int64) {
@@ -736,14 +807,27 @@ func setGeminiMediaUsageMetric(metrics billing.MeteredUsage, direction, modality
 	code := ""
 	switch modality {
 	case "audio":
-		code = direction + "_audio_tokens"
+		if direction == "cached" {
+			code = "cached_audio_tokens"
+		} else {
+			code = direction + "_audio_tokens"
+		}
 	case "image":
-		code = direction + "_image_tokens"
+		if direction == "cached" {
+			code = "cached_image_tokens"
+		} else {
+			code = direction + "_image_tokens"
+		}
 	case "video":
-		code = direction + "_video_tokens"
+		if direction == "cached" {
+			code = "cached_video_tokens"
+		} else {
+			code = direction + "_video_tokens"
+		}
 	}
 	if code != "" {
-		metrics[code] = strconv.FormatInt(value, 10)
+		existing, _ := strconv.ParseInt(strings.TrimSpace(metrics[code]), 10, 64)
+		metrics[code] = strconv.FormatInt(existing+value, 10)
 	}
 }
 

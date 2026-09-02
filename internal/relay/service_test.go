@@ -194,7 +194,8 @@ func TestServiceDoesNotEstimatePaidChatUsageWhenUpstreamOmitsUsage(t *testing.T)
 			Choices: []ChatCompletionChoice{{Message: ChatCompletionReply{Role: "assistant", Content: "ok"}}},
 		},
 	}
-	biller := &fakeBillingService{reservation: billing.Reservation{ID: "reservation-1"}}
+	base := &fakeBillingService{reservation: billing.Reservation{ID: "reservation-1"}}
+	biller := &pendingBillingService{fakeBillingService: base}
 	service, err := NewService(
 		&fakeChannelRouter{channel: Channel{
 			ID:            "channel-1",
@@ -209,7 +210,7 @@ func TestServiceDoesNotEstimatePaidChatUsageWhenUpstreamOmitsUsage(t *testing.T)
 		t.Fatal(err)
 	}
 
-	_, err = service.ChatCompletions(context.Background(), &auth.Principal{
+	response, err := service.ChatCompletions(context.Background(), &auth.Principal{
 		ID:            "token-1",
 		TokenID:       "token-1",
 		Audience:      auth.AudienceRelay,
@@ -221,11 +222,107 @@ func TestServiceDoesNotEstimatePaidChatUsageWhenUpstreamOmitsUsage(t *testing.T)
 		IdempotencyKey: "idempotency-1",
 		Messages:       []ChatMessage{{Role: "user", Content: "hello"}},
 	})
-	if !errors.Is(err, ErrUsageUnavailable) {
-		t.Fatalf("paid request without upstream usage must require reconciliation, got %v", err)
+	if err != nil || response.Choices[0].Message.Content != "ok" {
+		t.Fatalf("successful upstream response should be returned while billing is pending: %#v %v", response, err)
 	}
-	if len(biller.events) != 1 || biller.events[0] != "reserve" {
+	if len(base.events) != 2 || base.events[0] != "reserve" || base.events[1] != "pending" {
 		t.Fatalf("paid request must retain its reservation for reconciliation: %#v", biller.events)
+	}
+}
+
+func TestServiceDoesNotSettlePaidChatWithIncompleteUsage(t *testing.T) {
+	provider := &recordingProvider{
+		response: ChatCompletionResponse{
+			Choices: []ChatCompletionChoice{{Message: ChatCompletionReply{Role: "assistant", Content: "ok"}}},
+			Usage:   ChatUsage{PromptTokens: 8, UsageProvided: true},
+		},
+	}
+	base := &fakeBillingService{reservation: billing.Reservation{ID: "reservation-1"}}
+	biller := &pendingBillingService{fakeBillingService: base}
+	service, err := NewService(
+		&fakeChannelRouter{channel: Channel{
+			ID: "channel-1", Provider: ProviderOpenAI, CredentialRef: "env:OPENAI_API_KEY",
+		}},
+		EnvCredentialResolver{Lookup: func(string) string { return "sk-test" }},
+		map[string]Provider{ProviderOpenAI: provider},
+		biller,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.ChatCompletions(context.Background(), &auth.Principal{
+		ID: "token-1", TokenID: "token-1", Audience: auth.AudienceRelay, TenantID: "tenant-1",
+		AllowedModels: map[string]struct{}{"gpt-5": {}},
+	}, ChatCompletionRequest{
+		Model: "gpt-5", RequestID: "request-1", IdempotencyKey: "idempotency-1",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil || response.Choices[0].Message.Content != "ok" {
+		t.Fatalf("successful upstream response should be returned while billing is pending: %#v %v", response, err)
+	}
+	if len(base.events) != 2 || base.events[0] != "reserve" || base.events[1] != "pending_usage" {
+		t.Fatalf("incomplete usage must remain pending: %#v", base.events)
+	}
+	if biller.pendingUsage.InputTokens != 8 || biller.pendingUsage.OutputTokens != 0 {
+		t.Fatalf("pending usage snapshot is wrong: %#v", biller.pendingUsage)
+	}
+}
+
+func TestScopedBillingIdempotencyKeySeparatesTokens(t *testing.T) {
+	metadata := RequestMetadata{Endpoint: "/v1/chat/completions", RequestID: "request-1"}
+	first := scopedBillingIdempotencyKey(&auth.Principal{TokenID: "token-a"}, metadata, "same-key")
+	second := scopedBillingIdempotencyKey(&auth.Principal{TokenID: "token-b"}, metadata, "same-key")
+	if first == second || first == "same-key" || len(first) <= len("relay:") {
+		t.Fatalf("idempotency key must be scoped and opaque: %q %q", first, second)
+	}
+	if repeat := scopedBillingIdempotencyKey(&auth.Principal{TokenID: "token-a"}, metadata, "same-key"); repeat != first {
+		t.Fatalf("scoped idempotency key must be deterministic: %q != %q", repeat, first)
+	}
+}
+
+func TestServicePreservesUsageWhenSettlementFails(t *testing.T) {
+	base := &fakeBillingService{
+		reservation: billing.Reservation{ID: "reservation-1"},
+		settleErr:   errors.New("temporary settlement failure"),
+	}
+	biller := &pendingBillingService{fakeBillingService: base}
+	service := &Service{billing: biller}
+
+	err := service.completeRelayBilling(context.Background(), base.reservation, "", ChatUsage{
+		PromptTokens:     12,
+		CompletionTokens: 8,
+		TotalTokens:      20,
+	}, "provider-request-1", "channel-1", "upstream")
+	if err != nil {
+		t.Fatalf("settlement failure should be preserved as pending without failing the successful relay: %v", err)
+	}
+	if len(base.events) != 2 || base.events[0] != "settle" || base.events[1] != "pending_usage" {
+		t.Fatalf("usage settlement failure must be retained for reconciliation: %#v", base.events)
+	}
+	if biller.pendingUsage.InputTokens != 12 || biller.pendingUsage.OutputTokens != 8 {
+		t.Fatalf("pending record lost upstream usage: %#v", biller.pendingUsage)
+	}
+}
+
+func TestPendingUsageMarkerFallsBackToOrdinaryPending(t *testing.T) {
+	base := &fakeBillingService{reservation: billing.Reservation{ID: "reservation-1"}}
+	biller := &pendingBillingService{
+		fakeBillingService: base,
+		pendingErr:         errors.New("cannot persist usage snapshot"),
+	}
+	service := &Service{billing: biller}
+
+	service.markRelayBillingPendingWithUsage(
+		context.Background(),
+		base.reservation,
+		"",
+		"billing_settlement_failed",
+		billing.Usage{InputTokens: 3, OutputTokens: 2, Source: "upstream"},
+		"provider-request-2",
+	)
+	if len(base.events) != 2 || base.events[0] != "pending_usage" || base.events[1] != "pending" {
+		t.Fatalf("failed usage snapshot must fall back to pending state: %#v", base.events)
 	}
 }
 
@@ -930,6 +1027,23 @@ type fakeBillingService struct {
 	reserveErr       error
 	settleErr        error
 	failErr          error
+}
+
+type pendingBillingService struct {
+	*fakeBillingService
+	pendingUsage billing.Usage
+	pendingErr   error
+}
+
+func (b *pendingBillingService) MarkSettlementPending(_ context.Context, _ string, _ string) error {
+	b.events = append(b.events, "pending")
+	return nil
+}
+
+func (b *pendingBillingService) MarkSettlementPendingWithUsage(_ context.Context, _ string, _ string, usage billing.Usage, _ string) error {
+	b.events = append(b.events, "pending_usage")
+	b.pendingUsage = usage
+	return b.pendingErr
 }
 
 func (b *fakeBillingService) Reserve(_ context.Context, request billing.Request) (billing.Reservation, error) {

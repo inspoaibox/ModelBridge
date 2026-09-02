@@ -27,6 +27,7 @@ var (
 	ErrReservationNotFound  = errors.New("billing reservation is not found")
 	ErrReservationClosed    = errors.New("billing reservation is already closed")
 	ErrSettlementPending    = errors.New("billing settlement is pending reconciliation")
+	ErrUsageUnavailable     = errors.New("billable usage is unavailable")
 	ErrModelNotFound        = errors.New("billing model is not found")
 	ErrInvalidPrice         = errors.New("invalid price")
 )
@@ -47,8 +48,22 @@ type ReservationExtender interface {
 	ExtendReservation(context.Context, string, time.Duration) error
 }
 
+// ReservationUsagePolicy tells relay handlers whether a zero-usage response
+// can still be settled safely, for example when the published price is a
+// fixed per-request fee or has a minimum charge.
+type ReservationUsagePolicy interface {
+	CanSettleWithoutUsage(context.Context, string) (bool, error)
+}
+
 type ReservationPendingMarker interface {
 	MarkSettlementPending(context.Context, string, string) error
+}
+
+// ReservationPendingUsageMarker preserves the usage already received from an
+// upstream provider when final pricing or settlement cannot be completed.
+// The request remains pending until an operator reconciles it.
+type ReservationPendingUsageMarker interface {
+	MarkSettlementPendingWithUsage(context.Context, string, string, Usage, string) error
 }
 
 type SettlementReconciler interface {
@@ -1018,6 +1033,10 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		return Reservation{}, err
 	}
 	estimatedMetrics := addImplicitRequestMetric(priceComponentsFor(price), requestMetricsFor(request), request.PricingTier)
+	estimatedMetrics, err = prepareReservationMetrics(priceComponentsFor(price), estimatedMetrics, request.PricingTier)
+	if err != nil {
+		return Reservation{}, err
+	}
 	reservedCharge, err := calculateMeteredChargeForTier(
 		priceComponentsFor(price), estimatedMetrics, price.MinimumCharge, request.PricingTier,
 	)
@@ -1088,7 +1107,7 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		request.TenantID, request.ProjectID, request.TokenID, modelID,
 		request.ChannelID, price.PriceVersionID, officialPriceVersionID(price), request.GroupID, request.GroupMultiplier,
 		reservedAmount, currency, request.Endpoint, request.ClientIP,
-		request.RequestType, request.ReasoningEffort, priceSnapshotJSON, estimatedMetricsJSON)
+		request.RequestType, request.ReasoningEffort, priceSnapshotJSON, []byte(`{}`))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Reservation{}, ErrDuplicateRequest
@@ -1258,6 +1277,45 @@ func (s *SQLService) CompleteFreeRequest(ctx context.Context, modelRequestID str
 // Reconciliation must provide the actual usage before the reservation can be
 // settled; the reaper only releases ordinary held reservations.
 func (s *SQLService) MarkSettlementPending(ctx context.Context, reservationID, reason string) error {
+	return s.markSettlementPending(ctx, reservationID, reason, nil, "")
+}
+
+// MarkSettlementPendingWithUsage keeps the provider usage in both the request
+// row and the usage event before an operator performs reconciliation. This is
+// important when the provider has accepted the request but the current price
+// configuration is incomplete or temporarily unavailable.
+func (s *SQLService) MarkSettlementPendingWithUsage(
+	ctx context.Context,
+	reservationID, reason string,
+	usage Usage,
+	providerRequestID string,
+) error {
+	if s == nil || s.db == nil {
+		return ErrUnavailable
+	}
+	reservationID = strings.TrimSpace(reservationID)
+	reason = strings.TrimSpace(reason)
+	if !ids.Valid(reservationID) || reason == "" || len(reason) > 1024 ||
+		usage.InputTokens < 0 || usage.OutputTokens < 0 ||
+		usage.CachedInputTokens < 0 || usage.ReasoningTokens < 0 ||
+		!validUsageSource(usage.Source) {
+		return ErrInvalidRequest
+	}
+	usage = normalizeUsage(usage)
+	metrics, err := normalizeMeteredUsage(usageMetricsFor(usage))
+	if err != nil {
+		return ErrInvalidRequest
+	}
+	usage.Metrics = metrics
+	return s.markSettlementPending(ctx, reservationID, reason, &usage, providerRequestID)
+}
+
+func (s *SQLService) markSettlementPending(
+	ctx context.Context,
+	reservationID, reason string,
+	usage *Usage,
+	providerRequestID string,
+) error {
 	if s == nil || s.db == nil {
 		return ErrUnavailable
 	}
@@ -1284,23 +1342,71 @@ func (s *SQLService) MarkSettlementPending(ctx context.Context, reservationID, r
 	if err != nil {
 		return err
 	}
-	if status == "pending" {
+	if status == "settled" {
 		return nil
 	}
-	if status != "held" {
+	if status != "held" && status != "pending" {
 		return ErrReservationClosed
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE billing_reservations
-		SET status = 'pending', updated_at = now()
-		WHERE id = $1 AND status = 'held'
-	`, reservationID); err != nil {
-		return err
+	if status == "held" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE billing_reservations
+			SET status = 'pending', updated_at = now()
+			WHERE id = $1 AND status = 'held'
+		`, reservationID); err != nil {
+			return err
+		}
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if usage != nil && (usageHasPositiveQuantity(*usage) || len(usage.Metrics) > 0) {
+		rawUsage := usage.Raw
+		if len(rawUsage) == 0 {
+			rawUsage, _ = json.Marshal(*usage)
+		}
+		usageMetricsJSON := marshalJSON(usage.Metrics, []byte(`{}`))
+		chargeBreakdownJSON := []byte(`[]`)
+		usageEventID, err := ids.New()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO usage_events (
+				id, request_id, source, input_tokens, output_tokens,
+				cached_input_tokens, reasoning_tokens, raw_usage_json, event_version,
+				usage_metrics_json, charge_breakdown_json
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9::jsonb, $10::jsonb)
+			ON CONFLICT (request_id, source, event_version) DO UPDATE SET
+				input_tokens = EXCLUDED.input_tokens,
+				output_tokens = EXCLUDED.output_tokens,
+				cached_input_tokens = EXCLUDED.cached_input_tokens,
+				reasoning_tokens = EXCLUDED.reasoning_tokens,
+				raw_usage_json = EXCLUDED.raw_usage_json,
+				usage_metrics_json = EXCLUDED.usage_metrics_json,
+				charge_breakdown_json = EXCLUDED.charge_breakdown_json
+		`, usageEventID, modelRequestID, usage.Source, usage.InputTokens, usage.OutputTokens,
+			usage.CachedInputTokens, usage.ReasoningTokens, rawUsage, usageMetricsJSON, chargeBreakdownJSON); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE model_requests
+			SET status = 'settlement_pending',
+			    provider_request_id = COALESCE(NULLIF($2, ''), provider_request_id),
+			    failure_reason = $3,
+			    input_tokens = $4,
+			    output_tokens = $5,
+			    cached_input_tokens = $6,
+			    reasoning_tokens = $7,
+			    usage_metrics_json = $8::jsonb,
+			    charge_breakdown_json = $9::jsonb
+			WHERE id = $1 AND status IN ('started', 'settlement_pending')
+		`, modelRequestID, strings.TrimSpace(providerRequestID), reason,
+			usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens,
+			usage.ReasoningTokens, usageMetricsJSON, chargeBreakdownJSON); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, `
 		UPDATE model_requests
 		SET status = 'settlement_pending', failure_reason = $2
-		WHERE id = $1 AND status = 'started'
+		WHERE id = $1 AND status IN ('started', 'settlement_pending')
 	`, modelRequestID, reason); err != nil {
 		return err
 	}
@@ -1333,9 +1439,6 @@ func (s *SQLService) SettleByModelRequestID(ctx context.Context, modelRequestID 
 	if status != "pending" {
 		return ErrSettlementPending
 	}
-	if !usageHasPositiveQuantity(usage) {
-		return ErrInvalidRequest
-	}
 	if strings.TrimSpace(usage.Source) == "" {
 		usage.Source = "reconciliation"
 	}
@@ -1349,6 +1452,18 @@ func usageHasPositiveQuantity(usage Usage) bool {
 	for _, value := range usage.Metrics {
 		quantity, ok := new(big.Rat).SetString(strings.TrimSpace(value))
 		if ok && quantity.Sign() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func priceAllowsZeroUsage(price Price) bool {
+	if !isZeroAmount(price.MinimumCharge) {
+		return true
+	}
+	for _, component := range priceComponentsFor(price) {
+		if componentBaseCode(component.ComponentCode) == "requests" {
 			return true
 		}
 	}
@@ -1387,8 +1502,33 @@ func (s *SQLService) RebindRequestChannel(ctx context.Context, modelRequestID, c
 	if !ids.Valid(strings.TrimSpace(modelRequestID)) || !ids.Valid(strings.TrimSpace(channelID)) {
 		return ErrInvalidRequest
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE model_requests SET channel_id = $2 WHERE id = $1 AND status = 'started'`, modelRequestID, channelID)
-	return err
+	// The public model can be backed by different model rows when a fallback
+	// crosses providers. Keep both the concrete model and channel aligned so
+	// free requests produce the same auditable record as paid reservations.
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE model_requests mr
+		SET channel_id = $2,
+		    model_id = target_model.id
+		FROM models current_model
+		JOIN channel_models target_mapping
+		  ON target_mapping.channel_id = $2::uuid
+		 AND target_mapping.enabled = true
+		JOIN models target_model
+		  ON target_model.id = target_mapping.model_id
+		 AND target_model.model_name = current_model.model_name
+		WHERE mr.id = $1
+		  AND mr.model_id = current_model.id
+		  AND mr.status = 'started'
+	`, modelRequestID, channelID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return ErrModelNotFound
+	}
+	return nil
 }
 
 func (s *SQLService) RecordRequestMetrics(ctx context.Context, modelRequestID string, latencyMS int64) error {
@@ -1468,6 +1608,20 @@ func (s *SQLService) Settle(
 	if status != "held" && status != "pending" {
 		return ErrReservationClosed
 	}
+	var requestPricingTier string
+	if len(priceSnapshotRaw) > 0 && string(priceSnapshotRaw) != "null" {
+		var snapshot struct {
+			PricingTier string `json:"pricing_tier"`
+		}
+		_ = json.Unmarshal(priceSnapshotRaw, &snapshot)
+		requestPricingTier = strings.TrimSpace(snapshot.PricingTier)
+	}
+	// Providers and manual reconciliation callers do not always echo the
+	// service tier. The request snapshot is authoritative for the selected
+	// priority, flex, or batch price.
+	if strings.TrimSpace(usage.PricingTier) == "" {
+		usage.PricingTier = requestPricingTier
+	}
 
 	var inputPrice, outputPrice, minimumCharge string
 	var cachedInputPrice, reasoningPrice string
@@ -1529,6 +1683,9 @@ func (s *SQLService) Settle(
 		if err != nil {
 			return err
 		}
+	}
+	if !usageHasPositiveQuantity(usage) && !priceAllowsZeroUsage(price) {
+		return ErrUsageUnavailable
 	}
 	usage.Metrics = addImplicitRequestMetric(priceComponentsFor(price), usage.Metrics, usage.PricingTier)
 	charge, err := calculateMeteredChargeForTier(priceComponentsFor(price), usage.Metrics, price.MinimumCharge, usage.PricingTier)
@@ -1623,7 +1780,14 @@ func (s *SQLService) Settle(
 			cached_input_tokens, reasoning_tokens, raw_usage_json, event_version,
 			usage_metrics_json, charge_breakdown_json
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9::jsonb, $10::jsonb)
-		ON CONFLICT (request_id, source, event_version) DO NOTHING
+		ON CONFLICT (request_id, source, event_version) DO UPDATE SET
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			cached_input_tokens = EXCLUDED.cached_input_tokens,
+			reasoning_tokens = EXCLUDED.reasoning_tokens,
+			raw_usage_json = EXCLUDED.raw_usage_json,
+			usage_metrics_json = EXCLUDED.usage_metrics_json,
+			charge_breakdown_json = EXCLUDED.charge_breakdown_json
 	`, usageEventID, modelRequestID, usage.Source, usage.InputTokens, usage.OutputTokens,
 		usage.CachedInputTokens, usage.ReasoningTokens, rawUsage, usageMetricsJSON, chargeBreakdownJSON)
 	if err != nil {
@@ -1659,6 +1823,41 @@ func (s *SQLService) Settle(
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *SQLService) CanSettleWithoutUsage(ctx context.Context, reservationID string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, ErrUnavailable
+	}
+	reservationID = strings.TrimSpace(reservationID)
+	if !ids.Valid(reservationID) {
+		return false, ErrInvalidRequest
+	}
+	var status, currency string
+	var snapshotRaw []byte
+	err := s.db.QueryRowContext(ctx, `
+		SELECT br.status, br.currency, mr.price_snapshot_json
+		FROM billing_reservations br
+		JOIN model_requests mr ON mr.id = br.request_id
+		WHERE br.id = $1
+	`, reservationID).Scan(&status, &currency, &snapshotRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrReservationNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if status == "settled" {
+		return true, nil
+	}
+	if status != "held" && status != "pending" {
+		return false, ErrReservationClosed
+	}
+	price, err := priceFromSnapshot(snapshotRaw, currency)
+	if err != nil {
+		return false, err
+	}
+	return priceAllowsZeroUsage(price), nil
 }
 
 func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID, channelID string) error {
@@ -1717,12 +1916,18 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		return ErrReservationClosed
 	}
 	if targetModelID == currentModelID {
-		if _, err := tx.ExecContext(ctx, `
+		result, err := tx.ExecContext(ctx, `
 			UPDATE model_requests
 			SET channel_id = $2
-			WHERE id = $1 AND status = 'started'
-		`, modelRequestID, channelID); err != nil {
+			WHERE id = $1 AND status IN ('started', 'settlement_pending')
+		`, modelRequestID, channelID)
+		if err != nil {
 			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil {
+			return err
+		} else if affected != 1 {
+			return ErrReservationClosed
 		}
 		return tx.Commit()
 	}
@@ -1746,6 +1951,10 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		}
 	}
 	estimatedMetrics = addImplicitRequestMetric(priceComponentsFor(price), estimatedMetrics, snapshot.PricingTier)
+	estimatedMetrics, err = prepareReservationMetrics(priceComponentsFor(price), estimatedMetrics, snapshot.PricingTier)
+	if err != nil {
+		return err
+	}
 	estimatedCharge, err := calculateMeteredChargeForTier(priceComponentsFor(price), estimatedMetrics, price.MinimumCharge, snapshot.PricingTier)
 	if err != nil {
 		return err
@@ -1758,6 +1967,7 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		UPDATE ledger_accounts
 		SET balance = balance + $2::numeric - $3::numeric
 		WHERE id = $1
+		  AND balance + $2::numeric >= $3::numeric
 	`, accountID, oldReserved, newReserved)
 	if err != nil {
 		return err
@@ -1765,7 +1975,7 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	if affected, err := result.RowsAffected(); err != nil {
 		return err
 	} else if affected != 1 {
-		return ErrAccountNotFound
+		return ErrInsufficientBalance
 	}
 	priceSnapshotValue := priceSnapshot(price)
 	priceSnapshotValue["pricing_tier"] = snapshot.PricingTier
@@ -1783,7 +1993,7 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		SET channel_id = $2, model_id = $3, price_version_id = NULLIF($4, '')::uuid,
 		    official_price_version_id = NULLIF($5, '')::uuid,
 		    estimated_amount = $6::numeric, price_snapshot_json = $7::jsonb
-		WHERE id = $1 AND status = 'started'
+		WHERE id = $1 AND status IN ('started', 'settlement_pending')
 	`, modelRequestID, channelID, targetModelID, price.PriceVersionID, officialPriceVersionID(price), newReserved, priceSnapshotJSON); err != nil {
 		return err
 	}
@@ -2212,21 +2422,43 @@ func normalizeUsage(usage Usage) Usage {
 	if strings.TrimSpace(usage.Source) == "" {
 		usage.Source = "upstream"
 	}
-	if len(usage.Metrics) > 0 {
-		if normalized, err := normalizeMeteredUsage(usage.Metrics); err == nil {
-			usage.Metrics = normalized
-			if usage.InputTokens == 0 {
-				usage.InputTokens = usageMetricInt(normalized, "input_tokens")
-			}
-			if usage.OutputTokens == 0 {
-				usage.OutputTokens = usageMetricInt(normalized, "output_tokens")
-			}
-			if usage.CachedInputTokens == 0 {
-				usage.CachedInputTokens = usageMetricInt(normalized, "cached_input_tokens")
-			}
-			if usage.ReasoningTokens == 0 {
-				usage.ReasoningTokens = usageMetricInt(normalized, "reasoning_tokens")
-			}
+	// Keep the legacy columns and the extensible meters in one normalized view.
+	// Adapters may provide either representation; a non-zero explicit meter
+	// wins, while a missing/zero meter is completed from the legacy field.
+	merged := make(MeteredUsage, len(usage.Metrics)+4)
+	for code, value := range usage.Metrics {
+		merged[code] = value
+	}
+	for _, item := range []struct {
+		code  string
+		value int64
+	}{
+		{"input_tokens", usage.InputTokens},
+		{"output_tokens", usage.OutputTokens},
+		{"cached_input_tokens", usage.CachedInputTokens},
+		{"reasoning_tokens", usage.ReasoningTokens},
+	} {
+		if item.value <= 0 {
+			continue
+		}
+		current, exists := merged[item.code]
+		if !exists || isZeroAmount(current) {
+			merged[item.code] = integerString(item.value)
+		}
+	}
+	if normalized, err := normalizeMeteredUsage(merged); err == nil && len(normalized) > 0 {
+		usage.Metrics = normalized
+		if value := usageMetricInt(normalized, "input_tokens"); value > 0 {
+			usage.InputTokens = value
+		}
+		if value := usageMetricInt(normalized, "output_tokens"); value > 0 {
+			usage.OutputTokens = value
+		}
+		if value := usageMetricInt(normalized, "cached_input_tokens"); value > 0 {
+			usage.CachedInputTokens = value
+		}
+		if value := usageMetricInt(normalized, "reasoning_tokens"); value > 0 {
+			usage.ReasoningTokens = value
 		}
 	}
 	if usage.CachedInputTokens > usage.InputTokens {

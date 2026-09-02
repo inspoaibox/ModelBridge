@@ -590,6 +590,51 @@ func multiplierCharge(charge MeteredCharge, multiplier string) (MeteredCharge, e
 	return result, nil
 }
 
+// prepareReservationMetrics keeps only request estimates that can be priced by
+// the selected price version. Estimates are intentionally best-effort: a
+// provider may publish a different final meter (for example video tokens
+// instead of seconds), so an unknown estimate must not reject the request
+// before it reaches the provider. Final settlement remains strict.
+func prepareReservationMetrics(components []PriceComponent, usage MeteredUsage, pricingTier string) (MeteredUsage, error) {
+	if usage == nil {
+		return MeteredUsage{}, nil
+	}
+	normalized, err := normalizeMeteredUsage(usage)
+	if err != nil {
+		return nil, err
+	}
+
+	byCode := make(map[string]PriceComponent, len(components))
+	for _, component := range components {
+		code := strings.TrimSpace(component.ComponentCode)
+		if !validComponentCode(code) || strings.TrimSpace(component.Unit) == "" {
+			return nil, errors.New("invalid price component: " + code)
+		}
+		if _, exists := byCode[code]; exists {
+			return nil, errors.New("duplicate price component: " + code)
+		}
+		byCode[code] = component
+	}
+
+	filtered := make(MeteredUsage, len(normalized))
+	for code, value := range normalized {
+		baseCode := componentBaseCode(code)
+		// Parent totals synthesized by normalizeMeteredRelationships have no
+		// billable remainder when all of their quantity is a child meter.
+		if rationalValue(effectiveQuantity(baseCode, normalized)).Sign() <= 0 &&
+			baseCode != code {
+			continue
+		}
+		if _, ok := componentForMeter(byCode, baseCode, pricingTier); ok {
+			filtered[code] = value
+		}
+	}
+
+	// Rebuild implicit parent totals after dropping unknown estimates. This
+	// keeps child meters such as audio/video tokens internally consistent.
+	return normalizeMeteredUsage(filtered)
+}
+
 // calculateReservationCharge uses the request's conservative estimates. The
 // final charge is always calculated from the provider usage returned at settle
 // time, while request-based components are counted once for every request.
@@ -601,5 +646,9 @@ func calculateReservationCharge(components []PriceComponent, usage MeteredUsage,
 	if len(pricingTier) > 0 {
 		tier = pricingTier[0]
 	}
-	return calculateMeteredChargeForTier(components, usage, minimumCharge, tier)
+	prepared, err := prepareReservationMetrics(components, usage, tier)
+	if err != nil {
+		return MeteredCharge{}, err
+	}
+	return calculateMeteredChargeForTier(components, prepared, minimumCharge, tier)
 }

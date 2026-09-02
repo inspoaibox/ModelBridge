@@ -143,7 +143,7 @@ func (r *SQLChannelRouter) ListPendingMediaJobs(ctx context.Context, limit int) 
 		FROM media_jobs mj
 		JOIN channels c ON c.id = mj.channel_id
 		WHERE mj.status IN ('queued', 'processing')
-		   OR (mj.status = 'completed' AND mj.reservation_id IS NOT NULL AND EXISTS (
+		   OR (mj.status IN ('completed', 'failed', 'cancelled') AND mj.reservation_id IS NOT NULL AND EXISTS (
 			SELECT 1 FROM billing_reservations br
 			WHERE br.id = mj.reservation_id AND br.status = 'pending'
 		   ))

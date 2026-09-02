@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -51,6 +52,7 @@ type MediaUsage struct {
 	OutputTokens      int64
 	CachedInputTokens int64
 	ReasoningTokens   int64
+	UsageProvided     bool
 	Source            string
 	Raw               json.RawMessage
 }
@@ -298,6 +300,12 @@ func (s *Service) SynthesizeSpeech(ctx context.Context, principal *auth.Principa
 }
 
 func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, request VideoCreateRequest) (MediaJSONResponse, error) {
+	startedAt := time.Now()
+	var reservation billing.Reservation
+	var freeID string
+	defer func() {
+		s.recordRelayRequestMetrics(ctx, reservation, freeID, startedAt)
+	}()
 	if err := validateVideoCreateRequest(&request); err != nil {
 		return MediaJSONResponse{}, err
 	}
@@ -316,8 +324,6 @@ func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, re
 	}
 	attempted := map[string]struct{}{}
 	var lastErr error
-	var reservation billing.Reservation
-	var freeID string
 	for len(attempted) < len(candidates) {
 		channel, found := pickWeightedChannel(candidates, attempted)
 		if !found {
@@ -339,8 +345,20 @@ func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, re
 		if reservation.ID == "" && freeID == "" {
 			reservation, freeID, err = s.startMediaBilling(ctx, principal, request.Model, "video_generation", request.RequestID, request.IdempotencyKey, policy, channel, billingEnabled, videoEstimatedMetrics(request))
 			if err != nil {
+				if billingEnabled && errors.Is(err, billing.ErrPriceNotConfigured) {
+					lastErr = err
+					continue
+				}
 				return MediaJSONResponse{}, err
 			}
+		}
+		if err := s.bindReservationToCandidate(ctx, reservation, channel.ID); err != nil {
+			lastErr = err
+			if errors.Is(err, billing.ErrPriceNotConfigured) {
+				continue
+			}
+			s.failRelayBilling(ctx, reservation, freeID, "billing_channel_bind_failed")
+			return MediaJSONResponse{}, err
 		}
 		response, callErr := videoProvider.CreateVideo(ctx, UpstreamVideoRequest{Channel: channel, APIKey: key, Request: request, UpstreamModel: upstreamModelFor(channel, request.Model)})
 		if callErr != nil {
@@ -356,7 +374,11 @@ func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, re
 			jobID = extractJSONString(response.Body, "name")
 		}
 		if jobID == "" {
-			s.failRelayBilling(ctx, reservation, freeID, "upstream_video_job_id_missing")
+			if billingEnabled {
+				s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "upstream_video_job_id_missing", mediaBillingUsage(response.Usage), response.ProviderRequestID)
+			} else {
+				s.failRelayBilling(ctx, reservation, freeID, "upstream_video_job_id_missing")
+			}
 			return MediaJSONResponse{}, ErrUpstream
 		}
 		localID := newMediaJobID()
@@ -364,12 +386,16 @@ func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, re
 		if modelRequestID == "" {
 			modelRequestID = freeID
 		}
-		job := MediaJob{ID: localID, TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, GroupID: policy.ID, Model: request.Model, UpstreamModelName: upstreamModelFor(channel, request.Model), Provider: canonicalProvider(channel.Provider), Channel: channel, UpstreamJobID: jobID, Status: normalizeVideoStatus(response.Status), ReservationID: reservation.ID, ModelRequestID: modelRequestID, ProviderRequestID: response.ProviderRequestID, Response: response.Body, EstimatedMetrics: videoEstimatedMetrics(request)}
+		job := MediaJob{ID: localID, TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, GroupID: policy.ID, Model: request.Model, UpstreamModelName: upstreamModelFor(channel, request.Model), Provider: canonicalProvider(channel.Provider), Channel: channel, UpstreamJobID: jobID, Status: normalizeVideoStatus(response.Status), ReservationID: reservation.ID, ModelRequestID: modelRequestID, ProviderRequestID: response.ProviderRequestID, Response: response.Body, EstimatedMetrics: videoEstimatedMetrics(request), CreatedAt: time.Now()}
 		if job.Status == "" {
 			job.Status = "queued"
 		}
 		if err := store.CreateMediaJob(ctx, job); err != nil {
-			s.failRelayBilling(ctx, reservation, freeID, "media_job_persist_failed")
+			if billingEnabled {
+				s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "media_job_persist_failed", mediaBillingUsage(response.Usage), response.ProviderRequestID)
+			} else {
+				s.failRelayBilling(ctx, reservation, freeID, "media_job_persist_failed")
+			}
 			return MediaJSONResponse{}, err
 		}
 		if job.Status == "completed" || job.Status == "failed" || job.Status == "cancelled" {
@@ -393,6 +419,16 @@ func (s *Service) GetVideo(ctx context.Context, principal *auth.Principal, local
 	job, provider, key, err := s.loadVideoJob(ctx, principal, localID)
 	if err != nil {
 		return MediaJSONResponse{}, err
+	}
+	if (job.Status == "queued" || job.Status == "processing") && strings.TrimSpace(job.ReservationID) != "" {
+		if extender, ok := s.billing.(billing.ReservationExtender); ok {
+			if err := extender.ExtendReservation(ctx, job.ReservationID, mediaReservationTTL); err != nil {
+				// Do not query the provider after the reservation could not be
+				// renewed. Otherwise a completed job could be returned after its
+				// balance hold has already become eligible for expiration.
+				return MediaJSONResponse{}, err
+			}
+		}
 	}
 	upstreamModel := firstNonEmpty(job.UpstreamModelName, job.Channel.UpstreamModelName, job.Model)
 	response, err := provider.GetVideo(ctx, UpstreamVideoRequest{Channel: job.Channel, APIKey: key, Request: VideoCreateRequest{Model: job.Model}, UpstreamModel: upstreamModel}, job.UpstreamJobID)
@@ -527,9 +563,26 @@ func (s *Service) loadVideoJob(ctx context.Context, principal *auth.Principal, l
 }
 
 func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status string, response MediaJSONResponse) error {
+	status = normalizeVideoStatus(status)
+	if job.CreatedAt.IsZero() {
+		job.CreatedAt = time.Now()
+	}
+	if status == "completed" || status == "failed" || status == "cancelled" {
+		defer s.recordMediaJobMetrics(ctx, job)
+	}
 	if status == "failed" || status == "cancelled" {
 		if strings.TrimSpace(job.ReservationID) != "" {
-			s.failRelayBilling(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_"+status)
+			if mediaUsageHasValues(response.Usage) {
+				if err := s.completeMediaBilling(ctx, billing.Reservation{ID: job.ReservationID}, "", response.Usage, response.ProviderRequestID, job.Channel.ID); err != nil {
+					return err
+				}
+			} else {
+				// A provider accepted the asynchronous task, so a terminal
+				// failure is not automatically proof of zero provider cost.
+				// Keep the hold for reconciliation when no billable usage was
+				// returned.
+				s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_"+status+"_usage_unavailable")
+			}
 		} else if strings.TrimSpace(job.ModelRequestID) != "" {
 			s.failRelayBilling(ctx, billing.Reservation{}, job.ModelRequestID, "upstream_video_"+status)
 		}
@@ -541,7 +594,14 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 	// Seedance reports billable video tokens after the asynchronous task
 	// completes. A requested duration is only a reservation estimate and must
 	// not become a final charge when Ark did not return usage.
-	if canonicalProvider(job.Provider) != ProviderVolcengine {
+	if !response.Usage.UsageProvided && strings.TrimSpace(job.ReservationID) != "" {
+		// An accepted paid video operation must never be settled from the
+		// requested duration. Keep the hold for reconciliation instead.
+		s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_usage_unavailable")
+		return nil
+	} else if !response.Usage.UsageProvided {
+		// Free requests still need a useful usage record. Their local estimate
+		// does not affect a balance and is explicitly marked as estimated.
 		response.Usage = mergeMediaUsage(response.Usage, job.EstimatedMetrics)
 	} else if len(response.Usage.Metrics) > 0 && !volcengineUsageAuthoritative(response.Usage) {
 		response.Usage.Metrics = nil
@@ -550,7 +610,7 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 		response.Usage.CachedInputTokens = 0
 		response.Usage.ReasoningTokens = 0
 	}
-	if len(response.Usage.Metrics) == 0 && strings.TrimSpace(job.ReservationID) != "" {
+	if !mediaUsageHasValues(response.Usage) && strings.TrimSpace(job.ReservationID) != "" {
 		if marker, ok := s.billing.(billing.ReservationPendingMarker); ok {
 			if err := marker.MarkSettlementPending(ctx, job.ReservationID, "upstream_video_usage_unavailable"); err == nil {
 				return nil
@@ -559,22 +619,49 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 		return ErrUsageUnavailable
 	}
 	if strings.TrimSpace(job.ReservationID) != "" {
-		if rebinder, ok := s.billing.(billing.ReservationChannelRebinder); ok {
-			if err := rebinder.RebindReservationChannel(ctx, job.ReservationID, job.Channel.ID); err != nil {
-				return err
-			}
+		reservation := billing.Reservation{ID: job.ReservationID}
+		if err := s.bindReservationToCandidate(ctx, reservation, job.Channel.ID); err != nil {
+			s.markRelayBillingPendingWithUsage(ctx, reservation, "", "billing_rebind_failed", mediaBillingUsage(response.Usage), response.ProviderRequestID)
+			return err
 		}
-		return s.billing.Settle(ctx, job.ReservationID, mediaBillingUsage(response.Usage), response.ProviderRequestID)
+		billingUsage := mediaBillingUsage(response.Usage)
+		if err := s.billing.Settle(ctx, job.ReservationID, billingUsage, response.ProviderRequestID); err != nil {
+			s.markRelayBillingPendingWithUsage(ctx, billing.Reservation{ID: job.ReservationID}, "", "billing_settlement_failed", billingUsage, response.ProviderRequestID)
+			return err
+		}
+		return nil
 	}
 	if job.ModelRequestID != "" {
 		if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
-			return recorder.CompleteFreeRequest(ctx, job.ModelRequestID, mediaBillingUsage(response.Usage), response.ProviderRequestID)
+			if err := recorder.CompleteFreeRequest(ctx, job.ModelRequestID, mediaBillingUsage(response.Usage), response.ProviderRequestID); err != nil {
+				_ = recorder.FailFreeRequest(ctx, job.ModelRequestID, "billing_completion_failed")
+				return err
+			}
 		}
 	}
 	return nil
 }
 
+func (s *Service) recordMediaJobMetrics(ctx context.Context, job MediaJob) {
+	if s == nil || s.billing == nil || strings.TrimSpace(job.ModelRequestID) == "" {
+		return
+	}
+	latency := time.Since(job.CreatedAt).Milliseconds()
+	if latency < 0 {
+		latency = 0
+	}
+	if recorder, ok := s.billing.(billing.RequestMetricsRecorder); ok {
+		_ = recorder.RecordRequestMetrics(ctx, job.ModelRequestID, latency)
+	}
+}
+
 func (s *Service) executeMediaJSON(ctx context.Context, principal *auth.Principal, model, requestType string, estimated billing.MeteredUsage, requestID, idempotencyKey string, invoke func(Channel, string) (MediaJSONResponse, error)) (MediaJSONResponse, error) {
+	startedAt := time.Now()
+	var reservation billing.Reservation
+	var freeID string
+	defer func() {
+		s.recordRelayRequestMetrics(ctx, reservation, freeID, startedAt)
+	}()
 	policy, candidates, billingEnabled, _, err := s.prepareMedia(ctx, principal, model, requestType, requestID, idempotencyKey, 1)
 	if err != nil {
 		return MediaJSONResponse{}, err
@@ -586,8 +673,6 @@ func (s *Service) executeMediaJSON(ctx context.Context, principal *auth.Principa
 	defer release()
 	attempted := map[string]struct{}{}
 	var lastErr error
-	var reservation billing.Reservation
-	var freeID string
 	for len(attempted) < len(candidates) {
 		channel, found := pickWeightedChannel(candidates, attempted)
 		if !found {
@@ -601,34 +686,48 @@ func (s *Service) executeMediaJSON(ctx context.Context, principal *auth.Principa
 			continue
 		}
 		// Do not reserve for a channel which cannot implement this operation.
-		response, callErr := func() (MediaJSONResponse, error) {
-			provider := s.providers[canonicalProvider(channel.Provider)]
-			if provider == nil {
-				return MediaJSONResponse{}, ErrProviderUnsupported
+		provider := s.providers[canonicalProvider(channel.Provider)]
+		if provider == nil {
+			lastErr = ErrProviderUnsupported
+			continue
+		}
+		if _, ok := provider.(ImageGenerationProvider); requestType == "image_generation" || requestType == "image_edit" {
+			if !ok {
+				lastErr = ErrProviderUnsupported
+				continue
 			}
-			if _, ok := provider.(ImageGenerationProvider); requestType == "image_generation" || requestType == "image_edit" {
-				if !ok {
-					return MediaJSONResponse{}, ErrProviderUnsupported
+		}
+		if requestType == "audio_transcription" {
+			if _, ok := provider.(AudioTranscriptionProvider); !ok {
+				lastErr = ErrProviderUnsupported
+				continue
+			}
+		}
+		if requestType == "audio_translation" {
+			if _, ok := provider.(AudioTranslationProvider); !ok {
+				lastErr = ErrProviderUnsupported
+				continue
+			}
+		}
+		if reservation.ID == "" && freeID == "" {
+			reservation, freeID, err = s.startMediaBilling(ctx, principal, model, requestType, requestID, idempotencyKey, policy, channel, billingEnabled, estimated)
+			if err != nil {
+				if billingEnabled && errors.Is(err, billing.ErrPriceNotConfigured) {
+					lastErr = err
+					continue
 				}
+				return MediaJSONResponse{}, err
 			}
-			if requestType == "audio_transcription" {
-				if _, ok := provider.(AudioTranscriptionProvider); !ok {
-					return MediaJSONResponse{}, ErrProviderUnsupported
-				}
+		}
+		if err := s.bindReservationToCandidate(ctx, reservation, channel.ID); err != nil {
+			lastErr = err
+			if errors.Is(err, billing.ErrPriceNotConfigured) {
+				continue
 			}
-			if requestType == "audio_translation" {
-				if _, ok := provider.(AudioTranslationProvider); !ok {
-					return MediaJSONResponse{}, ErrProviderUnsupported
-				}
-			}
-			if reservation.ID == "" && freeID == "" {
-				reservation, freeID, err = s.startMediaBilling(ctx, principal, model, requestType, requestID, idempotencyKey, policy, channel, billingEnabled, estimated)
-				if err != nil {
-					return MediaJSONResponse{}, err
-				}
-			}
-			return invoke(channel, key)
-		}()
+			s.failRelayBilling(ctx, reservation, freeID, "billing_channel_bind_failed")
+			return MediaJSONResponse{}, err
+		}
+		response, callErr := invoke(channel, key)
 		if callErr != nil {
 			lastErr = callErr
 			if !errors.Is(callErr, ErrProviderUnsupported) {
@@ -640,12 +739,19 @@ func (s *Service) executeMediaJSON(ctx context.Context, principal *auth.Principa
 			continue
 		}
 		response.Usage = mergeMediaUsage(response.Usage, estimated)
-		if len(response.Usage.Metrics) == 0 && response.Usage.InputTokens == 0 && response.Usage.OutputTokens == 0 {
+		if !mediaUsageHasValues(response.Usage) {
 			if billingEnabled {
-				s.markRelayBillingPending(ctx, reservation, freeID, "upstream_media_usage_unavailable")
-				lastErr = ErrUsageUnavailable
-				break
+				if err := s.completeMediaBilling(ctx, reservation, freeID, response.Usage, response.ProviderRequestID, channel.ID); err != nil && !errors.Is(err, billing.ErrUsageUnavailable) {
+					return MediaJSONResponse{}, err
+				}
+				s.recordChannelSuccess(ctx, channel)
+				return response, nil
 			}
+			if err := s.completeMediaBilling(ctx, reservation, freeID, response.Usage, response.ProviderRequestID, channel.ID); err != nil {
+				return MediaJSONResponse{}, err
+			}
+			s.recordChannelSuccess(ctx, channel)
+			return response, nil
 		}
 		if err := s.completeMediaBilling(ctx, reservation, freeID, response.Usage, response.ProviderRequestID, channel.ID); err != nil {
 			return MediaJSONResponse{}, err
@@ -664,6 +770,12 @@ func (s *Service) executeMediaJSON(ctx context.Context, principal *auth.Principa
 }
 
 func (s *Service) executeMediaBinary(ctx context.Context, principal *auth.Principal, model, requestType string, estimated billing.MeteredUsage, requestID, idempotencyKey string, invoke func(Channel, string) (MediaBinaryResponse, error)) (MediaBinaryResponse, error) {
+	startedAt := time.Now()
+	var reservation billing.Reservation
+	var freeID string
+	defer func() {
+		s.recordRelayRequestMetrics(ctx, reservation, freeID, startedAt)
+	}()
 	policy, candidates, billingEnabled, _, err := s.prepareMedia(ctx, principal, model, requestType, requestID, idempotencyKey, 1)
 	if err != nil {
 		return MediaBinaryResponse{}, err
@@ -675,8 +787,6 @@ func (s *Service) executeMediaBinary(ctx context.Context, principal *auth.Princi
 	defer release()
 	attempted := map[string]struct{}{}
 	var lastErr error
-	var reservation billing.Reservation
-	var freeID string
 	for len(attempted) < len(candidates) {
 		channel, found := pickWeightedChannel(candidates, attempted)
 		if !found {
@@ -697,8 +807,20 @@ func (s *Service) executeMediaBinary(ctx context.Context, principal *auth.Princi
 		if reservation.ID == "" && freeID == "" {
 			reservation, freeID, err = s.startMediaBilling(ctx, principal, model, requestType, requestID, idempotencyKey, policy, channel, billingEnabled, estimated)
 			if err != nil {
+				if billingEnabled && errors.Is(err, billing.ErrPriceNotConfigured) {
+					lastErr = err
+					continue
+				}
 				return MediaBinaryResponse{}, err
 			}
+		}
+		if err := s.bindReservationToCandidate(ctx, reservation, channel.ID); err != nil {
+			lastErr = err
+			if errors.Is(err, billing.ErrPriceNotConfigured) {
+				continue
+			}
+			s.failRelayBilling(ctx, reservation, freeID, "billing_channel_bind_failed")
+			return MediaBinaryResponse{}, err
 		}
 		response, callErr := invoke(channel, key)
 		if callErr != nil {
@@ -710,10 +832,20 @@ func (s *Service) executeMediaBinary(ctx context.Context, principal *auth.Princi
 			continue
 		}
 		response.Usage = mergeMediaUsage(response.Usage, estimated)
-		if len(response.Usage.Metrics) == 0 && response.Usage.InputTokens == 0 && response.Usage.OutputTokens == 0 && billingEnabled {
-			s.markRelayBillingPending(ctx, reservation, freeID, "upstream_media_usage_unavailable")
-			lastErr = ErrUsageUnavailable
-			break
+		if !mediaUsageHasValues(response.Usage) {
+			if billingEnabled {
+				if err := s.completeMediaBilling(ctx, reservation, freeID, response.Usage, response.ProviderRequestID, channel.ID); err != nil && !errors.Is(err, billing.ErrUsageUnavailable) {
+					return MediaBinaryResponse{}, err
+				}
+				s.recordChannelSuccess(ctx, channel)
+				return response, nil
+			} else {
+				if err := s.completeMediaBilling(ctx, reservation, freeID, response.Usage, response.ProviderRequestID, channel.ID); err != nil {
+					return MediaBinaryResponse{}, err
+				}
+				s.recordChannelSuccess(ctx, channel)
+				return response, nil
+			}
 		}
 		if err := s.completeMediaBilling(ctx, reservation, freeID, response.Usage, response.ProviderRequestID, channel.ID); err != nil {
 			return MediaBinaryResponse{}, err
@@ -778,7 +910,7 @@ func (s *Service) startMediaBilling(ctx context.Context, principal *auth.Princip
 	if idempotencyKey == "" {
 		idempotencyKey = metadata.IdempotencyKey
 	}
-	request := billing.Request{RequestID: requestID, IdempotencyKey: idempotencyKey, TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID, GroupMultiplier: policy.Multiplier, EstimatedMetrics: metrics, Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType, BillingType: policy.BillingType}
+	request := billing.Request{RequestID: requestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, idempotencyKey), TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID, GroupMultiplier: policy.Multiplier, EstimatedMetrics: metrics, Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType, BillingType: policy.BillingType}
 	if enabled {
 		value, err := s.billing.Reserve(ctx, request)
 		return value, "", err
@@ -793,22 +925,55 @@ func (s *Service) startMediaBilling(ctx context.Context, principal *auth.Princip
 func (s *Service) completeMediaBilling(ctx context.Context, reservation billing.Reservation, freeID string, usage MediaUsage, providerRequestID, channelID string) error {
 	billingUsage := mediaBillingUsage(usage)
 	if reservation.ID != "" {
-		if rebinder, ok := s.billing.(billing.ReservationChannelRebinder); ok {
-			if err := rebinder.RebindReservationChannel(ctx, reservation.ID, channelID); err != nil {
-				return err
+		if err := s.bindReservationToCandidate(ctx, reservation, channelID); err != nil {
+			s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_rebind_failed", billingUsage, providerRequestID)
+			return err
+		}
+		if !mediaUsageHasValues(usage) {
+			if policy, ok := s.billing.(billing.ReservationUsagePolicy); ok {
+				canSettle, err := policy.CanSettleWithoutUsage(ctx, reservation.ID)
+				if err != nil {
+					return err
+				}
+				if !canSettle {
+					s.markRelayBillingPending(ctx, reservation, freeID, "upstream_media_usage_unavailable")
+					return billing.ErrUsageUnavailable
+				}
 			}
 		}
-		return s.billing.Settle(ctx, reservation.ID, billingUsage, providerRequestID)
+		if err := s.billing.Settle(ctx, reservation.ID, billingUsage, providerRequestID); err != nil {
+			s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_settlement_failed", billingUsage, providerRequestID)
+			return err
+		}
+		return nil
 	}
 	if freeID != "" {
 		if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
 			if err := recorder.RebindRequestChannel(ctx, freeID, channelID); err != nil {
+				_ = recorder.FailFreeRequest(ctx, freeID, "billing_rebind_failed")
 				return err
 			}
-			return recorder.CompleteFreeRequest(ctx, freeID, billingUsage, providerRequestID)
+			if err := recorder.CompleteFreeRequest(ctx, freeID, billingUsage, providerRequestID); err != nil {
+				_ = recorder.FailFreeRequest(ctx, freeID, "billing_completion_failed")
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func mediaUsageHasValues(usage MediaUsage) bool {
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 ||
+		usage.CachedInputTokens > 0 || usage.ReasoningTokens > 0 {
+		return true
+	}
+	for _, value := range usage.Metrics {
+		quantity, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+		if ok && quantity.Sign() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func mediaBillingUsage(usage MediaUsage) billing.Usage {
@@ -1135,58 +1300,109 @@ func decodeMediaJSON(data []byte, status int, header http.Header) (MediaJSONResp
 
 func parseMediaUsage(data []byte) MediaUsage {
 	usage := MediaUsage{Metrics: billing.MeteredUsage{}, Source: "upstream", Raw: append(json.RawMessage(nil), data...)}
-	var value struct {
-		Usage json.RawMessage   `json:"usage"`
-		Data  []json.RawMessage `json:"data"`
-	}
-	if json.Unmarshal(data, &value) != nil {
+	var envelope map[string]any
+	if json.Unmarshal(data, &envelope) != nil {
 		return usage
 	}
-	var providerUsage struct {
-		Type              string  `json:"type"`
-		InputTokens       int64   `json:"input_tokens"`
-		OutputTokens      int64   `json:"output_tokens"`
-		TotalTokens       int64   `json:"total_tokens"`
-		Seconds           float64 `json:"seconds"`
-		InputTokenDetails struct {
-			AudioTokens int64 `json:"audio_tokens"`
-			ImageTokens int64 `json:"image_tokens"`
-			VideoTokens int64 `json:"video_tokens"`
-			TextTokens  int64 `json:"text_tokens"`
-		} `json:"input_token_details"`
-		InputTokensDetails struct {
-			AudioTokens int64 `json:"audio_tokens"`
-			ImageTokens int64 `json:"image_tokens"`
-			VideoTokens int64 `json:"video_tokens"`
-			TextTokens  int64 `json:"text_tokens"`
-		} `json:"input_tokens_details"`
-		OutputTokenDetails struct {
-			AudioTokens int64 `json:"audio_tokens"`
-			ImageTokens int64 `json:"image_tokens"`
-			VideoTokens int64 `json:"video_tokens"`
-		} `json:"output_token_details"`
-		OutputTokensDetails struct {
-			AudioTokens int64 `json:"audio_tokens"`
-			ImageTokens int64 `json:"image_tokens"`
-			VideoTokens int64 `json:"video_tokens"`
-		} `json:"output_tokens_details"`
+	rawUsage, hasUsage := envelope["usage"]
+	if !hasUsage {
+		rawUsage, hasUsage = envelope["usage_metadata"]
 	}
-	if len(value.Usage) > 0 {
-		_ = json.Unmarshal(value.Usage, &providerUsage)
+	if !hasUsage {
+		rawUsage, hasUsage = envelope["usageMetadata"]
 	}
-	usage.InputTokens, usage.OutputTokens = providerUsage.InputTokens, providerUsage.OutputTokens
-	if providerUsage.InputTokens > 0 {
-		usage.Metrics["input_tokens"] = strconv.FormatInt(providerUsage.InputTokens, 10)
+	providerUsage, usageObject := asStringMap(rawUsage)
+	if !hasUsage || !usageObject {
+		if dataItems, ok := envelope["data"].([]any); ok && len(dataItems) > 0 {
+			usage.Metrics["output_images"] = strconv.Itoa(len(dataItems))
+		}
+		return usage
 	}
-	if providerUsage.OutputTokens > 0 {
-		usage.Metrics["output_tokens"] = strconv.FormatInt(providerUsage.OutputTokens, 10)
+	usage.UsageProvided = true
+
+	input := firstPositiveInt(providerUsage, "input_tokens", "prompt_tokens")
+	output := firstPositiveInt(providerUsage, "output_tokens", "completion_tokens")
+	total := firstPositiveInt(providerUsage, "total_tokens")
+	inputDetails := mergedDetailMaps(providerUsage, "input_token_details", "input_tokens_details", "prompt_tokens_details")
+	outputDetails := mergedDetailMaps(providerUsage, "output_token_details", "output_tokens_details", "completion_tokens_details", "output_tokens_details")
+
+	inputAudio := detailValue(inputDetails, "audio_tokens")
+	inputImage := detailValue(inputDetails, "image_tokens")
+	inputVideo := detailValue(inputDetails, "video_tokens")
+	outputAudio := detailValue(outputDetails, "audio_tokens")
+	outputImage := detailValue(outputDetails, "image_tokens")
+	outputVideo := detailValue(outputDetails, "video_tokens")
+
+	cached := firstPositiveInt(providerUsage, "cached_input_tokens", "cache_read_input_tokens")
+	cached = maxPositiveInt(cached, detailValue(inputDetails, "cached_tokens"))
+	cachedAudio := detailValue(inputDetails, "cached_audio_tokens")
+	cachedImage := detailValue(inputDetails, "cached_image_tokens")
+	cachedVideo := detailValue(inputDetails, "cached_video_tokens")
+
+	cacheCreationTotal := firstPositiveInt(providerUsage, "cache_creation_input_tokens", "cache_creation_tokens")
+	cacheCreation1H := firstPositiveInt(providerUsage, "cache_creation_1h_input_tokens", "cache_creation_1h_tokens")
+	cacheCreation5M := firstPositiveInt(providerUsage, "cache_creation_5m_input_tokens", "cache_creation_5m_tokens")
+	if creation, ok := providerUsage["cache_creation"].(map[string]any); ok {
+		cacheCreation1H = maxPositiveInt(cacheCreation1H, firstPositiveInt(creation, "ephemeral_1h_input_tokens", "ephemeral_1h_tokens"))
+		cacheCreation5M = maxPositiveInt(cacheCreation5M, firstPositiveInt(creation, "ephemeral_5m_input_tokens", "ephemeral_5m_tokens"))
 	}
-	inputAudio := providerUsage.InputTokenDetails.AudioTokens + providerUsage.InputTokensDetails.AudioTokens
-	inputImage := providerUsage.InputTokenDetails.ImageTokens + providerUsage.InputTokensDetails.ImageTokens
-	inputVideo := providerUsage.InputTokenDetails.VideoTokens + providerUsage.InputTokensDetails.VideoTokens
-	outputAudio := providerUsage.OutputTokenDetails.AudioTokens + providerUsage.OutputTokensDetails.AudioTokens
-	outputImage := providerUsage.OutputTokenDetails.ImageTokens + providerUsage.OutputTokensDetails.ImageTokens
-	outputVideo := providerUsage.OutputTokenDetails.VideoTokens + providerUsage.OutputTokensDetails.VideoTokens
+	if cacheCreationTotal == 0 {
+		cacheCreationTotal = cacheCreation5M + cacheCreation1H
+	}
+	if cacheCreation1H > cacheCreationTotal {
+		cacheCreation1H = cacheCreationTotal
+	}
+	if value := cacheCreationTotal - cacheCreation1H; value > 0 {
+		usage.Metrics["cache_creation_tokens"] = strconv.FormatInt(value, 10)
+	}
+	if cacheCreation1H > 0 {
+		usage.Metrics["cache_creation_1h_tokens"] = strconv.FormatInt(cacheCreation1H, 10)
+	}
+	if value := firstPositiveInt(providerUsage, "cache_creation_audio_tokens"); value > 0 {
+		usage.Metrics["cache_creation_audio_tokens"] = strconv.FormatInt(value, 10)
+	}
+
+	reasoning := maxPositiveInt(
+		firstPositiveInt(providerUsage, "reasoning_tokens", "thinking_tokens"),
+		detailValue(outputDetails, "reasoning_tokens"),
+		detailValue(outputDetails, "thinking_tokens"),
+	)
+
+	// A total is useful when one side is omitted, but it must not be counted
+	// as input and output at the same time. Only the missing side is derived.
+	if input == 0 && output > 0 && total > output {
+		input = total - output
+	}
+	if output == 0 && input > 0 && total > input {
+		output = total - input
+	}
+	if input == 0 && output == 0 && total > 0 && strings.EqualFold(stringValue(providerUsage["type"]), "tokens") {
+		input = total
+	}
+
+	usage.InputTokens = input
+	usage.OutputTokens = output
+	genericCached := cached - cachedAudio - cachedImage - cachedVideo
+	if genericCached < 0 {
+		genericCached = 0
+	}
+	// The generic cache total can include modality-specific cached subsets.
+	// Store only the remainder in cached_input_tokens so the same tokens are
+	// not charged twice.
+	usage.CachedInputTokens = genericCached
+	usage.ReasoningTokens = reasoning
+	if input > 0 {
+		usage.Metrics["input_tokens"] = strconv.FormatInt(input, 10)
+	}
+	if output > 0 {
+		usage.Metrics["output_tokens"] = strconv.FormatInt(output, 10)
+	}
+	if genericCached > 0 {
+		usage.Metrics["cached_input_tokens"] = strconv.FormatInt(genericCached, 10)
+	}
+	if reasoning > 0 {
+		usage.Metrics["reasoning_tokens"] = strconv.FormatInt(reasoning, 10)
+	}
 	if inputAudio > 0 {
 		usage.Metrics["input_audio_tokens"] = strconv.FormatInt(inputAudio, 10)
 	}
@@ -1205,20 +1421,117 @@ func parseMediaUsage(data []byte) MediaUsage {
 	if outputVideo > 0 {
 		usage.Metrics["output_video_tokens"] = strconv.FormatInt(outputVideo, 10)
 	}
-	if len(value.Data) > 0 {
-		usage.Metrics["output_images"] = strconv.Itoa(len(value.Data))
+	if cachedAudio > 0 {
+		usage.Metrics["cached_audio_tokens"] = strconv.FormatInt(cachedAudio, 10)
 	}
-	if providerUsage.Type == "tokens" && providerUsage.TotalTokens > 0 && usage.InputTokens == 0 {
-		usage.InputTokens = providerUsage.TotalTokens
-		usage.Metrics["input_audio_tokens"] = strconv.FormatInt(providerUsage.TotalTokens, 10)
+	if cachedImage > 0 {
+		usage.Metrics["cached_image_tokens"] = strconv.FormatInt(cachedImage, 10)
+	}
+	if cachedVideo > 0 {
+		usage.Metrics["cached_video_tokens"] = strconv.FormatInt(cachedVideo, 10)
+	}
+	if dataItems, ok := envelope["data"].([]any); ok && len(dataItems) > 0 {
+		// The response item count is observed output, not a request estimate.
+		usage.Metrics["output_images"] = strconv.Itoa(len(dataItems))
+	}
+	if seconds := positiveDecimalString(providerUsage["seconds"]); seconds != "" &&
+		strings.EqualFold(stringValue(providerUsage["type"]), "duration") {
+		usage.Metrics["input_audio_seconds"] = seconds
 	}
 	return usage
 }
 
+func positiveDecimalString(value any) string {
+	switch item := value.(type) {
+	case float64:
+		if item > 0 {
+			return decimalFloat(item)
+		}
+	case json.Number:
+		raw := strings.TrimSpace(item.String())
+		if rat, ok := new(big.Rat).SetString(raw); ok && rat.Sign() > 0 {
+			return raw
+		}
+	case string:
+		raw := strings.TrimSpace(item)
+		if rat, ok := new(big.Rat).SetString(raw); ok && rat.Sign() > 0 {
+			return raw
+		}
+	}
+	return ""
+}
+
+func asStringMap(value any) (map[string]any, bool) {
+	result, ok := value.(map[string]any)
+	return result, ok
+}
+
+func firstPositiveInt(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if value := parseNonNegativeInt(values[key]); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func parseNonNegativeInt(value any) int64 {
+	switch item := value.(type) {
+	case float64:
+		if item > 0 && item <= float64(^uint64(0)>>1) {
+			return int64(item)
+		}
+	case json.Number:
+		if parsed, err := strconv.ParseInt(item.String(), 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(item), 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func mergedDetailMaps(values map[string]any, keys ...string) []map[string]any {
+	result := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		if value, ok := values[key].(map[string]any); ok {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func detailValue(details []map[string]any, keys ...string) int64 {
+	var result int64
+	for _, detail := range details {
+		for _, key := range keys {
+			if value := parseNonNegativeInt(detail[key]); value > result {
+				result = value
+			}
+		}
+	}
+	return result
+}
+
+func maxPositiveInt(values ...int64) int64 {
+	var result int64
+	for _, value := range values {
+		if value > result {
+			result = value
+		}
+	}
+	return result
+}
+
 func parseImageResponseUsage(data []byte, requested int64) MediaUsage {
 	usage := parseMediaUsage(data)
-	if _, ok := usage.Metrics["output_images"]; !ok && requested > 0 {
-		usage.Metrics["output_images"] = strconv.FormatInt(requested, 10)
+	if !usage.UsageProvided {
+		if _, ok := usage.Metrics["output_images"]; !ok && requested > 0 {
+			usage.Metrics["output_images"] = strconv.FormatInt(requested, 10)
+			usage.Source = "local_estimate"
+		}
 	}
 	return usage
 }
@@ -1228,6 +1541,7 @@ func parseAudioResponseUsage(data []byte, file []byte) MediaUsage {
 	if _, ok := usage.Metrics["input_audio_seconds"]; !ok {
 		if seconds := wavDurationSeconds(file); seconds != "" {
 			usage.Metrics["input_audio_seconds"] = seconds
+			usage.Source = "local_estimate"
 		} else {
 			var value struct {
 				Seconds  float64 `json:"seconds"`
@@ -1251,6 +1565,16 @@ func parseAudioResponseUsage(data []byte, file []byte) MediaUsage {
 		}
 	}
 	return usage
+}
+
+func maxPositive(values ...int64) int64 {
+	var result int64
+	for _, value := range values {
+		if value > result {
+			result = value
+		}
+	}
+	return result
 }
 
 func wavDurationSeconds(data []byte) string {
@@ -1376,7 +1700,7 @@ func (s *Service) acquireMediaLimiter(ctx context.Context, principal *auth.Princ
 }
 
 func mergeMediaUsage(usage MediaUsage, estimated billing.MeteredUsage) MediaUsage {
-	if len(estimated) == 0 {
+	if len(estimated) == 0 || usage.UsageProvided {
 		return usage
 	}
 	if usage.Metrics == nil {
@@ -1389,7 +1713,7 @@ func mergeMediaUsage(usage MediaUsage, estimated billing.MeteredUsage) MediaUsag
 			added = true
 		}
 	}
-	if added && usage.Source == "" {
+	if added {
 		usage.Source = "local_estimate"
 	}
 	return usage
