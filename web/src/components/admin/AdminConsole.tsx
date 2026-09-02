@@ -34,6 +34,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   APIEndpoint,
   APIEndpointFormState,
@@ -1931,50 +1932,63 @@ function PriceMatrixTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+    <Tabs defaultValue={groups[0].provider} className="w-full">
+      <TabsList className="flex h-auto w-full justify-start gap-1 overflow-x-auto rounded-xl border-slate-200 bg-slate-50/80 p-1 dark:border-slate-800 dark:bg-slate-950/50">
+        {groups.map((group) => (
+          <TabsTrigger key={group.provider} value={group.provider} className="h-9 shrink-0 gap-2 px-3 text-xs sm:px-4 sm:text-sm">
+            <Building2 className="h-3.5 w-3.5" />
+            <span>{providerDisplayName(group.provider)}</span>
+            <span className="rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] font-semibold text-current/70 dark:bg-white/10">
+              {group.models.length}
+            </span>
+          </TabsTrigger>
+        ))}
+      </TabsList>
       {groups.map((group) => (
-        <section key={group.provider} className="border-b border-slate-200 last:border-b-0 dark:border-slate-800">
-          <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/50 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300"><Building2 className="h-4 w-4" /></div>
-              <div><div className="text-sm font-bold text-slate-900 dark:text-white">{providerDisplayName(group.provider)}</div><div className="font-mono text-[10px] uppercase text-slate-500 dark:text-slate-400">{group.provider}</div></div>
+        <TabsContent key={group.provider} value={group.provider} className="mt-4">
+          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+            <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/50 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300"><Building2 className="h-4 w-4" /></div>
+                <div><div className="text-sm font-bold text-slate-900 dark:text-white">{providerDisplayName(group.provider)}</div><div className="font-mono text-[10px] uppercase text-slate-500 dark:text-slate-400">{group.provider}</div></div>
+              </div>
+              <Badge variant="outline" className="self-start sm:self-auto">{group.models.length} {t("billingModelsUnit")}</Badge>
             </div>
-            <Badge variant="outline" className="self-start sm:self-auto">{group.models.length} {t("billingModelsUnit")}</Badge>
-          </div>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("billingPriceModel")}</TableHead>
-                  <TableHead>{t("billingPriceSource")}</TableHead>
-                  <TableHead>{t("billingPriceComponents")}</TableHead>
-                  <TableHead>{t("billingPlatformPrice")}</TableHead>
-                  <TableHead>{t("billingEstimatedCost")}</TableHead>
-                  <TableHead>{t("billingProfit")}</TableHead>
-                  <TableHead>{t("billingProfitRate")}</TableHead>
-                  <TableHead>{t("billingPriceUpdated")}</TableHead>
-                  <TableHead className="text-right">{t("billingPriceActions")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {group.models.map((price) => (
-                  <TableRow key={price.model_id}>
-                    <TableCell className="min-w-[230px]"><div className="font-semibold text-slate-900 dark:text-white">{price.model}</div></TableCell>
-                    <TableCell><Badge variant={price.source === "manual" ? "default" : price.source === "litellm" ? "cyan" : "muted"}>{price.source === "manual" ? t("billingPriceSourceManual") : price.source === "litellm" ? t("billingPriceSourceLiteLLM") : t("billingPriceSourceMissing")}</Badge></TableCell>
-                    <TableCell><div className="flex max-w-[420px] flex-wrap gap-1.5">{(price.components || []).map((component) => <span key={component.component_code} className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={component.component_code + " · " + component.unit}>{component.component_code}: {componentDisplayPrice(component.price_per_unit, component.unit)} <span className="font-sans text-slate-400">{componentUnitLabel(component.unit)}</span></span>)}{(price.components || []).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}</div></TableCell>
-                    <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="customer_price_per_unit" tone="platform" t={t} /></TableCell>
-                    <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="estimated_cost_per_unit" tone="cost" t={t} /></TableCell>
-                    <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="profit_per_unit" tone="profit" t={t} /></TableCell>
-                    <TableCell><PriceMarginCell estimates={price.cost_estimates} t={t} /></TableCell>
-                    <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{price.updated_at ? formatTime(price.updated_at) : "-"}</TableCell>
-                    <TableCell className="text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openEditPrice(price)} disabled={!canPublishPrice || billingBusy || officialPriceSyncBusy} title={t("billingPriceEdit")} aria-label={t("billingPriceEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button></TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("billingPriceModel")}</TableHead>
+                    <TableHead>{t("billingPriceSource")}</TableHead>
+                    <TableHead>{t("billingPriceComponents")}</TableHead>
+                    <TableHead>{t("billingPlatformPrice")}</TableHead>
+                    <TableHead>{t("billingEstimatedCost")}</TableHead>
+                    <TableHead>{t("billingProfit")}</TableHead>
+                    <TableHead>{t("billingProfitRate")}</TableHead>
+                    <TableHead>{t("billingPriceUpdated")}</TableHead>
+                    <TableHead className="text-right">{t("billingPriceActions")}</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {group.models.map((price) => (
+                    <TableRow key={price.model_id}>
+                      <TableCell className="min-w-[230px]"><div className="font-semibold text-slate-900 dark:text-white">{price.model}</div></TableCell>
+                      <TableCell><Badge variant={price.source === "manual" ? "default" : price.source === "litellm" ? "cyan" : "muted"}>{price.source === "manual" ? t("billingPriceSourceManual") : price.source === "litellm" ? t("billingPriceSourceLiteLLM") : t("billingPriceSourceMissing")}</Badge></TableCell>
+                      <TableCell><div className="flex max-w-[420px] flex-wrap gap-1.5">{(price.components || []).map((component) => <span key={component.component_code} className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={component.component_code + " · " + component.unit}>{component.component_code}: {componentDisplayPrice(component.price_per_unit, component.unit)} <span className="font-sans text-slate-400">{componentUnitLabel(component.unit)}</span></span>)}{(price.components || []).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}</div></TableCell>
+                      <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="customer_price_per_unit" tone="platform" t={t} /></TableCell>
+                      <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="estimated_cost_per_unit" tone="cost" t={t} /></TableCell>
+                      <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="profit_per_unit" tone="profit" t={t} /></TableCell>
+                      <TableCell><PriceMarginCell estimates={price.cost_estimates} t={t} /></TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{price.updated_at ? formatTime(price.updated_at) : "-"}</TableCell>
+                      <TableCell className="text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openEditPrice(price)} disabled={!canPublishPrice || billingBusy || officialPriceSyncBusy} title={t("billingPriceEdit")} aria-label={t("billingPriceEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </div>
-        </section>
+        </TabsContent>
       ))}
-    </div>
+    </Tabs>
   );
 }
