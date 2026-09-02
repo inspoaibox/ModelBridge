@@ -128,19 +128,43 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
           </div>
         </section>
 
-        <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/70 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-            {categories.map((item) => {
-              const Icon = item.icon;
-              const active = category === item.id;
-              return <button key={item.id} type="button" onClick={() => setCategory(item.id)} className={cn("inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors", active ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800")}><Icon className="h-3.5 w-3.5" />{item.label}<span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400")}>{categoryCounts[item.id]}</span></button>;
-            })}
+        <div className="space-y-3 rounded-2xl border border-slate-200/80 bg-white/70 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+              {categories.map((item) => {
+                const Icon = item.icon;
+                const active = category === item.id;
+                return <button key={item.id} type="button" aria-pressed={active} onClick={() => setCategory(item.id)} className={cn("inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors", active ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800")}><Icon className="h-3.5 w-3.5" />{item.label}<span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400")}>{categoryCounts[item.id]}</span></button>;
+              })}
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:flex-row xl:w-auto">
+              <div className="relative w-full sm:w-64"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("modelsSearchPlaceholder")} className="h-9 pl-9" /></div>
+              <Button variant="outline" size="icon" onClick={() => void refresh(true)} disabled={busy} title={t("modelsRefresh")}><RefreshCw className={cn("h-4 w-4", busy ? "animate-spin" : "")} /></Button>
+            </div>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="relative w-full sm:w-64"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("modelsSearchPlaceholder")} className="h-9 pl-9" /></div>
-            <select value={provider} onChange={(event) => setProvider(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="all">{t("modelsAllProviders")}</option>{providers.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-            {platformGroups.length > 0 ? <select value={groupID} onChange={(event) => setGroupID(event.target.value)} className="h-9 max-w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="">{t("modelsGroupAll")}</option>{platformGroups.map((group) => <option key={group.group_id} value={group.group_id}>{group.group_name} · x{formatMultiplier(group.multiplier)}</option>)}</select> : null}
-            <Button variant="outline" size="icon" onClick={() => void refresh(true)} disabled={busy} title={t("modelsRefresh")}><RefreshCw className={cn("h-4 w-4", busy ? "animate-spin" : "")} /></Button>
+
+          <div className="space-y-2 border-t border-slate-200/80 pt-3 dark:border-slate-800">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              <div className="w-16 shrink-0 pt-2 text-xs font-semibold text-slate-500 dark:text-slate-400">{t("modelsProviders")}</div>
+              <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                <button type="button" aria-pressed={provider === "all"} onClick={() => setProvider("all")} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", provider === "all" ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10")}>{t("modelsAllProviders")}</button>
+                {providers.map((item) => {
+                  const active = provider === item;
+                  return <button key={item} type="button" aria-pressed={active} onClick={() => setProvider(item)} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", active ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10")}>{item}</button>;
+                })}
+              </div>
+            </div>
+
+            {platformGroups.length > 0 ? <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              <div className="w-16 shrink-0 pt-2 text-xs font-semibold text-slate-500 dark:text-slate-400">{t("modelsGroupFilter")}</div>
+              <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                <button type="button" aria-pressed={!groupID} onClick={() => setGroupID("")} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", !groupID ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10")}>{t("modelsGroupAll")}</button>
+                {platformGroups.map((group) => {
+                  const active = groupID === group.group_id;
+                  return <button key={group.group_id} type="button" aria-pressed={active} onClick={() => setGroupID(group.group_id)} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", active ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10")}>{group.group_name} <span className={cn("ml-1 font-mono text-[10px]", active ? "text-indigo-100" : "text-slate-400 dark:text-slate-500")}>x{formatMultiplier(group.multiplier)}</span></button>;
+                })}
+              </div>
+            </div> : null}
           </div>
         </div>
 
