@@ -283,7 +283,10 @@ func addImplicitRequestMetric(components []PriceComponent, usage MeteredUsage, p
 	if usage == nil {
 		usage = MeteredUsage{}
 	}
-	if usage["requests"] != "" || !hasComponentForTier(components, "requests", pricingTier) {
+	if value, exists := usage["requests"]; exists && !isZeroAmount(value) {
+		return usage
+	}
+	if !hasComponentForTier(components, "requests", pricingTier) {
 		return usage
 	}
 	copy := make(MeteredUsage, len(usage)+1)

@@ -750,6 +750,15 @@ func (s *Service) ChatCompletions(
 		hadUpstreamUsage := chatUsageHasValues(response.Usage)
 		if !hadUpstreamUsage {
 			if billingEnabled {
+				if canSettle, policyErr := s.canSettleWithoutUsage(ctx, reservation); policyErr != nil {
+					return ChatCompletionResponse{}, policyErr
+				} else if canSettle {
+					if err := s.completeRelayBilling(ctx, reservation, freeRequestID, ChatUsage{}, response.ID, channel.ID, "upstream"); err != nil {
+						return ChatCompletionResponse{}, err
+					}
+					s.recordChannelSuccess(ctx, channel)
+					return response, nil
+				}
 				if err := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_usage_unavailable"); err != nil {
 					return ChatCompletionResponse{}, err
 				}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"mime"
 	"mime/multipart"
@@ -375,7 +376,9 @@ func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, re
 		}
 		if jobID == "" {
 			if billingEnabled {
-				s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "upstream_video_job_id_missing", mediaBillingUsage(response.Usage), response.ProviderRequestID)
+				if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "upstream_video_job_id_missing", mediaBillingUsage(response.Usage), response.ProviderRequestID); pendingErr != nil {
+					return MediaJSONResponse{}, pendingErr
+				}
 			} else {
 				s.failRelayBilling(ctx, reservation, freeID, "upstream_video_job_id_missing")
 			}
@@ -392,7 +395,9 @@ func (s *Service) CreateVideo(ctx context.Context, principal *auth.Principal, re
 		}
 		if err := store.CreateMediaJob(ctx, job); err != nil {
 			if billingEnabled {
-				s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "media_job_persist_failed", mediaBillingUsage(response.Usage), response.ProviderRequestID)
+				if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "media_job_persist_failed", mediaBillingUsage(response.Usage), response.ProviderRequestID); pendingErr != nil {
+					return MediaJSONResponse{}, pendingErr
+				}
 			} else {
 				s.failRelayBilling(ctx, reservation, freeID, "media_job_persist_failed")
 			}
@@ -581,7 +586,9 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 				// failure is not automatically proof of zero provider cost.
 				// Keep the hold for reconciliation when no billable usage was
 				// returned.
-				s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_"+status+"_usage_unavailable")
+				if err := s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_"+status+"_usage_unavailable"); err != nil {
+					return err
+				}
 			}
 		} else if strings.TrimSpace(job.ModelRequestID) != "" {
 			s.failRelayBilling(ctx, billing.Reservation{}, job.ModelRequestID, "upstream_video_"+status)
@@ -597,7 +604,9 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 	if !response.Usage.UsageProvided && strings.TrimSpace(job.ReservationID) != "" {
 		// An accepted paid video operation must never be settled from the
 		// requested duration. Keep the hold for reconciliation instead.
-		s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_usage_unavailable")
+		if err := s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_usage_unavailable"); err != nil {
+			return err
+		}
 		return nil
 	} else if !response.Usage.UsageProvided {
 		// Free requests still need a useful usage record. Their local estimate
@@ -621,12 +630,16 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 	if strings.TrimSpace(job.ReservationID) != "" {
 		reservation := billing.Reservation{ID: job.ReservationID}
 		if err := s.bindReservationToCandidate(ctx, reservation, job.Channel.ID); err != nil {
-			s.markRelayBillingPendingWithUsage(ctx, reservation, "", "billing_rebind_failed", mediaBillingUsage(response.Usage), response.ProviderRequestID)
+			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, "", "billing_rebind_failed", mediaBillingUsage(response.Usage), response.ProviderRequestID); pendingErr != nil {
+				log.Printf("media billing rebind pending write failed: reservation=%s reason=%s err=%v", reservation.ID, "billing_rebind_failed", pendingErr)
+			}
 			return err
 		}
 		billingUsage := mediaBillingUsage(response.Usage)
 		if err := s.billing.Settle(ctx, job.ReservationID, billingUsage, response.ProviderRequestID); err != nil {
-			s.markRelayBillingPendingWithUsage(ctx, billing.Reservation{ID: job.ReservationID}, "", "billing_settlement_failed", billingUsage, response.ProviderRequestID)
+			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, billing.Reservation{ID: job.ReservationID}, "", "billing_settlement_failed", billingUsage, response.ProviderRequestID); pendingErr != nil {
+				log.Printf("media billing settlement pending write failed: reservation=%s reason=%s err=%v", job.ReservationID, "billing_settlement_failed", pendingErr)
+			}
 			return err
 		}
 		return nil
@@ -926,7 +939,9 @@ func (s *Service) completeMediaBilling(ctx context.Context, reservation billing.
 	billingUsage := mediaBillingUsage(usage)
 	if reservation.ID != "" {
 		if err := s.bindReservationToCandidate(ctx, reservation, channelID); err != nil {
-			s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_rebind_failed", billingUsage, providerRequestID)
+			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_rebind_failed", billingUsage, providerRequestID); pendingErr != nil {
+				log.Printf("media billing rebind pending write failed: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeID, "billing_rebind_failed", pendingErr)
+			}
 			return err
 		}
 		if !mediaUsageHasValues(usage) {
@@ -936,13 +951,17 @@ func (s *Service) completeMediaBilling(ctx context.Context, reservation billing.
 					return err
 				}
 				if !canSettle {
-					s.markRelayBillingPending(ctx, reservation, freeID, "upstream_media_usage_unavailable")
+					if err := s.markRelayBillingPending(ctx, reservation, freeID, "upstream_media_usage_unavailable"); err != nil {
+						return err
+					}
 					return billing.ErrUsageUnavailable
 				}
 			}
 		}
 		if err := s.billing.Settle(ctx, reservation.ID, billingUsage, providerRequestID); err != nil {
-			s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_settlement_failed", billingUsage, providerRequestID)
+			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_settlement_failed", billingUsage, providerRequestID); pendingErr != nil {
+				log.Printf("media billing settlement pending write failed: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeID, "billing_settlement_failed", pendingErr)
+			}
 			return err
 		}
 		return nil

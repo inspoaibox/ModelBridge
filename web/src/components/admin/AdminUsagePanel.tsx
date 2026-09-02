@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Language, LoginMessage, UsageReport, TranslationKey } from "@/types";
+import { Language, LoginMessage, UsageRecord, UsageReport, TranslationKey } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
 

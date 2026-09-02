@@ -400,6 +400,7 @@ func TestAdminStepUpUsesOperationPolicy(t *testing.T) {
 }
 
 func TestLoginRouteDoesNotAcceptUnknownFields(t *testing.T) {
+	t.Setenv("ADMIN_ENTRY_PATH", "")
 	handler := New(auth.NewMiddleware(testResolver{}), &auth.Services{Login: fakeLoginService{}}, false, "../../web")
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", strings.NewReader(
 		`{"email":"a@example.com","password":"password","unexpected":true}`,
@@ -467,6 +468,7 @@ func TestRegistrationFeatureSwitchClosesEndpointAndPublicFlag(t *testing.T) {
 }
 
 func TestLoginSetsHttpOnlySessionCookieWithoutReturningSecret(t *testing.T) {
+	t.Setenv("ADMIN_ENTRY_PATH", "")
 	handler := New(auth.NewMiddleware(testResolver{}), &auth.Services{Login: successfulLoginService{}}, false, "../../web")
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/auth/login", strings.NewReader(
 		`{"email":"admin@example.com","password":"correct password"}`,

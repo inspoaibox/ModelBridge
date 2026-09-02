@@ -72,3 +72,40 @@ func TestOfficialPriceSnapshotCanBeSettledWithoutManualPriceVersion(t *testing.T
 		t.Fatalf("unexpected charge from official price snapshot: %s", charge.Amount)
 	}
 }
+
+func TestPriceAllowsZeroUsageRespectsPricingTier(t *testing.T) {
+	price := Price{
+		MinimumCharge: "0",
+		Components: []PriceComponent{
+			{ComponentCode: "requests_priority", Unit: "request", PricePerUnit: "1"},
+		},
+	}
+	if priceAllowsZeroUsage(price, "") {
+		t.Fatal("priority request pricing must not apply to the default tier")
+	}
+	if !priceAllowsZeroUsage(price, "priority") {
+		t.Fatal("priority request pricing should allow zero-token settlement for priority tier")
+	}
+	if priceAllowsZeroUsage(price, "flex") {
+		t.Fatal("priority request pricing must not apply to flex tier")
+	}
+}
+
+func TestPriceAllowsZeroUsageHonorsMinimumCharge(t *testing.T) {
+	price := Price{MinimumCharge: "0.01"}
+	if !priceAllowsZeroUsage(price, "") {
+		t.Fatal("a non-zero minimum charge should allow settlement without token usage")
+	}
+}
+
+func TestSettlementPricingTierUsesRequestSnapshot(t *testing.T) {
+	if got := settlementPricingTier("priority", "flex"); got != "priority" {
+		t.Fatalf("request pricing tier must win over reported tier, got %q", got)
+	}
+	if got := settlementPricingTier("", "batch"); got != "batches" {
+		t.Fatalf("reported batch tier should normalize when snapshot is absent, got %q", got)
+	}
+	if got := settlementPricingTier("unknown", "priority"); got != "priority" {
+		t.Fatalf("unknown snapshot tier should not block a valid reported tier, got %q", got)
+	}
+}

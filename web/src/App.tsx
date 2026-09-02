@@ -1,12 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
-import { HomeView } from "@/components/HomeView";
-import { ModelPlazaView } from "@/components/ModelPlazaView";
-import { LoginView } from "@/components/LoginView";
-import { RegisterView } from "@/components/RegisterView";
-import { ConsoleView } from "@/components/ConsoleView";
-import { AdminConsole } from "@/components/admin/AdminConsole";
 import { ChannelModal } from "@/components/ChannelModal";
 import { GroupModal } from "@/components/GroupModal";
 import { TokenCreateModal } from "@/components/TokenCreateModal";
@@ -81,6 +75,12 @@ import {
 import { translations } from "@/locales/translations";
 
 const adminEntryPathPattern = /^\/admin-[A-Za-z0-9_-]{16,160}$/;
+const HomeView = lazy(() => import("@/components/HomeView").then((module) => ({ default: module.HomeView })));
+const ModelPlazaView = lazy(() => import("@/components/ModelPlazaView").then((module) => ({ default: module.ModelPlazaView })));
+const LoginView = lazy(() => import("@/components/LoginView").then((module) => ({ default: module.LoginView })));
+const RegisterView = lazy(() => import("@/components/RegisterView").then((module) => ({ default: module.RegisterView })));
+const ConsoleView = lazy(() => import("@/components/ConsoleView").then((module) => ({ default: module.ConsoleView })));
+const AdminConsole = lazy(() => import("@/components/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 
 function isAdminEntryLocation() {
   return adminEntryPathPattern.test(window.location.pathname);
@@ -3694,13 +3694,19 @@ export default function App() {
 
       {/* Main View Router */}
       <main className={currentView === "admin" || currentView === "console" || currentView === "models" ? "flex-1 w-full flex flex-col min-w-0" : "flex-1 w-full max-w-[1720px] mx-auto px-4 sm:px-6 lg:px-8"}>
-        {!sessionReady ? (
-          <div className="flex items-center justify-center min-h-[50vh] text-sm text-slate-500 dark:text-slate-400 gap-2">
-            <span className="h-4 w-4 rounded-full border-2 border-indigo-500/30 border-t-indigo-500 animate-spin" />
+        <Suspense fallback={
+          <div className="flex min-h-[50vh] items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500/30 border-t-indigo-500" />
             <span>{t("restoreChecking")}</span>
           </div>
-        ) : currentView === "home" ? (
-          <HomeView
+        }>
+          {!sessionReady ? (
+            <div className="flex min-h-[50vh] items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500/30 border-t-indigo-500" />
+              <span>{t("restoreChecking")}</span>
+            </div>
+          ) : currentView === "home" ? (
+            <HomeView
             language={language}
             signedIn={signedIn}
             workspaceRoute={audience === "console" ? "#console/dashboard" : "#admin/dashboard"}
@@ -3709,17 +3715,17 @@ export default function App() {
             models={modelCatalog}
             registrationEnabled={publicFeatures?.registration_enabled !== false}
             apiEndpoints={publicAPIEndpoints}
-          />
-        ) : currentView === "models" ? (
-          <ModelPlazaView
+            />
+          ) : currentView === "models" ? (
+            <ModelPlazaView
             language={language}
             models={modelCatalog}
             busy={modelCatalogBusy}
             message={modelCatalogMessage}
             refresh={refreshModelCatalog}
-          />
-        ) : currentView === "login" || currentView === "admin-login" ? (
-          <LoginView
+            />
+          ) : currentView === "login" || currentView === "admin-login" ? (
+            <LoginView
             language={language}
             loginAudience={currentView === "admin-login" ? "admin" : "console"}
             totpEnabled={publicFeatures?.totp_enabled === true}
@@ -3739,17 +3745,17 @@ export default function App() {
             principal={principal}
             handleSignOut={handleSignOut}
             routeTo={routeTo}
-          />
-        ) : currentView === "register" ? (
-          <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} registrationEnabled={publicFeatures?.registration_enabled !== false} />
-        ) : currentView === "reset" ? (
-          <ResetPasswordView language={language} token={route.reset_token} routeTo={routeTo} />
-        ) : currentView === "verify-email" ? (
-          <EmailVerificationView language={language} token={route.verification_token} routeTo={routeTo} />
-        ) : currentView === "not-found" ? (
-          <NotFoundView language={language} routeTo={routeTo} />
-        ) : currentView === "console" ? (
-          <ConsoleView
+            />
+          ) : currentView === "register" ? (
+            <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} registrationEnabled={publicFeatures?.registration_enabled !== false} />
+          ) : currentView === "reset" ? (
+            <ResetPasswordView language={language} token={route.reset_token} routeTo={routeTo} />
+          ) : currentView === "verify-email" ? (
+            <EmailVerificationView language={language} token={route.verification_token} routeTo={routeTo} />
+          ) : currentView === "not-found" ? (
+            <NotFoundView language={language} routeTo={routeTo} />
+          ) : currentView === "console" ? (
+            <ConsoleView
             language={language}
             principal={principal}
             section={consoleSection}
@@ -3827,9 +3833,9 @@ export default function App() {
             confirmMFA={confirmConsoleMFA}
             cancelMFA={cancelConsoleMFA}
             disableMFA={disableConsoleMFA}
-          />
-        ) : (
-          <AdminConsole
+            />
+          ) : (
+            <AdminConsole
             language={language}
             adminSection={adminSection}
             setAdminSection={setAdminSection}
@@ -4011,8 +4017,9 @@ export default function App() {
 			 auditBusy={auditBusy}
 			 auditMessage={auditMessage}
 			 refreshAudit={refreshAudit}
-           />
-        )}
+            />
+          )}
+        </Suspense>
       </main>
 
       <StepUpDialog

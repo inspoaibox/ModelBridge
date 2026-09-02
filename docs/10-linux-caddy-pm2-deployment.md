@@ -93,6 +93,7 @@ ss -lntp | grep -E ':(80|443|8080|5432)\b' || true
 apt-get update
 apt-get install -y \
   ca-certificates curl gnupg git \
+  openssl \
   build-essential \
   postgresql postgresql-contrib
 systemctl enable --now postgresql

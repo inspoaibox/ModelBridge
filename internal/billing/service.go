@@ -1436,6 +1436,9 @@ func (s *SQLService) SettleByModelRequestID(ctx context.Context, modelRequestID 
 	if err != nil {
 		return err
 	}
+	if status == "settled" {
+		return nil
+	}
 	if status != "pending" {
 		return ErrSettlementPending
 	}
@@ -1458,16 +1461,18 @@ func usageHasPositiveQuantity(usage Usage) bool {
 	return false
 }
 
-func priceAllowsZeroUsage(price Price) bool {
+func priceAllowsZeroUsage(price Price, pricingTier string) bool {
 	if !isZeroAmount(price.MinimumCharge) {
 		return true
 	}
-	for _, component := range priceComponentsFor(price) {
-		if componentBaseCode(component.ComponentCode) == "requests" {
-			return true
-		}
+	return hasComponentForTier(priceComponentsFor(price), "requests", pricingTier)
+}
+
+func settlementPricingTier(snapshotTier, reportedTier string) string {
+	if tier := normalizePricingTier(snapshotTier); tier != "" {
+		return tier
 	}
-	return false
+	return normalizePricingTier(reportedTier)
 }
 
 func (s *SQLService) FailFreeRequest(ctx context.Context, modelRequestID, reason string) error {
@@ -1510,11 +1515,16 @@ func (s *SQLService) RebindRequestChannel(ctx context.Context, modelRequestID, c
 		SET channel_id = $2,
 		    model_id = target_model.id
 		FROM models current_model
+		JOIN channels target_channel
+		  ON target_channel.id = $2::uuid
+		 AND target_channel.status = 'active'
+		 AND target_channel.deleted_at IS NULL
 		JOIN channel_models target_mapping
-		  ON target_mapping.channel_id = $2::uuid
+		  ON target_mapping.channel_id = target_channel.id
 		 AND target_mapping.enabled = true
 		JOIN models target_model
 		  ON target_model.id = target_mapping.model_id
+		 AND target_model.status = 'active'
 		 AND target_model.model_name = current_model.model_name
 		WHERE mr.id = $1
 		  AND mr.model_id = current_model.id
@@ -1618,10 +1628,9 @@ func (s *SQLService) Settle(
 	}
 	// Providers and manual reconciliation callers do not always echo the
 	// service tier. The request snapshot is authoritative for the selected
-	// priority, flex, or batch price.
-	if strings.TrimSpace(usage.PricingTier) == "" {
-		usage.PricingTier = requestPricingTier
-	}
+	// priority, flex, or batch price; accepting a different reported tier
+	// would allow the same request to settle against a different price rule.
+	usage.PricingTier = settlementPricingTier(requestPricingTier, usage.PricingTier)
 
 	var inputPrice, outputPrice, minimumCharge string
 	var cachedInputPrice, reasoningPrice string
@@ -1684,7 +1693,7 @@ func (s *SQLService) Settle(
 			return err
 		}
 	}
-	if !usageHasPositiveQuantity(usage) && !priceAllowsZeroUsage(price) {
+	if !usageHasPositiveQuantity(usage) && !priceAllowsZeroUsage(price, usage.PricingTier) {
 		return ErrUsageUnavailable
 	}
 	usage.Metrics = addImplicitRequestMetric(priceComponentsFor(price), usage.Metrics, usage.PricingTier)
@@ -1857,7 +1866,13 @@ func (s *SQLService) CanSettleWithoutUsage(ctx context.Context, reservationID st
 	if err != nil {
 		return false, err
 	}
-	return priceAllowsZeroUsage(price), nil
+	var snapshot struct {
+		PricingTier string `json:"pricing_tier"`
+	}
+	if len(snapshotRaw) > 0 && string(snapshotRaw) != "null" {
+		_ = json.Unmarshal(snapshotRaw, &snapshot)
+	}
+	return priceAllowsZeroUsage(price, snapshot.PricingTier), nil
 }
 
 func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID, channelID string) error {
@@ -1892,9 +1907,11 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		FROM billing_reservations br
 		JOIN model_requests mr ON mr.id = br.request_id
 		JOIN models current_model ON current_model.id = mr.model_id
-		JOIN channels c ON c.id = $2::uuid AND c.deleted_at IS NULL
+		JOIN channels c ON c.id = $2::uuid
+		 AND c.status = 'active'
+		 AND c.deleted_at IS NULL
 		JOIN channel_models target_cm ON target_cm.channel_id = c.id AND target_cm.enabled = true
-		JOIN models target_model ON target_model.id = target_cm.model_id
+		JOIN models target_model ON target_model.id = target_cm.model_id AND target_model.status = 'active'
 		WHERE br.id = $1
 		  AND target_model.model_name = current_model.model_name
 		FOR UPDATE OF br, mr

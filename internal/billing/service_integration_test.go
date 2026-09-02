@@ -25,6 +25,9 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
+	if err := dbpkg.Migrate(ctx, conn, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
 
 	var userID string
 	if err := conn.QueryRowContext(ctx, `SELECT id::text FROM users ORDER BY created_at LIMIT 1`).Scan(&userID); err != nil {
@@ -376,6 +379,9 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	}
 	if err := service.SettleByModelRequestID(ctx, pendingReservation.ModelRequestID, Usage{InputTokens: 2, OutputTokens: 2}, "reconciled-provider-request"); err != nil {
 		t.Fatalf("pending request should be reconciled: %v", err)
+	}
+	if err := service.SettleByModelRequestID(ctx, pendingReservation.ModelRequestID, Usage{InputTokens: 99, OutputTokens: 99}, "duplicate-reconciliation"); err != nil {
+		t.Fatalf("reconciling an already settled request should be idempotent: %v", err)
 	}
 }
 

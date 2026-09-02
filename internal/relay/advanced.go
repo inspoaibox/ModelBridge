@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -171,9 +172,13 @@ func (s *Service) StreamChatCompletions(
 			if delivered {
 				if billingEnabled {
 					if gotUsage {
-						s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_interrupted", chatBillingUsage(usage, "upstream"), providerRequestID)
+						if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_interrupted", chatBillingUsage(usage, "upstream"), providerRequestID); pendingErr != nil {
+							log.Printf("relay billing pending write failed after streamed response: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeRequestID, "upstream_stream_interrupted", pendingErr)
+						}
 					} else {
-						s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
+						if pendingErr := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); pendingErr != nil {
+							log.Printf("relay billing pending write failed after streamed response: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeRequestID, "upstream_stream_usage_unavailable", pendingErr)
+						}
 					}
 				} else {
 					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_interrupted")
@@ -190,6 +195,15 @@ func (s *Service) StreamChatCompletions(
 		source := "upstream"
 		if !gotUsage {
 			if billingEnabled {
+				if canSettle, policyErr := s.canSettleWithoutUsage(ctx, reservation); policyErr != nil {
+					return policyErr
+				} else if canSettle {
+					if err := s.completeRelayBilling(ctx, reservation, freeRequestID, ChatUsage{}, providerRequestID, channel.ID, source); err != nil {
+						return err
+					}
+					s.recordChannelSuccess(ctx, channel)
+					return nil
+				}
 				if err := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); err != nil {
 					return err
 				}
@@ -384,12 +398,16 @@ func (s *Service) completeRelayBilling(ctx context.Context, reservation billing.
 		if err := s.bindReservationToCandidate(ctx, reservation, channelID); err != nil {
 			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_rebind_failed", billingUsage, providerRequestID); pendingErr == nil {
 				return nil
+			} else {
+				log.Printf("relay billing rebind pending write failed: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeID, "billing_rebind_failed", pendingErr)
 			}
 			return err
 		}
 		if err := s.billing.Settle(ctx, reservation.ID, billingUsage, providerRequestID); err != nil {
 			if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeID, "billing_settlement_failed", billingUsage, providerRequestID); pendingErr == nil {
 				return nil
+			} else {
+				log.Printf("relay billing settlement pending write failed: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeID, "billing_settlement_failed", pendingErr)
 			}
 			return err
 		}
@@ -419,6 +437,17 @@ func (s *Service) bindReservationToCandidate(ctx context.Context, reservation bi
 		return nil
 	}
 	return rebinder.RebindReservationChannel(ctx, reservation.ID, channelID)
+}
+
+func (s *Service) canSettleWithoutUsage(ctx context.Context, reservation billing.Reservation) (bool, error) {
+	if reservation.ID == "" || s == nil || s.billing == nil {
+		return false, nil
+	}
+	policy, ok := s.billing.(billing.ReservationUsagePolicy)
+	if !ok {
+		return false, nil
+	}
+	return policy.CanSettleWithoutUsage(ctx, reservation.ID)
 }
 
 func chatBillingUsage(usage ChatUsage, source string) billing.Usage {
@@ -637,6 +666,15 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 		source := "upstream"
 		if response.Usage.PromptTokens <= 0 {
 			if billingEnabled {
+				if canSettle, policyErr := s.canSettleWithoutUsage(ctx, reservation); policyErr != nil {
+					return EmbeddingResponse{}, policyErr
+				} else if canSettle {
+					if err := s.completeRelayBilling(ctx, reservation, freeID, ChatUsage{}, newCompletionID("embedding-"), channel.ID, "upstream"); err != nil {
+						return EmbeddingResponse{}, err
+					}
+					s.recordChannelSuccess(ctx, channel)
+					return response, nil
+				}
 				if err := s.markRelayBillingPending(ctx, reservation, freeID, "upstream_embedding_usage_unavailable"); err != nil {
 					return EmbeddingResponse{}, err
 				}

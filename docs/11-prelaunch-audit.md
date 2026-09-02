@@ -1,6 +1,6 @@
 # 上线前自检与商用边界
 
-审计日期：2026-09-01  
+审计日期：2026-09-02
 审计对象：AI Token Gateway 当前 `main` 工作区  
 审计目标：核对管理员、前端用户、租户/项目、Token、渠道调度、计费、媒体接口、生产安全和部署材料是否达到受控商用上线条件。
 
@@ -23,13 +23,13 @@
 | API Token | 只能由租户用户创建/撤销；列表按 `tenant_id + created_by` 返回；绑定项目、分组、模型、IP/CIDR、域名、过期和速率规则 | 客户密钥归属 |
 | 渠道 | 上游 Key 加密保存，列表只显示脱敏预览；渠道支持新增、编辑、暂停、启用、软删除和模型发现 | 上游凭据安全 |
 | 路由 | 分组是渠道集合和策略；同模型按优先级分层、同层权重选择；可重试上游错误自动切换，连续失败触发短时熔断 | 可用性与兜底 |
-| 计费 | 预占余额、按上游 Usage 结算、释放差额、幂等键、渠道重绑定、`settlement_pending` 和人工补结算入口已实现 | 财务一致性 |
+| 计费 | 预占余额、按上游 Usage 结算、释放差额、幂等键、渠道重绑定、`settlement_pending` 和人工补结算入口已实现；结算始终遵循请求时固化的价格层级快照 | 财务一致性 |
 | 多计量 | 支持 Token、缓存、推理、图片/音频/视频 Token、图片数量、字符、秒数、请求、查询、会话、页数等组件；缺少可靠计量不会静默按零放行 | 多媒体计费 |
 | 管理 MFA | 管理员全局 MFA 可在系统设置开关；开启前要求所有有效管理员已绑定 TOTP；高风险管理写操作要求 `X-MFA-Code` | 后台高风险操作 |
 | 用户 MFA | 基于 `github.com/pquerna/otp` 的 TOTP 绑定、确认、登录校验和安全关闭 | 账户安全 |
 | 注册邮件 | 生产公开注册可进入 `pending`，SMTP STARTTLS 发送一次性验证链接，支持验证和安全重发 | 防止未验证账号登录 |
 | 部署 | Caddy HTTPS、PM2、systemd 恢复、回环监听、PostgreSQL 最小权限、备份/回滚流程已有文档和模板 | 生产运维 |
-| 前端体验 | 修复 `#home` 首页路由、无权限页面、只读 Token 操作入口和移动端 Hero 横向溢出；认证/API 响应禁止缓存 | 页面可用性与敏感信息保护 |
+| 前端体验 | 修复 `#home` 首页路由、无权限页面、只读 Token 操作入口和移动端 Hero 横向溢出；认证/API 响应禁止缓存；首页、用户台和管理员台按路由懒加载 | 页面可用性与首屏性能 |
 
 ## 3. 仍然存在的边界与影响
 
@@ -49,7 +49,7 @@
 
 ### 已通过的检查
 
-- 未发现前端 `console.log` 或 `debugger` 临时代码；ESLint 配置也将 `debugger` 设为错误。
+- 未发现前端运行时代码中的 `console.log` 或 `debugger` 临时代码；客户使用文档内保留的 `console.log(message.content)` 仅属于可复制的 Anthropic SDK 示例，不会随业务流程执行。ESLint 配置也将 `debugger` 设为错误。
 - `git ls-files` 未包含 `.env.local`；`.gitignore` 排除了 `.env`、`.env.*`，但保留 `.env.example`。
 - `#home`、登录、注册、模型目录和未知 hash 路由均已通过浏览器检查；桌面和 390px 移动视口无横向溢出。
 - 上游 URL 有协议、凭据、查询参数、私网/回环/元数据地址和连接时 DNS 复核限制，禁止自动重定向。
@@ -63,7 +63,7 @@
 1. 本机 `.env.local` 当前含开发数据库密码、Token Pepper、Session Pepper 和 MFA 加密密钥。它虽然未被 Git 跟踪，但所有这些值必须在生产重新生成；发布包、备份、截图、日志和 shell history 都不得包含它。
 2. 生产必须使用非超级用户 PostgreSQL 账号、`COOKIE_SECURE=true`、HTTPS、明确 `CORS_ALLOWED_ORIGINS`、回环 `HTTP_ADDR` 和明确 `TRUSTED_PROXY_CIDRS`。
 3. 开启公开注册前，在“系统设置 → 功能开关”打开“开放用户注册”；如需邮箱验证，同时打开邮件总开关和“邮箱验证码”，并在“系统设置 → 邮件设置”配置 HTTPS 公开地址和可用的 SMTP STARTTLS；同时在边缘配置 Captcha/WAF。
-4. 迁移必须执行到 `040_api_endpoint_protocols.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
+4. 迁移必须执行到 `041_official_price_runtime_billing.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
 5. 生产应启用外部依赖漏洞扫描；本次使用官方 npm registry 检查生产依赖为 0 个已知漏洞，但仍不能替代发布镜像和运行环境扫描。
 
 ## 5. 验证记录
@@ -76,12 +76,13 @@ go test ./... -count=1
 go vet ./...
 cd web && npm run lint
 cd web && npm run typecheck
+cd web && npm run build
 cd web && npm test
 cd web && npm audit --omit=dev --registry=https://registry.npmjs.org
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
-结果：后端 `go test ./... -count=1`（含本机 PostgreSQL 集成测试）通过，`go vet ./...` 通过，`govulncheck` 报告可达调用路径为 0 个漏洞（另有未被当前调用路径触及的依赖漏洞，需要持续升级依赖），前端 lint/typecheck/build/浏览器烟测通过，官方 npm registry 的生产依赖审计显示 `found 0 vulnerabilities`，`git diff --check` 通过。数据库迁移已核对为 `040_api_endpoint_protocols.sql`。
+结果：后端 `go test ./... -count=1`、`go vet ./...` 通过；加载本机开发数据库配置后，PostgreSQL 使用记录、财务和计费结算集成测试通过，测试会先执行 `db.Migrate` 并核对到 `041_official_price_runtime_billing.sql`。`govulncheck` 报告可达调用路径为 0 个漏洞（另有未被当前调用路径触及的依赖漏洞，需要持续升级依赖），前端 lint/typecheck/build/浏览器烟测通过，生产构建已按路由拆分且无 chunk 体积警告，官方 npm registry 的生产依赖审计显示 `found 0 vulnerabilities`，`git diff --check` 通过。
 
 本机页面检查还覆盖了首页、模型目录、暗色模式、登录、注册、404 和 390px 移动视口；重启后的干净 Vite 页面没有浏览器错误日志。Vite 热更新错误只出现在被替换的旧开发进程记录中，不属于生产构建。
 
