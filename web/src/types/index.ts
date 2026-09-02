@@ -549,6 +549,30 @@ export interface PriceMatrixSummary {
   source_url?: string;
   updated_at?: string;
   components?: PriceComponent[];
+  cost_estimates?: PriceMatrixCostEstimate[];
+}
+
+export interface PriceMatrixComponentEstimate {
+  component_code: string;
+  unit: string;
+  customer_price_per_unit?: string;
+  estimated_cost_per_unit?: string;
+  profit_per_unit?: string;
+  profit_margin_percent?: string;
+}
+
+export interface PriceMatrixCostEstimate {
+  group_id: string;
+  group_code: string;
+  group_name: string;
+  group_priority: number;
+  multiplier: string;
+  billing_type: "prepaid" | "free" | string;
+  channel_id: string;
+  channel_name: string;
+  route_count: number;
+  upstream_cost_discount: string;
+  components?: PriceMatrixComponentEstimate[];
 }
 
 export interface BillingAccount {

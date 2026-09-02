@@ -41,4 +41,15 @@ func TestReportingQueriesAgainstPostgres(t *testing.T) {
 	if finance.Limit != 20 || finance.Offset != 0 {
 		t.Fatalf("unexpected finance pagination: %#v", finance)
 	}
+	prices, err := service.ListPriceMatrix(ctx)
+	if err != nil {
+		t.Fatalf("price matrix query failed: %v", err)
+	}
+	for _, price := range prices {
+		for _, estimate := range price.CostEstimates {
+			if estimate.GroupID == "" || estimate.ChannelID == "" {
+				t.Fatalf("price matrix cost estimate is missing route identity: %#v", estimate)
+			}
+		}
+	}
 }

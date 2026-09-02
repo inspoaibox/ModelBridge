@@ -54,6 +54,7 @@ import {
   MFAEnrollment,
   MFAStatus,
   PasswordFormState,
+  PriceMatrixCostEstimate,
   PriceMatrixSummary,
   OperationsSnapshot,
   ModelStatusReport,
@@ -1565,6 +1566,7 @@ export function AdminConsole({
                 <CardDescription>
                   {billingBusy && prices.length === 0 ? t("billingLoad") : `${prices.length} ${t("billingModelsUnit")}`}
                 </CardDescription>
+                <p className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">{t("billingProfitHint")}</p>
               </CardHeader>
               <CardContent>
                 <PriceMatrixTable
@@ -1775,6 +1777,138 @@ function formatMoney(value?: string) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(parsed);
 }
 
+function formatMultiplier(value: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return value || "-";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 }).format(parsed);
+}
+
+type PriceEstimateField = "customer_price_per_unit" | "estimated_cost_per_unit" | "profit_per_unit";
+
+function estimateComponentLabel(code: string, t: (key: TranslationKey) => string) {
+  switch (code) {
+    case "input_tokens":
+      return t("billingMetricInput");
+    case "cached_input_tokens":
+      return t("billingMetricCachedInput");
+    case "output_tokens":
+      return t("billingMetricOutput");
+    case "reasoning_tokens":
+      return t("billingMetricReasoning");
+    default:
+      return code;
+  }
+}
+
+function estimateComponents(estimate: PriceMatrixCostEstimate) {
+  const preferredOrder = ["input_tokens", "cached_input_tokens", "cache_creation_tokens", "output_tokens", "reasoning_tokens"];
+  return [...(estimate.components || [])].sort((left, right) => {
+    const leftIndex = preferredOrder.indexOf(left.component_code);
+    const rightIndex = preferredOrder.indexOf(right.component_code);
+    if (leftIndex === -1 && rightIndex === -1) return left.component_code.localeCompare(right.component_code);
+    if (leftIndex === -1) return 1;
+    if (rightIndex === -1) return -1;
+    return leftIndex - rightIndex;
+  });
+}
+
+function formatProfitRate(value?: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "-";
+  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(parsed)}%`;
+}
+
+function PriceEstimateCell({
+  estimates,
+  field,
+  tone,
+  t,
+}: {
+  estimates?: PriceMatrixCostEstimate[];
+  field: PriceEstimateField;
+  tone: "platform" | "cost" | "profit";
+  t: (key: TranslationKey) => string;
+}) {
+  if (!estimates || estimates.length === 0) {
+    return <span className="text-xs text-slate-400">-</span>;
+  }
+  const valueClass = tone === "platform"
+    ? "text-indigo-700 dark:text-indigo-300"
+    : tone === "cost"
+      ? "text-amber-700 dark:text-amber-300"
+      : "text-emerald-700 dark:text-emerald-300";
+  return (
+    <div className="min-w-[190px] space-y-2">
+      {estimates.map((estimate) => (
+        <div key={estimate.group_id} className="space-y-1.5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="min-w-0 truncate font-semibold text-slate-700 dark:text-slate-200" title={estimate.group_name || estimate.group_code}>
+              {estimate.group_name || estimate.group_code}
+            </span>
+            <span className="shrink-0 font-mono text-slate-500 dark:text-slate-400">x{formatMultiplier(estimate.multiplier)}</span>
+          </div>
+          <div className="space-y-0.5">
+            {estimateComponents(estimate).map((component) => (
+              <div key={component.component_code} className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="truncate text-slate-500 dark:text-slate-400">{estimateComponentLabel(component.component_code, t)}</span>
+                <span className={cn(
+                  "shrink-0 font-mono font-semibold",
+                  tone === "profit" && Number(component[field]) < 0 ? "text-rose-700 dark:text-rose-300" : valueClass
+                )}>
+                  {componentDisplayPrice(component[field] || "", component.unit)}
+                </span>
+              </div>
+            ))}
+            {estimateComponents(estimate).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}
+          </div>
+          <div className="truncate text-[9px] text-slate-400 dark:text-slate-500" title={`${estimate.channel_name} · ${estimate.route_count} ${t("billingAvailableRoutes")} · ${t("billingDiscount")} ${estimate.upstream_cost_discount}`}>
+            {t("billingPrimaryChannel")}: {estimate.channel_name || "-"} · {t("billingDiscount")} {formatMultiplier(estimate.upstream_cost_discount)} · {estimate.route_count} {t("billingAvailableRoutes")}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PriceMarginCell({ estimates, t }: { estimates?: PriceMatrixCostEstimate[]; t: (key: TranslationKey) => string }) {
+  if (!estimates || estimates.length === 0) {
+    return <span className="text-xs text-slate-400">-</span>;
+  }
+  return (
+    <div className="min-w-[130px] space-y-2">
+      {estimates.map((estimate) => (
+        <div key={estimate.group_id} className="space-y-1.5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-2 dark:border-slate-800 dark:bg-slate-950/40">
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="min-w-0 truncate font-semibold text-slate-700 dark:text-slate-200">{estimate.group_name || estimate.group_code}</span>
+            <span className="shrink-0 font-mono text-slate-500 dark:text-slate-400">x{formatMultiplier(estimate.multiplier)}</span>
+          </div>
+          <div className="space-y-0.5">
+            {estimateComponents(estimate).map((component) => (
+              <div key={component.component_code} className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="truncate text-slate-500 dark:text-slate-400">{estimateComponentLabel(component.component_code, t)}</span>
+                <span className={cn(
+                  "shrink-0 font-mono font-semibold",
+                  component.profit_margin_percent === undefined || component.profit_margin_percent === ""
+                    ? "text-slate-400"
+                    : Number(component.profit_margin_percent) < 0
+                      ? "text-rose-700 dark:text-rose-300"
+                      : "text-emerald-700 dark:text-emerald-300"
+                )}>
+                  {formatProfitRate(component.profit_margin_percent)}
+                </span>
+              </div>
+            ))}
+            {estimateComponents(estimate).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}
+          </div>
+          <div className="truncate text-[9px] text-slate-400 dark:text-slate-500">
+            {estimate.billing_type === "free" ? t("billingFreeGroup") : t("billingMarginBasis")}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PriceMatrixTable({
   groups,
   t,
@@ -1814,6 +1948,10 @@ function PriceMatrixTable({
                   <TableHead>{t("billingPriceModel")}</TableHead>
                   <TableHead>{t("billingPriceSource")}</TableHead>
                   <TableHead>{t("billingPriceComponents")}</TableHead>
+                  <TableHead>{t("billingPlatformPrice")}</TableHead>
+                  <TableHead>{t("billingEstimatedCost")}</TableHead>
+                  <TableHead>{t("billingProfit")}</TableHead>
+                  <TableHead>{t("billingProfitRate")}</TableHead>
                   <TableHead>{t("billingPriceUpdated")}</TableHead>
                   <TableHead className="text-right">{t("billingPriceActions")}</TableHead>
                 </TableRow>
@@ -1824,6 +1962,10 @@ function PriceMatrixTable({
                     <TableCell className="min-w-[230px]"><div className="font-semibold text-slate-900 dark:text-white">{price.model}</div></TableCell>
                     <TableCell><Badge variant={price.source === "manual" ? "default" : price.source === "litellm" ? "cyan" : "muted"}>{price.source === "manual" ? t("billingPriceSourceManual") : price.source === "litellm" ? t("billingPriceSourceLiteLLM") : t("billingPriceSourceMissing")}</Badge></TableCell>
                     <TableCell><div className="flex max-w-[420px] flex-wrap gap-1.5">{(price.components || []).map((component) => <span key={component.component_code} className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={component.component_code + " · " + component.unit}>{component.component_code}: {componentDisplayPrice(component.price_per_unit, component.unit)} <span className="font-sans text-slate-400">{componentUnitLabel(component.unit)}</span></span>)}{(price.components || []).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}</div></TableCell>
+                    <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="customer_price_per_unit" tone="platform" t={t} /></TableCell>
+                    <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="estimated_cost_per_unit" tone="cost" t={t} /></TableCell>
+                    <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="profit_per_unit" tone="profit" t={t} /></TableCell>
+                    <TableCell><PriceMarginCell estimates={price.cost_estimates} t={t} /></TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{price.updated_at ? formatTime(price.updated_at) : "-"}</TableCell>
                     <TableCell className="text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openEditPrice(price)} disabled={!canPublishPrice || billingBusy || officialPriceSyncBusy} title={t("billingPriceEdit")} aria-label={t("billingPriceEdit")} className="h-9 w-9 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300"><Pencil className="h-4 w-4" /></Button></TableCell>
                   </TableRow>

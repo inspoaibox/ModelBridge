@@ -98,6 +98,55 @@ func TestPriceAllowsZeroUsageHonorsMinimumCharge(t *testing.T) {
 	}
 }
 
+func TestMatrixComponentEstimatesApplyGroupMultiplierAndChannelDiscount(t *testing.T) {
+	customer := []PriceComponent{
+		{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.000005"},
+		{ComponentCode: "output_tokens", Unit: "token", PricePerUnit: "0.00002"},
+	}
+	upstream := []PriceComponent{
+		{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.000004"},
+		{ComponentCode: "output_tokens", Unit: "token", PricePerUnit: "0.000015"},
+	}
+
+	estimates := matrixComponentEstimates(customer, upstream, "1.5", "prepaid", "0.5")
+	if len(estimates) != 2 {
+		t.Fatalf("expected two component estimates, got %#v", estimates)
+	}
+	if estimates[0].CustomerPricePerUnit != "0.0000075" ||
+		estimates[0].EstimatedCostPerUnit != "0.000002" ||
+		estimates[0].ProfitPerUnit != "0.0000055" {
+		t.Fatalf("unexpected input estimate: %#v", estimates[0])
+	}
+	if estimates[0].ProfitMarginPercent != "73.333333333333333333333333333333" {
+		t.Fatalf("unexpected input margin: %q", estimates[0].ProfitMarginPercent)
+	}
+	if estimates[1].CustomerPricePerUnit != "0.00003" ||
+		estimates[1].EstimatedCostPerUnit != "0.0000075" ||
+		estimates[1].ProfitPerUnit != "0.0000225" {
+		t.Fatalf("unexpected output estimate: %#v", estimates[1])
+	}
+}
+
+func TestMatrixComponentEstimatesMarkFreeGroupAsLossWithoutMargin(t *testing.T) {
+	customer := []PriceComponent{
+		{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.000005"},
+	}
+	upstream := []PriceComponent{
+		{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.000004"},
+	}
+
+	estimates := matrixComponentEstimates(customer, upstream, "1", "free", "1")
+	if len(estimates) != 1 {
+		t.Fatalf("expected one component estimate, got %#v", estimates)
+	}
+	if estimates[0].CustomerPricePerUnit != "0" ||
+		estimates[0].EstimatedCostPerUnit != "0.000004" ||
+		estimates[0].ProfitPerUnit != "-0.000004" ||
+		estimates[0].ProfitMarginPercent != "" {
+		t.Fatalf("unexpected free group estimate: %#v", estimates[0])
+	}
+}
+
 func TestSettlementPricingTierUsesRequestSnapshot(t *testing.T) {
 	if got := settlementPricingTier("priority", "flex"); got != "priority" {
 		t.Fatalf("request pricing tier must win over reported tier, got %q", got)

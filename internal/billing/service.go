@@ -217,18 +217,42 @@ type PriceVersionSummary struct {
 // Historical price versions remain available in the ledger, but are intentionally
 // excluded from the operational pricing screen.
 type PriceMatrixSummary struct {
-	ModelID                          string           `json:"model_id"`
-	Provider                         string           `json:"provider"`
-	Model                            string           `json:"model"`
-	Currency                         string           `json:"currency"`
-	InputPricePerMillionTokens       string           `json:"input_price_per_million_tokens"`
-	OutputPricePerMillionTokens      string           `json:"output_price_per_million_tokens"`
-	CachedInputPricePerMillionTokens string           `json:"cached_input_price_per_million_tokens"`
-	ReasoningPricePerMillionTokens   string           `json:"reasoning_price_per_million_tokens"`
-	Source                           string           `json:"source"`
-	SourceURL                        string           `json:"source_url,omitempty"`
-	UpdatedAt                        *time.Time       `json:"updated_at,omitempty"`
-	Components                       []PriceComponent `json:"components,omitempty"`
+	ModelID                          string                    `json:"model_id"`
+	Provider                         string                    `json:"provider"`
+	Model                            string                    `json:"model"`
+	Currency                         string                    `json:"currency"`
+	InputPricePerMillionTokens       string                    `json:"input_price_per_million_tokens"`
+	OutputPricePerMillionTokens      string                    `json:"output_price_per_million_tokens"`
+	CachedInputPricePerMillionTokens string                    `json:"cached_input_price_per_million_tokens"`
+	ReasoningPricePerMillionTokens   string                    `json:"reasoning_price_per_million_tokens"`
+	Source                           string                    `json:"source"`
+	SourceURL                        string                    `json:"source_url,omitempty"`
+	UpdatedAt                        *time.Time                `json:"updated_at,omitempty"`
+	Components                       []PriceComponent          `json:"components,omitempty"`
+	CostEstimates                    []PriceMatrixCostEstimate `json:"cost_estimates,omitempty"`
+}
+
+type PriceMatrixComponentEstimate struct {
+	ComponentCode        string `json:"component_code"`
+	Unit                 string `json:"unit"`
+	CustomerPricePerUnit string `json:"customer_price_per_unit,omitempty"`
+	EstimatedCostPerUnit string `json:"estimated_cost_per_unit,omitempty"`
+	ProfitPerUnit        string `json:"profit_per_unit,omitempty"`
+	ProfitMarginPercent  string `json:"profit_margin_percent,omitempty"`
+}
+
+type PriceMatrixCostEstimate struct {
+	GroupID              string                         `json:"group_id"`
+	GroupCode            string                         `json:"group_code"`
+	GroupName            string                         `json:"group_name"`
+	GroupPriority        int                            `json:"group_priority"`
+	Multiplier           string                         `json:"multiplier"`
+	BillingType          string                         `json:"billing_type"`
+	ChannelID            string                         `json:"channel_id"`
+	ChannelName          string                         `json:"channel_name"`
+	RouteCount           int                            `json:"route_count"`
+	UpstreamCostDiscount string                         `json:"upstream_cost_discount"`
+	Components           []PriceMatrixComponentEstimate `json:"components,omitempty"`
 }
 
 type PublishPriceRequest struct {
@@ -711,6 +735,19 @@ func (s *SQLService) ListPriceMatrix(ctx context.Context) ([]PriceMatrixSummary,
 		if err != nil {
 			return nil, err
 		}
+		item.CostEstimates, err = s.listPriceMatrixCostEstimates(
+			ctx,
+			item.ModelID,
+			input,
+			output,
+			cached,
+			reasoning,
+			item.Components,
+			item.Source,
+		)
+		if err != nil {
+			return nil, err
+		}
 		if updatedAt.Valid {
 			value := updatedAt.Time.UTC()
 			item.UpdatedAt = &value
@@ -721,6 +758,285 @@ func (s *SQLService) ListPriceMatrix(ctx context.Context) ([]PriceMatrixSummary,
 		return nil, err
 	}
 	return items, nil
+}
+
+func (s *SQLService) listPriceMatrixCostEstimates(
+	ctx context.Context,
+	modelID string,
+	customerInput string,
+	customerOutput string,
+	customerCached string,
+	customerReasoning string,
+	customerComponents []PriceComponent,
+	pricingSource string,
+) ([]PriceMatrixCostEstimate, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrUnavailable
+	}
+
+	customerComponents = matrixPriceComponents(
+		customerInput,
+		customerOutput,
+		customerCached,
+		customerReasoning,
+		customerComponents,
+	)
+	upstreamInput := customerInput
+	upstreamOutput := customerOutput
+	upstreamCached := customerCached
+	upstreamReasoning := customerReasoning
+	upstreamComponents := customerComponents
+
+	// A manual platform price can differ from the provider reference price.
+	// Cost estimates use the latest official snapshot whenever it exists,
+	// matching the settlement cost basis used by the relay.
+	if strings.EqualFold(strings.TrimSpace(pricingSource), "manual") {
+		var officialPriceID string
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id::text, input_price_per_unit::text,
+			       output_price_per_unit::text,
+			       cached_input_price_per_unit::text,
+			       reasoning_price_per_unit::text
+			FROM official_model_price_versions
+			WHERE model_id = $1
+			  AND source = 'litellm'
+			  AND effective_to IS NULL
+			ORDER BY effective_from DESC
+			LIMIT 1
+		`, modelID).Scan(
+			&officialPriceID,
+			&upstreamInput,
+			&upstreamOutput,
+			&upstreamCached,
+			&upstreamReasoning,
+		)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			upstreamComponents = matrixPriceComponents(
+				upstreamInput,
+				upstreamOutput,
+				upstreamCached,
+				upstreamReasoning,
+				nil,
+			)
+			upstreamComponents, err = loadOfficialPriceComponents(ctx, s.db, officialPriceID)
+			if err != nil {
+				return nil, err
+			}
+			upstreamComponents = matrixPriceComponents(
+				upstreamInput,
+				upstreamOutput,
+				upstreamCached,
+				upstreamReasoning,
+				upstreamComponents,
+			)
+		}
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT route.group_id, route.group_code, route.group_name,
+		       route.group_priority, route.multiplier, route.billing_type,
+		       route.channel_id, route.channel_name, route.route_count,
+		       route.upstream_cost_discount
+		FROM (
+			SELECT DISTINCT ON (rg.id)
+			       rg.id::text AS group_id,
+			       rg.code AS group_code,
+			       rg.name AS group_name,
+			       rg.priority AS group_priority,
+			       rg.multiplier::text AS multiplier,
+			       rg.billing_type,
+			       c.id::text AS channel_id,
+			       c.name AS channel_name,
+			       COUNT(*) OVER (PARTITION BY rg.id)::int AS route_count,
+			       c.upstream_cost_discount::text AS upstream_cost_discount
+			FROM routing_groups rg
+			JOIN routing_group_channels rgc ON rgc.group_id = rg.id
+			JOIN channels c ON c.id = rgc.channel_id
+			JOIN channel_models cm
+			  ON cm.channel_id = c.id
+			 AND cm.model_id = $1::uuid
+			 AND cm.enabled = true
+			 AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now())
+			WHERE rg.status = 'active'
+			  AND rg.deleted_at IS NULL
+			  AND c.status = 'active'
+			  AND c.deleted_at IS NULL
+			  AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
+			ORDER BY rg.id, c.priority DESC, c.updated_at ASC, c.id ASC
+		) route
+		ORDER BY route.group_priority DESC, route.group_code ASC
+	`, modelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	estimates := make([]PriceMatrixCostEstimate, 0)
+	for rows.Next() {
+		var estimate PriceMatrixCostEstimate
+		if err := rows.Scan(
+			&estimate.GroupID,
+			&estimate.GroupCode,
+			&estimate.GroupName,
+			&estimate.GroupPriority,
+			&estimate.Multiplier,
+			&estimate.BillingType,
+			&estimate.ChannelID,
+			&estimate.ChannelName,
+			&estimate.RouteCount,
+			&estimate.UpstreamCostDiscount,
+		); err != nil {
+			return nil, err
+		}
+		estimate.Multiplier = normalizeDecimalText(estimate.Multiplier)
+		estimate.UpstreamCostDiscount = normalizeDecimalText(estimate.UpstreamCostDiscount)
+		estimate.Components = matrixComponentEstimates(
+			customerComponents,
+			upstreamComponents,
+			estimate.Multiplier,
+			estimate.BillingType,
+			estimate.UpstreamCostDiscount,
+		)
+		estimates = append(estimates, estimate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return estimates, nil
+}
+
+func matrixPriceComponents(input, output, cached, reasoning string, components []PriceComponent) []PriceComponent {
+	result := append([]PriceComponent(nil), components...)
+	existing := make(map[string]struct{}, len(result))
+	for _, component := range result {
+		code := strings.TrimSpace(component.ComponentCode)
+		if code != "" {
+			existing[code] = struct{}{}
+		}
+	}
+	for _, item := range []struct {
+		code  string
+		value string
+	}{
+		{code: "input_tokens", value: input},
+		{code: "output_tokens", value: output},
+		{code: "cached_input_tokens", value: cached},
+		{code: "reasoning_tokens", value: reasoning},
+	} {
+		if strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		if _, exists := existing[item.code]; exists {
+			continue
+		}
+		result = append(result, PriceComponent{
+			ComponentCode: item.code,
+			Unit:          "token",
+			PricePerUnit:  item.value,
+		})
+		existing[item.code] = struct{}{}
+	}
+	return result
+}
+
+func matrixComponentEstimates(
+	customerComponents []PriceComponent,
+	upstreamComponents []PriceComponent,
+	multiplier string,
+	billingType string,
+	discount string,
+) []PriceMatrixComponentEstimate {
+	customerByCode := make(map[string]PriceComponent, len(customerComponents))
+	upstreamByCode := make(map[string]PriceComponent, len(upstreamComponents))
+	order := make([]string, 0, len(customerComponents)+len(upstreamComponents))
+	seen := make(map[string]struct{}, len(customerComponents)+len(upstreamComponents))
+	for _, component := range customerComponents {
+		code := strings.TrimSpace(component.ComponentCode)
+		if code == "" {
+			continue
+		}
+		customerByCode[code] = component
+		if _, exists := seen[code]; !exists {
+			order = append(order, code)
+			seen[code] = struct{}{}
+		}
+	}
+	for _, component := range upstreamComponents {
+		code := strings.TrimSpace(component.ComponentCode)
+		if code == "" {
+			continue
+		}
+		upstreamByCode[code] = component
+		if _, exists := seen[code]; !exists {
+			order = append(order, code)
+			seen[code] = struct{}{}
+		}
+	}
+
+	result := make([]PriceMatrixComponentEstimate, 0, len(order))
+	for _, code := range order {
+		customer, hasCustomer := customerByCode[code]
+		upstream, hasUpstream := upstreamByCode[code]
+		unit := customer.Unit
+		if strings.TrimSpace(unit) == "" {
+			unit = upstream.Unit
+		}
+		item := PriceMatrixComponentEstimate{
+			ComponentCode: code,
+			Unit:          unit,
+		}
+		if hasCustomer {
+			customerFactor := multiplier
+			if strings.EqualFold(strings.TrimSpace(billingType), "free") {
+				customerFactor = "0"
+			}
+			item.CustomerPricePerUnit = multiplyMatrixDecimal(customer.PricePerUnit, customerFactor)
+		} else if strings.EqualFold(strings.TrimSpace(billingType), "free") {
+			item.CustomerPricePerUnit = "0"
+		}
+		if hasUpstream {
+			item.EstimatedCostPerUnit = multiplyMatrixDecimal(upstream.PricePerUnit, discount)
+		}
+		if item.CustomerPricePerUnit != "" && item.EstimatedCostPerUnit != "" {
+			item.ProfitPerUnit = subtractMatrixDecimal(item.CustomerPricePerUnit, item.EstimatedCostPerUnit)
+			item.ProfitMarginPercent = matrixProfitMargin(item.CustomerPricePerUnit, item.ProfitPerUnit)
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func multiplyMatrixDecimal(left, right string) string {
+	leftValue, leftOK := new(big.Rat).SetString(strings.TrimSpace(left))
+	rightValue, rightOK := new(big.Rat).SetString(strings.TrimSpace(right))
+	if !leftOK || !rightOK {
+		return ""
+	}
+	return ratDecimal(new(big.Rat).Mul(leftValue, rightValue))
+}
+
+func subtractMatrixDecimal(left, right string) string {
+	leftValue, leftOK := new(big.Rat).SetString(strings.TrimSpace(left))
+	rightValue, rightOK := new(big.Rat).SetString(strings.TrimSpace(right))
+	if !leftOK || !rightOK {
+		return ""
+	}
+	return ratDecimal(new(big.Rat).Sub(leftValue, rightValue))
+}
+
+func matrixProfitMargin(customerPrice, profit string) string {
+	customerValue, customerOK := new(big.Rat).SetString(strings.TrimSpace(customerPrice))
+	profitValue, profitOK := new(big.Rat).SetString(strings.TrimSpace(profit))
+	if !customerOK || !profitOK || customerValue.Sign() == 0 {
+		return ""
+	}
+	return ratDecimal(new(big.Rat).Mul(
+		new(big.Rat).Quo(profitValue, customerValue),
+		big.NewRat(100, 1),
+	))
 }
 
 func (s *SQLService) PublishPrice(
