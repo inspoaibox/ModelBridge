@@ -243,7 +243,7 @@ created_by
 created_at
 ```
 
-价格发布后不可原地修改。修正价格应创建新版本，并将实际使用的 `price_version_id` 和价格快照写入计费记录。
+价格发布后不可原地修改。修正价格应创建新版本。运行时优先使用 Token、项目、租户和平台手动价格；没有手动价格时使用已同步的 `official_model_price_versions` 官方参考价格。付费请求只会在 `price_version_id` 和 `official_price_version_id` 中记录一个价格版本，并将实际组件与分组倍率写入价格快照。
 
 ### `price_components` / `official_price_components`
 
@@ -261,6 +261,8 @@ project_id
 token_id
 model_id
 channel_id
+price_version_id          手动价格版本；与 official_price_version_id 二选一
+official_price_version_id LiteLLM 官方价格版本；与 price_version_id 二选一
 status                  started | settlement_pending | failed | settled
 provider_request_id
 input_tokens            上游报告的输入 token 总数

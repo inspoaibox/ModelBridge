@@ -56,6 +56,15 @@ function categoryIcon(category: ModelCategory) {
   }
 }
 
+function hasGroupPrice(model: PublicModelSummary, groupID: string) {
+  const normalizedGroupID = groupID.trim();
+  return Boolean(normalizedGroupID) && (model.pricing?.platform_prices || []).some((price) => price.group_id.trim() === normalizedGroupID);
+}
+
+function matchesModelSearch(model: PublicModelSummary, query: string) {
+  return !query || `${model.name} ${model.display_name} ${model.provider} ${model.protocol_family}`.toLowerCase().includes(query);
+}
+
 export function ModelPlazaView({ language, models, busy, message, refresh }: ModelPlazaViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [search, setSearch] = useState("");
@@ -63,22 +72,38 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
   const [category, setCategory] = useState<ModelCategory>("all");
   const [groupID, setGroupID] = useState("");
 
-  const providers = useMemo(() => Array.from(new Set(models.map((model) => model.provider))).sort(), [models]);
+  const providers = useMemo(() => Array.from(new Set(models.map((model) => model.provider.trim()).filter(Boolean))).sort(), [models]);
   const platformGroups = useMemo(() => {
     const unique = new Map<string, PublicPlatformModelPrice>();
     for (const model of models) {
       for (const group of model.pricing?.platform_prices || []) {
-        if (!unique.has(group.group_id)) unique.set(group.group_id, group);
+        const groupID = group.group_id.trim();
+        const groupName = group.group_name.trim();
+        if (!groupID || !groupName || unique.has(groupID)) continue;
+        unique.set(groupID, { ...group, group_id: groupID, group_name: groupName });
       }
     }
     return Array.from(unique.values());
   }, [models]);
 
-  useEffect(() => {
-    if (groupID && !platformGroups.some((group) => group.group_id === groupID)) {
-      setGroupID("");
+  const query = search.trim().toLowerCase();
+  const modelsForGroupFilter = useMemo(() => models.filter((model) => {
+    const matchesProvider = provider === "all" || model.provider.trim() === provider;
+    const matchesCategory = category === "all" || model.category === category;
+    return matchesProvider && matchesCategory && matchesModelSearch(model, query);
+  }), [category, models, provider, query]);
+
+  const availableGroupIDs = useMemo(() => {
+    const available = new Set<string>();
+    for (const group of platformGroups) {
+      if (modelsForGroupFilter.some((model) => hasGroupPrice(model, group.group_id))) available.add(group.group_id);
     }
-  }, [groupID, platformGroups]);
+    return available;
+  }, [modelsForGroupFilter, platformGroups]);
+
+  useEffect(() => {
+    if (groupID && !availableGroupIDs.has(groupID)) setGroupID("");
+  }, [availableGroupIDs, groupID]);
 
   const categoryCounts = useMemo(() => ({
     all: models.length,
@@ -90,12 +115,11 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
   }), [models]);
 
   const filteredModels = useMemo(() => {
-    const query = search.trim().toLowerCase();
     return models.filter((model) => {
-      const matchesProvider = provider === "all" || model.provider === provider;
+      const matchesProvider = provider === "all" || model.provider.trim() === provider;
       const matchesCategory = category === "all" || model.category === category;
-      const matchesSearch = !query || `${model.name} ${model.display_name} ${model.provider} ${model.protocol_family}`.toLowerCase().includes(query);
-      const matchesGroup = !groupID || (model.pricing?.platform_prices || []).some((price) => price.group_id === groupID);
+      const matchesSearch = matchesModelSearch(model, query);
+      const matchesGroup = !groupID || hasGroupPrice(model, groupID);
       return matchesProvider && matchesCategory && matchesSearch && matchesGroup;
     });
   }, [category, groupID, models, provider, search]);
@@ -161,7 +185,8 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
                 <button type="button" aria-pressed={!groupID} onClick={() => setGroupID("")} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", !groupID ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10")}>{t("modelsGroupAll")}</button>
                 {platformGroups.map((group) => {
                   const active = groupID === group.group_id;
-                  return <button key={group.group_id} type="button" aria-pressed={active} onClick={() => setGroupID(group.group_id)} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", active ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10")}>{group.group_name} <span className={cn("ml-1 font-mono text-[10px]", active ? "text-indigo-100" : "text-slate-400 dark:text-slate-500")}>x{formatMultiplier(group.multiplier)}</span></button>;
+                  const available = availableGroupIDs.has(group.group_id);
+                  return <button key={group.group_id} type="button" aria-pressed={active} disabled={!available} title={!available ? t("modelsNoMatch") : undefined} onClick={() => setGroupID(group.group_id)} className={cn("rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors", active ? "border-indigo-500 bg-indigo-600 text-white shadow-sm" : available ? "border-slate-200 bg-white/70 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-indigo-500/60 dark:hover:bg-indigo-500/10" : "cursor-not-allowed border-slate-200/70 bg-slate-100/60 text-slate-400 opacity-60 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-600")}>{group.group_name} <span className={cn("ml-1 font-mono text-[10px]", active ? "text-indigo-100" : "text-slate-400 dark:text-slate-500")}>x{formatMultiplier(group.multiplier)}</span></button>;
                 })}
               </div>
             </div> : null}
@@ -233,7 +258,7 @@ function findPlatformPrice(model: PublicModelSummary, groupID: string) {
   const prices = model.pricing?.platform_prices || [];
   if (prices.length === 0) return undefined;
   if (!groupID) return prices.find((price) => price.group_code === "default") || prices[0];
-  return prices.find((price) => price.group_id === groupID);
+  return prices.find((price) => price.group_id.trim() === groupID.trim());
 }
 
 type PriceComponents = NonNullable<PublicModelSummary["pricing"]>["components"];

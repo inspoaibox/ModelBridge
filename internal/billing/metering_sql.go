@@ -269,7 +269,19 @@ func requestMetricsFor(request Request) MeteredUsage {
 }
 
 func priceSnapshot(price Price) map[string]any {
-	return map[string]any{"id": price.ID, "model_id": price.ModelID, "currency": price.Currency, "minimum_charge": price.MinimumCharge, "components": priceComponentsFor(price)}
+	return map[string]any{
+		"id":                          price.ID,
+		"price_version_id":            price.PriceVersionID,
+		"source":                      price.Source,
+		"model_id":                    price.ModelID,
+		"currency":                    price.Currency,
+		"input_price_per_unit":        price.InputPricePerUnit,
+		"output_price_per_unit":       price.OutputPricePerUnit,
+		"cached_input_price_per_unit": price.CachedInputPricePerUnit,
+		"reasoning_price_per_unit":    price.ReasoningPricePerUnit,
+		"minimum_charge":              price.MinimumCharge,
+		"components":                  priceComponentsFor(price),
+	}
 }
 
 func marshalJSON(value any, fallback []byte) []byte {

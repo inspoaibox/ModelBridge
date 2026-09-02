@@ -38,3 +38,37 @@ func TestPricePerMillionTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestOfficialPriceSnapshotCanBeSettledWithoutManualPriceVersion(t *testing.T) {
+	original := Price{
+		ID:                 "official-price-version",
+		Source:             "litellm",
+		ModelID:            "model-id",
+		Currency:           "USD",
+		InputPricePerUnit:  "0.000005",
+		OutputPricePerUnit: "0.000025",
+		MinimumCharge:      "0",
+		Components: []PriceComponent{
+			{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.000005"},
+			{ComponentCode: "output_tokens", Unit: "token", PricePerUnit: "0.000025"},
+		},
+	}
+
+	raw := marshalJSON(priceSnapshot(original), nil)
+	decoded, err := priceFromSnapshot(raw, "USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Source != "litellm" || decoded.PriceVersionID != "" || decoded.ID != original.ID {
+		t.Fatalf("unexpected official price snapshot: %#v", decoded)
+	}
+	charge, err := calculateMeteredCharge(priceComponentsFor(decoded), MeteredUsage{
+		"input_tokens": "1000000", "output_tokens": "1000000",
+	}, decoded.MinimumCharge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if charge.Amount != "30" {
+		t.Fatalf("unexpected charge from official price snapshot: %s", charge.Amount)
+	}
+}

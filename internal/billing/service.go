@@ -108,7 +108,12 @@ type FreeRequestRecorder interface {
 }
 
 type Price struct {
+	// ID identifies the source price record. PriceVersionID is only populated
+	// for internal manual prices because model_requests.price_version_id has a
+	// foreign key to price_versions, not official_model_price_versions.
 	ID                      string
+	PriceVersionID          string
+	Source                  string
 	ModelID                 string
 	Currency                string
 	InputPricePerUnit       string
@@ -117,6 +122,57 @@ type Price struct {
 	ReasoningPricePerUnit   string
 	MinimumCharge           string
 	Components              []PriceComponent
+}
+
+type priceSnapshotRecord struct {
+	ID                      string           `json:"id"`
+	PriceVersionID          string           `json:"price_version_id"`
+	Source                  string           `json:"source"`
+	ModelID                 string           `json:"model_id"`
+	Currency                string           `json:"currency"`
+	InputPricePerUnit       string           `json:"input_price_per_unit"`
+	OutputPricePerUnit      string           `json:"output_price_per_unit"`
+	CachedInputPricePerUnit string           `json:"cached_input_price_per_unit"`
+	ReasoningPricePerUnit   string           `json:"reasoning_price_per_unit"`
+	MinimumCharge           string           `json:"minimum_charge"`
+	Components              []PriceComponent `json:"components"`
+}
+
+func priceFromSnapshot(raw []byte, fallbackCurrency string) (Price, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return Price{}, ErrPriceNotConfigured
+	}
+	var snapshot priceSnapshotRecord
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return Price{}, ErrPriceNotConfigured
+	}
+	if strings.TrimSpace(snapshot.ID) == "" || (len(snapshot.Components) == 0 &&
+		strings.TrimSpace(snapshot.InputPricePerUnit) == "" &&
+		strings.TrimSpace(snapshot.OutputPricePerUnit) == "") {
+		return Price{}, ErrPriceNotConfigured
+	}
+	currency := strings.ToUpper(strings.TrimSpace(snapshot.Currency))
+	if currency == "" {
+		currency = strings.ToUpper(strings.TrimSpace(fallbackCurrency))
+	}
+	if currency == "" {
+		return Price{}, ErrPriceNotConfigured
+	}
+	return Price{
+		ID: snapshot.ID, PriceVersionID: strings.TrimSpace(snapshot.PriceVersionID),
+		Source: snapshot.Source, ModelID: snapshot.ModelID, Currency: currency,
+		InputPricePerUnit: snapshot.InputPricePerUnit, OutputPricePerUnit: snapshot.OutputPricePerUnit,
+		CachedInputPricePerUnit: snapshot.CachedInputPricePerUnit,
+		ReasoningPricePerUnit:   snapshot.ReasoningPricePerUnit,
+		MinimumCharge:           snapshot.MinimumCharge, Components: snapshot.Components,
+	}, nil
+}
+
+func officialPriceVersionID(price Price) string {
+	if strings.EqualFold(strings.TrimSpace(price.Source), "litellm") {
+		return strings.TrimSpace(price.ID)
+	}
+	return ""
 }
 
 type PriceVersionSummary struct {
@@ -1019,17 +1075,18 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO model_requests (
 			id, request_id, idempotency_key, tenant_id, project_id, token_id,
-			model_id, channel_id, price_version_id, group_id, group_multiplier,
+			model_id, channel_id, price_version_id, official_price_version_id, group_id, group_multiplier,
 			status, estimated_amount, currency, endpoint, client_ip,
 			request_type, reasoning_effort, price_snapshot_json, usage_metrics_json
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid,
-			$9, NULLIF($10, '')::uuid, $11::numeric, 'started', $12, $13,
-			$14, $15, $16, $17, $18::jsonb, $19::jsonb
+			NULLIF($9, '')::uuid, NULLIF($10, '')::uuid, NULLIF($11, '')::uuid,
+			$12::numeric, 'started', $13, $14, $15, $16, $17, $18,
+			$19::jsonb, $20::jsonb
 		)
 	`, modelRequestID, request.RequestID, request.IdempotencyKey,
 		request.TenantID, request.ProjectID, request.TokenID, modelID,
-		request.ChannelID, price.ID, request.GroupID, request.GroupMultiplier,
+		request.ChannelID, price.PriceVersionID, officialPriceVersionID(price), request.GroupID, request.GroupMultiplier,
 		reservedAmount, currency, request.Endpoint, request.ClientIP,
 		request.RequestType, request.ReasoningEffort, priceSnapshotJSON, estimatedMetricsJSON)
 	if err != nil {
@@ -1376,25 +1433,28 @@ func (s *SQLService) Settle(
 	}()
 
 	var (
-		modelRequestID  string
-		accountID       string
-		reservedAmount  string
-		currency        string
-		status          string
-		priceID         string
-		groupMultiplier string
+		modelRequestID   string
+		accountID        string
+		reservedAmount   string
+		currency         string
+		status           string
+		priceID          sql.NullString
+		officialPriceID  sql.NullString
+		groupMultiplier  string
+		priceSnapshotRaw []byte
 	)
 	err = tx.QueryRowContext(ctx, `
 		SELECT br.request_id::text, br.account_id::text, br.reserved_amount::text,
 		       br.currency, br.status, mr.price_version_id::text,
-		       mr.group_multiplier::text
+		       mr.official_price_version_id::text,
+		       mr.group_multiplier::text, mr.price_snapshot_json
 		FROM billing_reservations br
 		JOIN model_requests mr ON mr.id = br.request_id
 		WHERE br.id = $1
 		FOR UPDATE
 	`, reservationID).Scan(
 		&modelRequestID, &accountID, &reservedAmount, &currency, &status, &priceID,
-		&groupMultiplier,
+		&officialPriceID, &groupMultiplier, &priceSnapshotRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrReservationNotFound
@@ -1411,30 +1471,64 @@ func (s *SQLService) Settle(
 
 	var inputPrice, outputPrice, minimumCharge string
 	var cachedInputPrice, reasoningPrice string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT input_price_per_unit::text, output_price_per_unit::text,
-		       cached_input_price_per_unit::text,
-		       reasoning_price_per_unit::text,
-		       minimum_charge::text
-		FROM price_versions
-		WHERE id = $1
-	`, priceID).Scan(
-		&inputPrice,
-		&outputPrice,
-		&cachedInputPrice,
-		&reasoningPrice,
-		&minimumCharge,
-	); err != nil {
-		return ErrPriceNotConfigured
-	}
-	price := Price{
-		ID: priceID, Currency: currency, InputPricePerUnit: inputPrice,
-		OutputPricePerUnit: outputPrice, CachedInputPricePerUnit: cachedInputPrice,
-		ReasoningPricePerUnit: reasoningPrice, MinimumCharge: minimumCharge,
-	}
-	price.Components, err = loadPriceComponents(ctx, tx, priceID)
-	if err != nil {
-		return err
+	var price Price
+	if priceID.Valid && strings.TrimSpace(priceID.String) != "" {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT input_price_per_unit::text, output_price_per_unit::text,
+			       cached_input_price_per_unit::text,
+			       reasoning_price_per_unit::text,
+			       minimum_charge::text
+			FROM price_versions
+			WHERE id = $1
+		`, priceID.String).Scan(
+			&inputPrice,
+			&outputPrice,
+			&cachedInputPrice,
+			&reasoningPrice,
+			&minimumCharge,
+		); err != nil {
+			return ErrPriceNotConfigured
+		}
+		price = Price{
+			ID: priceID.String, PriceVersionID: priceID.String, Source: "manual", Currency: currency,
+			InputPricePerUnit: inputPrice, OutputPricePerUnit: outputPrice,
+			CachedInputPricePerUnit: cachedInputPrice, ReasoningPricePerUnit: reasoningPrice,
+			MinimumCharge: minimumCharge,
+		}
+		price.Components, err = loadPriceComponents(ctx, tx, priceID.String)
+		if err != nil {
+			return err
+		}
+	} else if officialPriceID.Valid && strings.TrimSpace(officialPriceID.String) != "" {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT currency, input_price_per_unit::text,
+			       output_price_per_unit::text,
+			       cached_input_price_per_unit::text,
+			       reasoning_price_per_unit::text,
+			       '0'::text
+			FROM official_model_price_versions
+			WHERE id = $1
+		`, officialPriceID.String).Scan(
+			&currency, &inputPrice, &outputPrice, &cachedInputPrice,
+			&reasoningPrice, &minimumCharge,
+		); err != nil {
+			return ErrPriceNotConfigured
+		}
+		price = Price{
+			ID: officialPriceID.String, Source: "litellm", Currency: currency,
+			InputPricePerUnit: inputPrice, OutputPricePerUnit: outputPrice,
+			CachedInputPricePerUnit: cachedInputPrice, ReasoningPricePerUnit: reasoningPrice,
+			MinimumCharge: minimumCharge,
+		}
+		price.Components, err = loadOfficialPriceComponents(ctx, tx, officialPriceID.String)
+		if err != nil {
+			return err
+		}
+	} else {
+		price, err = priceFromSnapshot(priceSnapshotRaw, currency)
+		if err != nil {
+			return err
+		}
 	}
 	usage.Metrics = addImplicitRequestMetric(priceComponentsFor(price), usage.Metrics, usage.PricingTier)
 	charge, err := calculateMeteredChargeForTier(priceComponentsFor(price), usage.Metrics, price.MinimumCharge, usage.PricingTier)
@@ -1686,10 +1780,11 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE model_requests
-		SET channel_id = $2, model_id = $3, price_version_id = $4,
-		    estimated_amount = $5::numeric, price_snapshot_json = $6::jsonb
+		SET channel_id = $2, model_id = $3, price_version_id = NULLIF($4, '')::uuid,
+		    official_price_version_id = NULLIF($5, '')::uuid,
+		    estimated_amount = $6::numeric, price_snapshot_json = $7::jsonb
 		WHERE id = $1 AND status = 'started'
-	`, modelRequestID, channelID, targetModelID, price.ID, newReserved, priceSnapshotJSON); err != nil {
+	`, modelRequestID, channelID, targetModelID, price.PriceVersionID, officialPriceVersionID(price), newReserved, priceSnapshotJSON); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2024,6 +2119,8 @@ func resolvePrice(
 			return Price{}, err
 		}
 		price.ModelID = modelID
+		price.PriceVersionID = price.ID
+		price.Source = "manual"
 		price.Currency = strings.ToUpper(strings.TrimSpace(price.Currency))
 		price.Components, err = loadPriceComponents(ctx, tx, price.ID)
 		if err != nil {
@@ -2034,7 +2131,47 @@ func resolvePrice(
 		}
 		return price, nil
 	}
-	return Price{}, ErrPriceNotConfigured
+
+	// The public model catalog intentionally falls back to the latest synced
+	// LiteLLM price when no manual platform price exists. Use the same source
+	// for runtime billing so a model shown as priced in the catalog cannot fail
+	// at reservation time with PRICE_NOT_CONFIGURED.
+	var price Price
+	err := tx.QueryRowContext(ctx, `
+		SELECT id::text, currency, input_price_per_unit::text,
+		       output_price_per_unit::text,
+		       cached_input_price_per_unit::text,
+		       reasoning_price_per_unit::text,
+		       '0'::text
+		FROM official_model_price_versions
+		WHERE model_id = $1
+		  AND source = 'litellm'
+		  AND effective_from <= $2
+		  AND (effective_to IS NULL OR effective_to > $2)
+		ORDER BY effective_from DESC
+		LIMIT 1
+	`, modelID, now).Scan(
+		&price.ID, &price.Currency, &price.InputPricePerUnit,
+		&price.OutputPricePerUnit, &price.CachedInputPricePerUnit,
+		&price.ReasoningPricePerUnit, &price.MinimumCharge,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Price{}, ErrPriceNotConfigured
+	}
+	if err != nil {
+		return Price{}, err
+	}
+	price.ModelID = modelID
+	price.Source = "litellm"
+	price.Currency = strings.ToUpper(strings.TrimSpace(price.Currency))
+	price.Components, err = loadOfficialPriceComponents(ctx, tx, price.ID)
+	if err != nil {
+		return Price{}, err
+	}
+	if price.Currency != currency {
+		return Price{}, ErrPriceNotConfigured
+	}
+	return price, nil
 }
 
 func calculateAmount(

@@ -208,7 +208,7 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		       mr.tenant_id::text, ten.name, mr.model_id::text, mod.provider, mod.model_name,
 		       mr.reasoning_effort, mr.endpoint, mr.client_ip, COALESCE(mr.group_id::text, ''),
 		       COALESCE(grp.code, ''), COALESCE(grp.name, ''), mr.request_type,
-		       COALESCE(grp.billing_type, CASE WHEN mr.price_version_id IS NULL THEN 'free' ELSE 'prepaid' END),
+		       COALESCE(grp.billing_type, CASE WHEN COALESCE(mr.price_version_id, mr.official_price_version_id) IS NULL THEN 'free' ELSE 'prepaid' END),
 		       mr.status, mr.input_tokens, mr.output_tokens, mr.cached_input_tokens,
 			   mr.reasoning_tokens, mr.settled_amount::text, mr.estimated_amount::text,
 			   mr.currency, mr.latency_ms, mr.started_at, mr.finished_at, mr.created_at,
