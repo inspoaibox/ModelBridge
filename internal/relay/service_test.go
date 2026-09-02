@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ai-token/internal/auth"
@@ -738,6 +740,120 @@ func TestServiceFailsOverAcrossPriorityTiers(t *testing.T) {
 	}
 }
 
+func TestServiceRetriesTransientStreamOpenWithoutDuplicateBilling(t *testing.T) {
+	provider := &streamRecordingProvider{
+		openErrors: []error{&UpstreamError{StatusCode: http.StatusServiceUnavailable, Err: ErrUpstream}},
+		events: []ChatCompletionStreamEvent{
+			{
+				ID: "stream-success", Model: "gpt-5", Delta: "ok",
+				HasUsage: true, Usage: ChatUsage{PromptTokens: 4, CompletionTokens: 2, TotalTokens: 6},
+			},
+		},
+	}
+	biller := &fakeBillingService{reservation: billing.Reservation{ID: "reservation-stream"}}
+	service, err := NewService(
+		&fakeChannelRouter{candidates: []Channel{{
+			ID: "channel-stream", Provider: ProviderOpenAI, CredentialRef: "env:STREAM",
+		}}},
+		EnvCredentialResolver{Lookup: func(string) string { return "sk-stream" }},
+		map[string]Provider{ProviderOpenAI: provider},
+		biller,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	err = service.StreamChatCompletions(context.Background(), &auth.Principal{
+		ID: "token-stream", TokenID: "token-stream", TenantID: "tenant-stream",
+		Audience: auth.AudienceRelay, AllowedModels: map[string]struct{}{"gpt-5": {}},
+	}, ChatCompletionRequest{
+		Model: "gpt-5", RequestID: "request-stream",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	}, func(event ChatCompletionStreamEvent) error {
+		output.WriteString(event.Delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.openCalls != 2 {
+		t.Fatalf("expected one transient stream retry, got %d opens", provider.openCalls)
+	}
+	if output.String() != "ok" {
+		t.Fatalf("unexpected streamed output: %q", output.String())
+	}
+	if len(biller.events) != 2 || biller.events[0] != "reserve" || biller.events[1] != "settle" {
+		t.Fatalf("stream retry must use one billing lifecycle: %#v", biller.events)
+	}
+	if biller.settledUsage.InputTokens != 4 || biller.settledUsage.OutputTokens != 2 {
+		t.Fatalf("stream usage was not settled once: %#v", biller.settledUsage)
+	}
+}
+
+func TestServiceStreamFailoverMovesToNextChannelForCredentialFailure(t *testing.T) {
+	provider := &streamCandidateProvider{
+		openErrors: map[string]error{
+			"channel-invalid": &UpstreamError{StatusCode: http.StatusUnauthorized, Err: ErrUpstream},
+		},
+		events: map[string][]ChatCompletionStreamEvent{
+			"channel-fallback": {{ID: "fallback-stream", Model: "gpt-5", Delta: "fallback"}},
+		},
+	}
+	service, err := NewService(
+		&fakeChannelRouter{candidates: []Channel{
+			{ID: "channel-invalid", Provider: ProviderOpenAI, CredentialRef: "env:INVALID", Priority: 100, Weight: 100},
+			{ID: "channel-fallback", Provider: ProviderOpenAI, CredentialRef: "env:FALLBACK", Priority: 10, Weight: 100},
+		}},
+		EnvCredentialResolver{Lookup: func(name string) string { return name }},
+		map[string]Provider{ProviderOpenAI: provider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	err = service.StreamChatCompletions(context.Background(), &auth.Principal{
+		Audience: auth.AudienceRelay, AllowedModels: map[string]struct{}{"gpt-5": {}},
+	}, ChatCompletionRequest{
+		Model: "gpt-5", Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	}, func(event ChatCompletionStreamEvent) error {
+		output.WriteString(event.Delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "fallback" {
+		t.Fatalf("unexpected fallback output: %q", output.String())
+	}
+	if len(provider.attempts) != 2 || provider.attempts[0] != "channel-invalid" || provider.attempts[1] != "channel-fallback" {
+		t.Fatalf("credential failure must fail over without retrying the same channel: %#v", provider.attempts)
+	}
+}
+
+func TestRetryableStreamErrorOnlyIncludesTransientFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "service unavailable", err: &UpstreamError{StatusCode: http.StatusServiceUnavailable, Err: ErrUpstream}, want: true},
+		{name: "too many requests", err: &UpstreamError{StatusCode: http.StatusTooManyRequests, Err: ErrUpstream}, want: true},
+		{name: "transport", err: &UpstreamError{Err: ErrUpstream}, want: true},
+		{name: "authentication", err: &UpstreamError{StatusCode: http.StatusUnauthorized, Err: ErrUpstream}, want: false},
+		{name: "not found", err: &UpstreamError{StatusCode: http.StatusNotFound, Err: ErrUpstream}, want: false},
+		{name: "invalid request", err: ErrInvalidRequest, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := retryableStreamError(test.err); got != test.want {
+				t.Fatalf("retryableStreamError() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestChannelWideFailureClassification(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1016,6 +1132,61 @@ type recordingProvider struct {
 	attempts      []string
 	models        []DiscoveredModel
 	modelAPIKey   string
+}
+
+type streamRecordingProvider struct {
+	openErrors []error
+	events     []ChatCompletionStreamEvent
+	openCalls  int
+}
+
+func (p *streamRecordingProvider) ChatCompletions(_ context.Context, _ UpstreamChatCompletionRequest) (ChatCompletionResponse, error) {
+	return ChatCompletionResponse{}, ErrUnsupportedFeature
+}
+
+func (p *streamRecordingProvider) NewChatCompletionStream(_ context.Context, _ UpstreamChatCompletionRequest) (ChatCompletionStream, error) {
+	p.openCalls++
+	if p.openCalls <= len(p.openErrors) && p.openErrors[p.openCalls-1] != nil {
+		return nil, p.openErrors[p.openCalls-1]
+	}
+	return &sliceChatCompletionStream{events: append([]ChatCompletionStreamEvent(nil), p.events...)}, nil
+}
+
+type sliceChatCompletionStream struct {
+	events []ChatCompletionStreamEvent
+	index  int
+}
+
+func (s *sliceChatCompletionStream) Recv() (ChatCompletionStreamEvent, error) {
+	if s.index >= len(s.events) {
+		return ChatCompletionStreamEvent{}, io.EOF
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *sliceChatCompletionStream) Close() error {
+	return nil
+}
+
+type streamCandidateProvider struct {
+	openErrors map[string]error
+	events     map[string][]ChatCompletionStreamEvent
+	attempts   []string
+}
+
+func (p *streamCandidateProvider) ChatCompletions(_ context.Context, _ UpstreamChatCompletionRequest) (ChatCompletionResponse, error) {
+	return ChatCompletionResponse{}, ErrUnsupportedFeature
+}
+
+func (p *streamCandidateProvider) NewChatCompletionStream(_ context.Context, request UpstreamChatCompletionRequest) (ChatCompletionStream, error) {
+	channelID := request.Channel.ID
+	p.attempts = append(p.attempts, channelID)
+	if err := p.openErrors[channelID]; err != nil {
+		return nil, err
+	}
+	return &sliceChatCompletionStream{events: append([]ChatCompletionStreamEvent(nil), p.events[channelID]...)}, nil
 }
 
 type fakeBillingService struct {

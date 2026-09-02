@@ -20,6 +20,76 @@ type EmbeddingCompletionService interface {
 	CreateEmbeddings(context.Context, *auth.Principal, EmbeddingRequest) (EmbeddingResponse, error)
 }
 
+const (
+	maxStreamAttemptsPerChannel = 2
+	streamRetryDelay            = 100 * time.Millisecond
+)
+
+type streamedChatAttempt struct {
+	usage             ChatUsage
+	gotUsage          bool
+	delivered         bool
+	output            string
+	providerRequestID string
+}
+
+func openAndReadChatStream(
+	ctx context.Context,
+	provider StreamingProvider,
+	upstream UpstreamChatCompletionRequest,
+	emit func(ChatCompletionStreamEvent) error,
+) (streamedChatAttempt, error) {
+	var result streamedChatAttempt
+	stream, err := provider.NewChatCompletionStream(ctx, upstream)
+	if err != nil {
+		return result, err
+	}
+	defer stream.Close()
+
+	var output strings.Builder
+	for {
+		event, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			result.output = output.String()
+			return result, nil
+		}
+		if recvErr != nil {
+			result.output = output.String()
+			return result, recvErr
+		}
+		if event.ID != "" {
+			result.providerRequestID = event.ID
+		}
+		if event.Delta != "" {
+			output.WriteString(event.Delta)
+		}
+		if event.HasUsage {
+			result.usage = mergeChatUsage(result.usage, event.Usage)
+			result.gotUsage = result.gotUsage || chatUsageHasValues(event.Usage)
+		}
+		// Mark before invoking the sink: an HTTP writer may have committed
+		// headers before returning an error, so failover would corrupt the
+		// stream even when this callback reports failure.
+		result.delivered = true
+		if emitErr := emit(event); emitErr != nil {
+			result.output = output.String()
+			return result, emitErr
+		}
+	}
+}
+
+func waitForStreamRetry(ctx context.Context, attempt int) error {
+	delay := streamRetryDelay * time.Duration(attempt+1)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // StreamChatCompletions keeps the same authorization, routing, rate limits,
 // failover and billing lifecycle as buffered completions. Failover is only
 // attempted before any bytes have been delivered to the caller.
@@ -118,112 +188,80 @@ func (s *Service) StreamChatCompletions(
 		if strings.TrimSpace(upstreamModel) == "" {
 			upstreamModel = request.Model
 		}
-		stream, streamErr := streamProvider.NewChatCompletionStream(ctx, UpstreamChatCompletionRequest{
-			Channel: channel, APIKey: apiKey, Request: request, UpstreamModel: upstreamModel,
-		})
-		if streamErr != nil {
-			lastErr = streamErr
-			s.recordChannelFailure(ctx, channel, streamErr)
-			if ctx.Err() != nil || !retryableUpstreamError(streamErr) {
-				s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_open_failed")
-				return streamErr
-			}
-			continue
-		}
-
-		var usage ChatUsage
-		gotUsage := false
-		delivered := false
-		var output strings.Builder
-		var providerRequestID string
-		streamErr = func() error {
-			defer stream.Close()
-			for {
-				event, recvErr := stream.Recv()
-				if errors.Is(recvErr, io.EOF) {
-					break
-				}
-				if recvErr != nil {
-					return recvErr
-				}
-				if event.ID != "" {
-					providerRequestID = event.ID
-				}
-				if event.Delta != "" {
-					output.WriteString(event.Delta)
-				}
-				if event.HasUsage {
-					usage = mergeChatUsage(usage, event.Usage)
-					gotUsage = gotUsage || chatUsageHasValues(event.Usage)
-				}
-				// Mark before invoking the sink: an HTTP writer may have committed
-				// headers before returning an error, so failover would corrupt the
-				// stream even when this callback reports failure.
-				delivered = true
-				if emitErr := emit(event); emitErr != nil {
-					return emitErr
-				}
-			}
-			return nil
-		}()
-		if streamErr != nil {
-			lastErr = streamErr
-			s.recordChannelFailure(ctx, channel, streamErr)
-			if delivered {
-				if billingEnabled {
-					if gotUsage {
-						if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_interrupted", chatBillingUsage(usage, "upstream"), providerRequestID); pendingErr != nil {
-							log.Printf("relay billing pending write failed after streamed response: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeRequestID, "upstream_stream_interrupted", pendingErr)
+		for streamAttempt := 0; streamAttempt < maxStreamAttemptsPerChannel; streamAttempt++ {
+			attempt, streamErr := openAndReadChatStream(ctx, streamProvider, UpstreamChatCompletionRequest{
+				Channel: channel, APIKey: apiKey, Request: request, UpstreamModel: upstreamModel,
+			}, emit)
+			if streamErr != nil {
+				lastErr = streamErr
+				s.recordChannelFailure(ctx, channel, streamErr)
+				if attempt.delivered {
+					if billingEnabled {
+						if attempt.gotUsage {
+							if pendingErr := s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_interrupted", chatBillingUsage(attempt.usage, "upstream"), attempt.providerRequestID); pendingErr != nil {
+								log.Printf("relay billing pending write failed after streamed response: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeRequestID, "upstream_stream_interrupted", pendingErr)
+							}
+						} else {
+							if pendingErr := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); pendingErr != nil {
+								log.Printf("relay billing pending write failed after streamed response: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeRequestID, "upstream_stream_usage_unavailable", pendingErr)
+							}
 						}
 					} else {
-						if pendingErr := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); pendingErr != nil {
-							log.Printf("relay billing pending write failed after streamed response: reservation=%s request=%s reason=%s err=%v", reservation.ID, freeRequestID, "upstream_stream_usage_unavailable", pendingErr)
+						s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_interrupted")
+					}
+					return streamErr
+				}
+				if ctx.Err() != nil {
+					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_open_failed")
+					return ctx.Err()
+				}
+				// A transient failure may be retried on the same channel. A
+				// credential, endpoint, or model-specific failure must instead
+				// move directly to the next candidate channel when failover is
+				// possible.
+				if !retryableUpstreamError(streamErr) {
+					log.Printf(
+						"stream upstream request rejected before response: channel=%s provider=%s model=%s attempt=%d status=%d err=%v",
+						channel.ID, canonicalProvider(channel.Provider), upstreamModel, streamAttempt+1, upstreamStatusCode(streamErr), streamErr,
+					)
+					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_open_failed")
+					return streamErr
+				}
+				if retryableStreamError(streamErr) && streamAttempt+1 < maxStreamAttemptsPerChannel {
+					log.Printf(
+						"stream upstream transient failure; retrying candidate: channel=%s provider=%s model=%s attempt=%d status=%d err=%v",
+						channel.ID, canonicalProvider(channel.Provider), upstreamModel, streamAttempt+1, upstreamStatusCode(streamErr), streamErr,
+					)
+					if retryErr := waitForStreamRetry(ctx, streamAttempt); retryErr != nil {
+						s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_open_failed")
+						return retryErr
+					}
+					continue
+				}
+				log.Printf(
+					"stream upstream candidate exhausted before response: channel=%s provider=%s model=%s attempt=%d status=%d err=%v",
+					channel.ID, canonicalProvider(channel.Provider), upstreamModel, streamAttempt+1, upstreamStatusCode(streamErr), streamErr,
+				)
+				break
+			}
+
+			usage := attempt.usage
+			gotUsage := attempt.gotUsage
+			output := attempt.output
+			providerRequestID := attempt.providerRequestID
+			source := "upstream"
+			if !gotUsage {
+				if billingEnabled {
+					if canSettle, policyErr := s.canSettleWithoutUsage(ctx, reservation); policyErr != nil {
+						return policyErr
+					} else if canSettle {
+						if err := s.completeRelayBilling(ctx, reservation, freeRequestID, ChatUsage{}, providerRequestID, channel.ID, source); err != nil {
+							return err
 						}
+						s.recordChannelSuccess(ctx, channel)
+						return nil
 					}
-				} else {
-					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_interrupted")
-				}
-			}
-			if delivered || ctx.Err() != nil || !retryableUpstreamError(streamErr) {
-				if !delivered {
-					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_failed")
-				}
-				return streamErr
-			}
-			continue
-		}
-		source := "upstream"
-		if !gotUsage {
-			if billingEnabled {
-				if canSettle, policyErr := s.canSettleWithoutUsage(ctx, reservation); policyErr != nil {
-					return policyErr
-				} else if canSettle {
-					if err := s.completeRelayBilling(ctx, reservation, freeRequestID, ChatUsage{}, providerRequestID, channel.ID, source); err != nil {
-						return err
-					}
-					s.recordChannelSuccess(ctx, channel)
-					return nil
-				}
-				if err := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); err != nil {
-					return err
-				}
-				return nil
-			}
-			if !canEstimateChatUsage(request) {
-				if billingEnabled {
-					s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
-				} else {
-					s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
-				}
-				return ErrUsageUnavailable
-			}
-			source = "local_estimate"
-			usage = ChatUsage{PromptTokens: estimateInputTokens(request), CompletionTokens: int64(len([]rune(output.String()))), TotalTokens: estimateInputTokens(request) + int64(len([]rune(output.String())))}
-		} else {
-			inputTokens, _, outputTokens, _ := usage.billingBreakdown()
-			if inputTokens <= 0 || (outputTokens <= 0 && output.Len() > 0) {
-				if billingEnabled {
-					if err := s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_usage_incomplete", chatBillingUsage(usage, "upstream"), providerRequestID); err != nil {
+					if err := s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable"); err != nil {
 						return err
 					}
 					return nil
@@ -236,26 +274,46 @@ func (s *Service) StreamChatCompletions(
 					}
 					return ErrUsageUnavailable
 				}
-				if inputTokens <= 0 {
-					usage.PromptTokens = estimateInputTokens(request)
-				}
-				if outputTokens <= 0 && output.Len() > 0 {
-					usage.CompletionTokens = int64(len([]rune(output.String())))
-				}
 				source = "local_estimate"
+				usage = ChatUsage{PromptTokens: estimateInputTokens(request), CompletionTokens: int64(len([]rune(output))), TotalTokens: estimateInputTokens(request) + int64(len([]rune(output)))}
+			} else {
+				inputTokens, _, outputTokens, _ := usage.billingBreakdown()
+				if inputTokens <= 0 || (outputTokens <= 0 && len(output) > 0) {
+					if billingEnabled {
+						if err := s.markRelayBillingPendingWithUsage(ctx, reservation, freeRequestID, "upstream_stream_usage_incomplete", chatBillingUsage(usage, "upstream"), providerRequestID); err != nil {
+							return err
+						}
+						return nil
+					}
+					if !canEstimateChatUsage(request) {
+						if billingEnabled {
+							s.markRelayBillingPending(ctx, reservation, freeRequestID, "upstream_stream_usage_unavailable")
+						} else {
+							s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_usage_unavailable")
+						}
+						return ErrUsageUnavailable
+					}
+					if inputTokens <= 0 {
+						usage.PromptTokens = estimateInputTokens(request)
+					}
+					if outputTokens <= 0 && len(output) > 0 {
+						usage.CompletionTokens = int64(len([]rune(output)))
+					}
+					source = "local_estimate"
+				}
 			}
+			if providerRequestID == "" {
+				providerRequestID = newCompletionID("chatcmpl_")
+			}
+			if strings.TrimSpace(usage.PricingTier) == "" {
+				usage.PricingTier = request.ServiceTier
+			}
+			if err := s.completeRelayBilling(ctx, reservation, freeRequestID, usage, providerRequestID, channel.ID, source); err != nil {
+				return err
+			}
+			s.recordChannelSuccess(ctx, channel)
+			return nil
 		}
-		if providerRequestID == "" {
-			providerRequestID = newCompletionID("chatcmpl_")
-		}
-		if strings.TrimSpace(usage.PricingTier) == "" {
-			usage.PricingTier = request.ServiceTier
-		}
-		if err := s.completeRelayBilling(ctx, reservation, freeRequestID, usage, providerRequestID, channel.ID, source); err != nil {
-			return err
-		}
-		s.recordChannelSuccess(ctx, channel)
-		return nil
 	}
 	if lastErr == nil {
 		lastErr = ErrStreamingUnsupported

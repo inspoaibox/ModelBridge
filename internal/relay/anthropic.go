@@ -117,6 +117,20 @@ func anthropicRequestBody(upstream UpstreamChatCompletionRequest, stream bool) (
 	if strings.TrimSpace(upstream.Request.ServiceTier) != "" {
 		payload["service_tier"] = strings.TrimSpace(upstream.Request.ServiceTier)
 	}
+	if rawJSONPresent(upstream.Request.Metadata) {
+		var metadata map[string]any
+		if err := json.Unmarshal(upstream.Request.Metadata, &metadata); err != nil {
+			return nil, ErrInvalidRequest
+		}
+		payload["metadata"] = metadata
+	}
+	if rawJSONPresent(upstream.Request.Thinking) {
+		var thinking map[string]any
+		if err := json.Unmarshal(upstream.Request.Thinking, &thinking); err != nil {
+			return nil, ErrInvalidRequest
+		}
+		payload["thinking"] = thinking
+	}
 	if rawJSONPresent(upstream.Request.Tools) {
 		tools, err := anthropicTools(upstream.Request.Tools)
 		if err != nil {

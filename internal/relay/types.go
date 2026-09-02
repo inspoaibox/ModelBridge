@@ -1076,6 +1076,29 @@ func retryableUpstreamError(err error) bool {
 	return errors.Is(err, ErrUpstream) || errors.Is(err, ErrCredentialUnavailable) || errors.Is(err, ErrProviderUnsupported)
 }
 
+func retryableStreamError(err error) bool {
+	if err == nil || errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrUnsupportedFeature) ||
+		errors.Is(err, ErrStreamingUnsupported) || errors.Is(err, ErrModelNotAllowed) ||
+		errors.Is(err, ErrModelNotFound) {
+		return false
+	}
+	var upstreamErr *UpstreamError
+	if errors.As(err, &upstreamErr) {
+		if upstreamErr.StatusCode == 0 {
+			return errors.Is(upstreamErr, ErrUpstream)
+		}
+		switch upstreamErr.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+			return true
+		default:
+			return upstreamErr.StatusCode >= http.StatusInternalServerError && upstreamErr.StatusCode <= 599
+		}
+	}
+	// Provider adapters use an empty-status UpstreamError for transport
+	// failures, which are safe to retry before any bytes reach the client.
+	return errors.Is(err, ErrUpstream)
+}
+
 func upstreamStatusCode(err error) int {
 	var upstreamErr *UpstreamError
 	if errors.As(err, &upstreamErr) {
@@ -1115,6 +1138,7 @@ type ChatCompletionRequest struct {
 	Modalities          []string        `json:"modalities,omitempty"`
 	Audio               json.RawMessage `json:"audio,omitempty"`
 	Metadata            json.RawMessage `json:"metadata,omitempty"`
+	Thinking            json.RawMessage `json:"-"`
 	Temperature         *float64        `json:"temperature,omitempty"`
 	TopP                *float64        `json:"top_p,omitempty"`
 	MaxTokens           *int64          `json:"max_tokens,omitempty"`

@@ -695,6 +695,90 @@ func TestRelayInvokesConfiguredService(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesAcceptsClaudeContentBlockRequests(t *testing.T) {
+	service := &fakeRelayService{}
+	handler := NewWithRelay(auth.NewMiddleware(testResolver{
+		"relay-ok": {
+			ID:       "token-1",
+			Type:     auth.PrincipalAPIToken,
+			Audience: auth.AudienceRelay,
+			Scopes:   map[string]struct{}{"model:use": {}},
+			TenantID: "tenant-1",
+		},
+	}), nil, service, false, "../../web")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-sonnet-5",
+		"system":[{"type":"text","text":"Be concise.","cache_control":{"type":"ephemeral"}}],
+		"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],
+		"max_tokens":256,
+		"stop_sequences":["END"],
+		"metadata":{"user_id":"user-1"},
+		"thinking":{"type":"enabled","budget_tokens":128}
+	}`))
+	req.Header.Set("Authorization", "Bearer relay-ok")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Claude-style Anthropic request should be accepted, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(service.request.Messages) != 2 || service.request.Messages[0].Role != "system" || service.request.Messages[1].Role != "user" {
+		t.Fatalf("unexpected normalized Anthropic messages: %#v", service.request.Messages)
+	}
+	if len(service.request.Messages[0].ContentParts) == 0 || len(service.request.Messages[1].ContentParts) == 0 {
+		t.Fatalf("Anthropic content block arrays must be preserved: %#v", service.request.Messages)
+	}
+	if len(service.request.Stop) != 1 || service.request.Stop[0] != "END" {
+		t.Fatalf("stop_sequences were not preserved: %#v", service.request.Stop)
+	}
+	if string(service.request.Metadata) != `{"user_id":"user-1"}` || string(service.request.Thinking) != `{"type":"enabled","budget_tokens":128}` {
+		t.Fatalf("Anthropic metadata/thinking were not preserved: metadata=%s thinking=%s", service.request.Metadata, service.request.Thinking)
+	}
+}
+
+func TestAnthropicMessagesStreamingAcceptsClaudeAppPayload(t *testing.T) {
+	service := &fakeStreamingRelayService{}
+	handler := NewWithRelay(auth.NewMiddleware(testResolver{
+		"relay-ok": {
+			ID:       "token-1",
+			Type:     auth.PrincipalAPIToken,
+			Audience: auth.AudienceRelay,
+			Scopes:   map[string]struct{}{"model:use": {}},
+			TenantID: "tenant-1",
+		},
+	}), nil, service, false, "../../web")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-sonnet-5",
+		"system":[{"type":"text","text":"Be concise."}],
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"hello"}]},
+			{"role":"assistant","content":[{"type":"text","text":"Sure."}]},
+			{"role":"user","content":[{"type":"text","text":"continue"}]}
+		],
+		"max_tokens":256,
+		"stream":true
+	}`))
+	req.Header.Set("Authorization", "Bearer relay-ok")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Claude App streaming request should be accepted, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: message_start") || !strings.Contains(body, "event: content_block_delta") || !strings.Contains(body, "event: message_stop") {
+		t.Fatalf("unexpected Anthropic SSE response: %s", body)
+	}
+	if strings.Count(body, "event: message_delta") != 1 {
+		t.Fatalf("Anthropic SSE response must contain one message_delta, got %d: %s", strings.Count(body, "event: message_delta"), body)
+	}
+	if service.request.Model != "claude-sonnet-5" || len(service.request.Messages) != 4 {
+		t.Fatalf("stream service received unexpected normalized request: %#v", service.request)
+	}
+}
+
 func TestRelayEnforcesTokenNetworkAllowlistBeforeUpstream(t *testing.T) {
 	service := &fakeRelayService{}
 	handler := NewWithRelay(auth.NewMiddleware(testResolver{
@@ -1988,6 +2072,7 @@ func (s *fakeSystemSettingsService) DeleteAPIEndpoint(_ context.Context, _ strin
 type fakeRelayService struct {
 	principalID      string
 	model            string
+	request          relay.ChatCompletionRequest
 	channels         []relay.ChannelSummary
 	createdBy        string
 	created          relay.ChannelMutation
@@ -2003,6 +2088,29 @@ type fakeRelayService struct {
 	discovered       relay.ModelDiscoveryRequest
 }
 
+type fakeStreamingRelayService struct {
+	fakeRelayService
+}
+
+func (s *fakeStreamingRelayService) StreamChatCompletions(
+	_ context.Context,
+	_ *auth.Principal,
+	request relay.ChatCompletionRequest,
+	emit func(relay.ChatCompletionStreamEvent) error,
+) error {
+	s.request = request
+	if err := emit(relay.ChatCompletionStreamEvent{
+		ID: "msg-stream", Model: request.Model, Delta: "hello",
+	}); err != nil {
+		return err
+	}
+	return emit(relay.ChatCompletionStreamEvent{
+		FinishReason: "end_turn",
+		HasUsage:     true,
+		Usage:        relay.ChatUsage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
+	})
+}
+
 func (s *fakeRelayService) ChatCompletions(
 	_ context.Context,
 	principal *auth.Principal,
@@ -2010,6 +2118,7 @@ func (s *fakeRelayService) ChatCompletions(
 ) (relay.ChatCompletionResponse, error) {
 	s.principalID = principal.ID
 	s.model = request.Model
+	s.request = request
 	return relay.ChatCompletionResponse{
 		ID:      "chatcmpl-test",
 		Object:  "chat.completion",

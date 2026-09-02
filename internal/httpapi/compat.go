@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -267,21 +268,63 @@ func responseOutput(response relay.ChatCompletionResponse) []map[string]any {
 }
 
 type anthropicMessagesPayload struct {
-	Model       string                    `json:"model"`
-	System      string                    `json:"system,omitempty"`
-	Messages    []anthropicMessagePayload `json:"messages"`
-	MaxTokens   *int64                    `json:"max_tokens,omitempty"`
-	Temperature *float64                  `json:"temperature,omitempty"`
-	TopP        *float64                  `json:"top_p,omitempty"`
-	Tools       json.RawMessage           `json:"tools,omitempty"`
-	ToolChoice  json.RawMessage           `json:"tool_choice,omitempty"`
-	ServiceTier string                    `json:"service_tier,omitempty"`
-	Stream      bool                      `json:"stream,omitempty"`
+	Model         string                    `json:"model"`
+	System        json.RawMessage           `json:"system,omitempty"`
+	Messages      []anthropicMessagePayload `json:"messages"`
+	MaxTokens     *int64                    `json:"max_tokens,omitempty"`
+	Temperature   *float64                  `json:"temperature,omitempty"`
+	TopP          *float64                  `json:"top_p,omitempty"`
+	StopSequences relay.StopSequences       `json:"stop_sequences,omitempty"`
+	Tools         json.RawMessage           `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage           `json:"tool_choice,omitempty"`
+	Metadata      json.RawMessage           `json:"metadata,omitempty"`
+	Thinking      json.RawMessage           `json:"thinking,omitempty"`
+	ServiceTier   string                    `json:"service_tier,omitempty"`
+	Stream        bool                      `json:"stream,omitempty"`
 }
 
 type anthropicMessagePayload struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+}
+
+func rawAnthropicJSONPresent(raw json.RawMessage) bool {
+	value := strings.TrimSpace(string(raw))
+	return value != "" && value != "null"
+}
+
+func anthropicContentMessage(role string, raw json.RawMessage) (relay.ChatMessage, error) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return relay.ChatMessage{}, errors.New("anthropic content is required")
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if strings.TrimSpace(text) == "" {
+			return relay.ChatMessage{}, errors.New("anthropic text content is empty")
+		}
+		return relay.ChatMessage{Role: role, Content: text}, nil
+	}
+
+	var blocks []map[string]any
+	if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) == 0 {
+		return relay.ChatMessage{}, errors.New("anthropic content blocks are invalid")
+	}
+	for _, block := range blocks {
+		if block == nil {
+			return relay.ChatMessage{}, errors.New("anthropic content block is invalid")
+		}
+		blockType, _ := block["type"].(string)
+		if strings.TrimSpace(blockType) == "" {
+			return relay.ChatMessage{}, errors.New("anthropic content block type is required")
+		}
+	}
+	encoded, err := json.Marshal(blocks)
+	if err != nil {
+		return relay.ChatMessage{}, err
+	}
+	return relay.ChatMessage{Role: role, ContentParts: encoded}, nil
 }
 
 func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Handler {
@@ -296,37 +339,34 @@ func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Han
 			return
 		}
 		messages := make([]relay.ChatMessage, 0, len(payload.Messages)+1)
-		if strings.TrimSpace(payload.System) != "" {
-			messages = append(messages, relay.ChatMessage{Role: "system", Content: payload.System})
-		}
-		for _, item := range payload.Messages {
-			var content string
-			if err := json.Unmarshal(item.Content, &content); err == nil {
-				if strings.TrimSpace(content) == "" {
-					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request_error"})
-					return
-				}
-				messages = append(messages, relay.ChatMessage{Role: item.Role, Content: content})
-				continue
-			}
-			var parts []any
-			if err := json.Unmarshal(item.Content, &parts); err != nil || len(parts) == 0 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request_error"})
-				return
-			}
-			encoded, err := json.Marshal(parts)
+		if rawAnthropicJSONPresent(payload.System) {
+			system, err := anthropicContentMessage("system", payload.System)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request_error"})
 				return
 			}
-			messages = append(messages, relay.ChatMessage{Role: item.Role, ContentParts: encoded})
+			messages = append(messages, system)
+		}
+		for _, item := range payload.Messages {
+			message, err := anthropicContentMessage(item.Role, item.Content)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request_error"})
+				return
+			}
+			messages = append(messages, message)
 		}
 		metadata := relay.RequestMetadataFromContext(r.Context())
 		idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 		if idempotencyKey == "" {
 			idempotencyKey = metadata.RequestID
 		}
-		request := relay.ChatCompletionRequest{Model: payload.Model, Messages: messages, MaxCompletionTokens: payload.MaxTokens, Temperature: payload.Temperature, TopP: payload.TopP, Tools: payload.Tools, ToolChoice: payload.ToolChoice, ServiceTier: payload.ServiceTier, Stream: payload.Stream, RequestID: metadata.RequestID, IdempotencyKey: idempotencyKey}
+		request := relay.ChatCompletionRequest{
+			Model: payload.Model, Messages: messages, MaxCompletionTokens: payload.MaxTokens,
+			Temperature: payload.Temperature, TopP: payload.TopP, Stop: payload.StopSequences,
+			Tools: payload.Tools, ToolChoice: payload.ToolChoice, Metadata: payload.Metadata,
+			Thinking: payload.Thinking, ServiceTier: payload.ServiceTier, Stream: payload.Stream,
+			RequestID: metadata.RequestID, IdempotencyKey: idempotencyKey,
+		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication_error"})
@@ -347,12 +387,22 @@ func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Han
 			toolBlockStarted := false
 			messageID := ""
 			model := payload.Model
+			var finalUsage relay.ChatUsage
+			hasFinalUsage := false
+			finishReason := ""
 			emit := func(event relay.ChatCompletionStreamEvent) error {
 				if event.ID != "" {
 					messageID = event.ID
 				}
 				if event.Model != "" {
 					model = event.Model
+				}
+				if event.HasUsage {
+					finalUsage = event.Usage
+					hasFinalUsage = true
+				}
+				if event.FinishReason != "" {
+					finishReason = event.FinishReason
 				}
 				if messageID == "" {
 					messageID = "msg_" + fmt.Sprint(time.Now().UnixNano())
@@ -394,9 +444,6 @@ func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Han
 						}
 					}
 				}
-				if (event.HasUsage && event.Usage.CompletionTokens > 0) || event.FinishReason != "" {
-					return writeSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": event.FinishReason, "stop_sequence": nil}, "usage": anthropicWireUsage(event.Usage)})
-				}
 				return nil
 			}
 			if err := streamer.StreamChatCompletions(relayRequestContext(r, "stream"), principal, request, emit); err != nil {
@@ -414,7 +461,14 @@ func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Han
 			if toolBlockStarted {
 				_ = writeSSE(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 1})
 			}
-			_ = writeSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": anthropicWireUsage(relay.ChatUsage{})})
+			if finishReason == "" {
+				finishReason = "end_turn"
+			}
+			usage := relay.ChatUsage{}
+			if hasFinalUsage {
+				usage = finalUsage
+			}
+			_ = writeSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": finishReason, "stop_sequence": nil}, "usage": anthropicWireUsage(usage)})
 			_ = writeSSE(w, "message_stop", map[string]any{"type": "message_stop"})
 			return
 		}
