@@ -2,13 +2,36 @@
 
 ## 基本配置
 
-将官方 OpenAI SDK 的 `base_url` 指向：
+管理员在“系统设置 -> 基础设置 -> API 对接终端”中配置客户可用的网关根地址。可以填写根地址或带 `/v1` 的地址，保存后系统统一按根地址保存，并自动派生两种客户端地址。客户可以在“控制台 -> API 令牌”页面直接复制：
+
+```text
+OpenAI 兼容地址：<gateway-root>/v1
+Anthropic / Claude 地址：<gateway-root>
+```
+
+公开设置接口只返回已启用的终端名称和地址，不返回内部 ID 或上游密钥：
+
+```text
+GET /public/v1/settings
+```
+
+将官方 OpenAI SDK 的 `base_url` 指向终端的 OpenAI 兼容地址：
 
 ```text
 https://<gateway-domain>/v1
 ```
 
 使用租户控制台创建的 API Token。Token 必须已经绑定一个可用分组，并且当前模型已经被该分组中的渠道映射；否则请求会被拒绝。
+
+对外网关会兼容以下路径形式，客户不需要手动处理 SDK 的路径拼接差异：
+
+```text
+/v1/chat/completions        标准 OpenAI 兼容形式
+/chat/completions           根地址客户端形式
+/v1/v1/chat/completions     客户端重复拼接 /v1 的容错形式
+```
+
+同样的兼容规则适用于模型、Responses、Embeddings、图片、音频、视频以及 Anthropic Messages 接口。服务端只为已定义的公开接口注册别名，所有别名仍经过同一个 API Token、模型权限、网络白名单、限流、渠道调度和计费流程。
 
 ## 控制台模型状态
 
@@ -80,6 +103,20 @@ curl https://<gateway-domain>/v1/chat/completions \
   }'
 ```
 
+如果使用 Anthropic SDK，请填写根地址并使用 Anthropic 的请求头：
+
+```bash
+curl https://<gateway-domain>/v1/messages \
+  -H "x-api-key: <api-token>" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "<configured-model>",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "你好"}]
+  }'
+```
+
 流式请求：
 
 ```json
@@ -132,6 +169,83 @@ GET  /v1/videos/{videoID}/content video bytes
 ```
 
 图片生成至少需要 `model` 和 `prompt`，`n` 默认为 1；图片编辑和音频接口的上传字段分别为 `image`、可选 `mask`，以及 `file`。视频创建至少需要 `model` 和 `prompt`，`seconds` 等厂商字段会转发到对应官方协议。OpenAI/Grok 使用 OpenAI 兼容媒体路径，Gemini 使用原生模型 API。
+
+## 字节跳动/火山方舟 Seedance
+
+管理员在“渠道管理 -> 新增渠道”选择“字节跳动/火山方舟官方协议 (Seedance)”，填写 Ark API Key，并将渠道模型映射到官方模型 ID：
+
+```text
+doubao-seedance-2-0-260128
+doubao-seedance-2-5-260628
+```
+
+Base URL 可以填写以下任一形式，系统只在发送请求时补全，不会重复拼接：
+
+```text
+https://ark.cn-beijing.volces.com
+https://ark.cn-beijing.volces.com/api/v3
+```
+
+该 Provider 调用火山方舟官方 Content Generation API：
+
+```text
+POST /api/v3/contents/generations/tasks
+GET  /api/v3/contents/generations/tasks/{task_id}
+GET  /api/v3/models
+```
+
+平台下游仍使用统一的 OpenAI 兼容视频接口。`prompt` 会转换为 Ark 的文本 `content`；`seconds` 会转换为官方 `duration`。平台只向客户返回平台视频任务 ID，不暴露 Ark 任务 ID。Ark 专用字段会先按实际上游模型版本校验，再转发；不支持的字段返回明确的参数错误，不会静默交给上游失败。
+
+### Seedance 2.0 与 2.5 的差异
+
+两款模型不能共用一套“无限制”的参数规则：
+
+| 能力/限制 | Seedance 2.0 系列 | Seedance 2.5 |
+| --- | --- | --- |
+| 最大视频时长 | 4–15 秒，或 `-1` 自动选择 | 4–30 秒，或 `-1` 自动选择 |
+| 分辨率 | 480p、720p、1080p、4K | 480p、720p、1080p |
+| 参考图片 | 最多 9 张 | 最多 30 张 |
+| 参考视频 | 最多 3 个 | 最多 10 个 |
+| 参考音频 | 最多 3 个，不能只传音频 | 最多 10 个，可只传音频 |
+| `output_format` | 不支持显式设置，使用默认 MP4 | 支持 `mp4` 和 `mov` |
+| `tools` | 支持 `web_search` | 支持 `web_search` |
+| `generate_audio` | 支持有声/无声视频 | 支持有声/无声视频 |
+| `omni_reference_task_type` | 不支持 | 支持 `auto`、`reference`、`edit`、`extend` |
+| `frames`、`seed`、`camera_fixed`、`draft` | 不支持 | 不支持 |
+
+参考素材的 `role` 必须与类型匹配：视频使用 `reference_video`，音频使用 `reference_audio`；图片可以使用 `reference_image`、`first_frame` 或 `last_frame`。首帧/首尾帧任务与 omni reference-to-video 任务不能混用；没有显式 `role` 的单张图片按首帧图片处理。
+
+2.0 的 `duration=-1` 表示在 4–15 秒范围内自动选择时长，编辑请求也可以使用该值。2.5 的 `duration=-1` 表示自动选择时长；视频编辑只允许 `-1`，视频扩展可以使用 `-1` 或指定 4–30 秒。2.5 的编辑、扩展以及首帧/首尾帧任务必须使用 `ratio=adaptive`；编辑和扩展必须至少提供一个 `role=reference_video` 的参考视频。如果不显式指定 `omni_reference_task_type`，平台会保留 `auto` 语义，让 Ark 根据输入素材和提示词判断任务类型。
+
+两款模型都会把 `execution_expires_after` 限制在 3600–259200 秒，`priority` 限制在 0–9；`service_tier=flex` 不适用于 2.0/2.5。平台会在转发前检查这些约束。参考素材的具体格式、大小和内容安全限制仍以 Ark 当前官方文档及账号权限为准。
+
+Seedance 是视频异步 Provider，不提供聊天、Embedding、图片或音频能力。渠道模型仍必须加入分组并绑定到客户 API Token，才能被下游调用。示例：
+
+```bash
+curl https://gateway.example.com/v1/videos \
+  -H "Authorization: Bearer <customer-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2.5",
+    "prompt": "A cinematic sunrise over a quiet ocean",
+    "seconds": 5
+  }'
+```
+
+创建返回平台任务后，使用返回的 `id` 轮询：
+
+```bash
+curl https://gateway.example.com/v1/videos/<platform-video-id> \
+  -H "Authorization: Bearer <customer-token>"
+
+curl https://gateway.example.com/v1/videos/<platform-video-id>/content \
+  -H "Authorization: Bearer <customer-token>" \
+  --output seedance.mp4
+```
+
+自动获取模型会尝试 Ark 官方 `/models` 接口；如果上游账号或区域没有开放该资源，管理员应在弹窗中手动新增以上模型映射，系统不会把手动填写伪装成自动发现。
+
+Seedance 完成任务后的官方 `usage.completion_tokens` 被记录为 `output_video_tokens`，并优先用于最终结算。2.0 系列存在官方最低 Token 用量规则，平台保留 Ark 返回的实际值，不按本地视频秒数重新推导。创建请求中的视频时长只用于预占估算；如果查询结果没有可核验的官方用量，付费任务会进入 `settlement_pending`，不会按 0 元或仅按时长错误结算。官方结果视频 URL 可能有有效期，客户应在任务完成后及时下载；2.5 的结果下载还受官方下载次数限制，平台当前不承诺无限次重复拉取同一个签名 URL。
 
 视频任务完成后才结算最终用量。上游返回 Usage 优先使用上游 Usage；无法获得 Usage 时仅使用能够从请求或文件中验证的计量数据，不会把未知用量写成 0。
 

@@ -450,8 +450,12 @@ published_at
 - 余额缓存可以重建，不能成为唯一事实来源。
 - 数据库账号按服务拆分，Relay 不拥有用户和价格表写权限。
 - 跨租户查询在测试中默认失败。
-- 最新迁移版本为 `036_model_status_feature.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
+- 最新迁移版本为 `040_api_endpoint_protocols.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
 
 ### `email_templates` 与邮件功能设置
 
 `platform_settings` 保存邮件总开关、模型状态开关、事件开关、SMTP 主机/端口/TLS、发件人信息、余额提醒阈值和充值地址；SMTP 密码只保存应用加密后的密文。`email_templates` 按 `event_code + language` 保存可启用的主题和 HTML 内容，035 迁移预置邮箱验证、密码重置、订阅、余额、限额、内容审计和运维等中英文模板，036 迁移初始化模型状态开关。
+
+### `api_endpoints`
+
+`api_endpoints.base_url` 保存管理员配置的网关根地址，不保存 `/v1` 协议前缀。后台和公开设置接口根据该根地址派生 `openai_base_url`（根地址加 `/v1`）与 `anthropic_base_url`（根地址本身）。039 迁移创建终端表，040 迁移在无歧义时把历史 `/v1` 地址归一化为根地址；发生地址冲突时保留原记录，不自动删除数据。

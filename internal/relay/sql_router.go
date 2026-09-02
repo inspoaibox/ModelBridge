@@ -650,7 +650,7 @@ func (r *SQLChannelRouter) replaceChannelModels(
 		return err
 	}
 	for _, model := range models {
-		capabilities := modelCapabilities(provider, model.Model)
+		capabilities := modelCapabilities(provider, firstNonEmpty(model.UpstreamModel, model.Model))
 		modelID, err := ids.New()
 		if err != nil {
 			return err
@@ -686,10 +686,48 @@ func (r *SQLChannelRouter) replaceChannelModels(
 
 func modelCapabilities(provider, model string) string {
 	name := strings.ToLower(strings.TrimSpace(model))
+	if canonicalProvider(provider) == ProviderVolcengine && strings.Contains(name, "seedance") {
+		spec, err := seedanceModelSpecFor(model)
+		if err == nil {
+			capabilities := map[string]any{
+				"modalities":                 []string{"video"},
+				"input_modalities":           []string{"text", "image", "video", "audio"},
+				"output_modalities":          []string{"video"},
+				"video_generation":           true,
+				"audio_input":                true,
+				"generate_audio":             true,
+				"web_search":                 true,
+				"official_sdk":               true,
+				"protocol":                   "ark_content_generation",
+				"seedance_version":           spec.version,
+				"default_duration_seconds":   spec.defaultDurationSeconds,
+				"max_duration_seconds":       spec.maxDurationSeconds,
+				"duration_supports_auto":     true,
+				"max_reference_images":       spec.maxReferenceImages,
+				"max_reference_videos":       spec.maxReferenceVideos,
+				"max_reference_audios":       spec.maxReferenceAudios,
+				"audio_only_reference":       spec.audioOnlyReference,
+				"reference_image_roles":      []string{"reference_image", "first_frame", "last_frame"},
+				"reference_video_role":       "reference_video",
+				"reference_audio_role":       "reference_audio",
+				"supports_output_format":     spec.supportsOutputFormat,
+				"supports_omni_task_type":    spec.supportsOmniTaskType,
+				"supports_return_last_frame": spec.supportsReturnLastFrame,
+				"supports_4k":                false,
+			}
+			if _, ok := spec.resolutions["4k"]; ok {
+				capabilities["supports_4k"] = true
+			}
+			data, marshalErr := json.Marshal(capabilities)
+			if marshalErr == nil {
+				return string(data)
+			}
+		}
+	}
 	if strings.Contains(name, "embedding") || strings.Contains(name, "embed") {
 		return `{"modalities":["text","embedding"],"embedding":true,"official_sdk":true}`
 	}
-	if strings.Contains(name, "video") || strings.Contains(name, "veo") || strings.Contains(name, "sora") || strings.Contains(name, "kling") {
+	if strings.Contains(name, "video") || strings.Contains(name, "veo") || strings.Contains(name, "sora") || strings.Contains(name, "kling") || strings.Contains(name, "seedance") {
 		return `{"modalities":["text","video"],"video_generation":true,"official_sdk":true}`
 	}
 	if strings.Contains(name, "image") || strings.Contains(name, "dall-e") || strings.Contains(name, "imagen") || strings.Contains(name, "flux") {
@@ -703,6 +741,8 @@ func modelCapabilities(provider, model string) string {
 		return `{"modalities":["text"],"openai_compatible":true,"official_sdk":false,"streaming":true,"tool_calling":true,"multimodal_input":true}`
 	case ProviderGemini:
 		return `{"modalities":["text"],"official_sdk":true,"streaming":true,"tool_calling":true,"multimodal_input":true}`
+	case ProviderVolcengine:
+		return `{"modalities":["text","video"],"video_generation":true,"official_sdk":true,"protocol":"ark_content_generation"}`
 	case ProviderAnthropic:
 		return `{"modalities":["text","image"],"official_sdk":true,"streaming":true,"tool_calling":true,"multimodal_input":true}`
 	default:
@@ -840,6 +880,8 @@ func protocolFamily(provider string) string {
 		return "xai_chat_completions"
 	case ProviderGemini:
 		return "gemini_generate_content"
+	case ProviderVolcengine:
+		return "volcengine_content_generation"
 	default:
 		return "unknown"
 	}

@@ -10,9 +10,9 @@
 - 管理员隐藏入口：生产环境通过 `ADMIN_ENTRY_PATH=/admin-随机后缀` 隔离管理员登录页，后台登录 API 还要求同路径签发的短时 HttpOnly 通行 Cookie
 - PBKDF2-SHA256 密码哈希，禁止明文密码落库
 - PostgreSQL 迁移和启动 wiring
-- OpenAI、Anthropic、Grok、Gemini 官方渠道的同步/流式文本对话转发
+- OpenAI、Anthropic、Grok、Gemini 官方渠道的同步/流式文本对话转发，以及火山方舟 Ark Seedance 官方视频任务接口
 - OpenAI Chat Completions、Responses、Models、Embeddings、Images、Audio、Videos 与 Anthropic Messages 兼容入口
-- OpenAI 的官方图片、音频、视频入口；Grok Imagine/Voice 的官方图片、视频、TTS、STT 入口；Gemini 的 Imagen、原生音频和 Veo 异步任务入口
+- OpenAI 的官方图片、音频、视频入口；Grok Imagine/Voice 的官方图片、视频、TTS、STT 入口；Gemini 的 Imagen、原生音频和 Veo 异步任务入口；字节跳动/火山方舟 Seedance 2.0/2.5 Content Generation 异步视频入口
 - 工具调用、结构化输出、图片内容块和渠道级协议转换
 - Token 级 RPM、TPM、并发限制；分组 RPM、优先级、权重与故障自动降级
 - 租户个人资料、邮箱/密码自助修改、SMTP 密码重置与会话失效保护
@@ -163,6 +163,8 @@ GET  /v1/videos/{videoID}/content
 
 除 `/healthz`、公开模型目录、公开系统设置和认证入口外，接口默认需要管理员 Session、租户 Session 或 Relay API Token。下游接口支持同步/流式文本、工具调用、结构化输出、图片内容块、Embeddings、图片生成/编辑、音频转写/翻译/语音生成和视频异步任务；`GET /v1/models` 会按 Token 的模型白名单过滤。视频任务返回平台任务 ID，调用方通过平台接口查询和下载结果。
 
+对外 API 终端由管理员在系统设置中配置为网关根地址。客户可使用 `<gateway-root>/v1` 对接 OpenAI 兼容客户端，或使用 `<gateway-root>` 对接 Anthropic / Claude 客户端。服务端同时兼容根路径、标准 `/v1` 和客户端误拼接的 `/v1/v1`，但推荐始终从控制台 API 令牌页面复制地址。
+
 管理员“系统设置”中的邮件设置、模板和功能开关独立于网站基础设置。邮件总开关默认关闭；关闭时注册、密码重置和通知流程不会强制依赖 SMTP，开启后再按事件开关和模板配置发送。
 
 租户控制台的“模型状态”页面通过 `GET /console/v1/tenants/{tenantID}/model-status` 按分组展示模型的可用路由数、自动熔断状态、连续失败次数以及最近成功/失败时间。活动分组可见，租户已有令牌绑定的停用分组也会显示；该接口只读取分组映射和渠道运行状态，不主动请求上游；前端进入页面后每 15 秒刷新一次。新建但尚未产生真实请求的路由显示为“待观测”，不能误认为已经完成上游探针验证。
@@ -208,7 +210,7 @@ migrations/
 - 生产在 Nginx 等反向代理后运行时，必须配置 `TRUSTED_PROXY_CIDRS`，仅信任这些代理追加的 `X-Forwarded-For`；这决定 Token IP 白名单和使用记录中的客户端 IP。
 - 生产应用进程必须监听回环地址（例如 `127.0.0.1:8080`），并按流式与媒体请求配置 `HTTP_READ_TIMEOUT`、`HTTP_WRITE_TIMEOUT`、`HTTP_IDLE_TIMEOUT`；默认写超时为 15 分钟。
 - 审计日志只追加不提供业务删除接口；IP 和 User-Agent 在审计中保存哈希，使用记录中的客户端 IP 用于管理员排障与账务追踪。
-- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `036_model_status_feature.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。
+- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `040_api_endpoint_protocols.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。
 
 ## 重要限制
 

@@ -353,6 +353,13 @@ func newHandler(
 	mux.Handle("PUT /admin/v1/settings", protectStepUp(adminsettings.StepUpOperationSystem, systemSettingsUpdateHandler(services.SecuritySettings), "security:update"))
 
 	mux.Handle("PUT /admin/v1/settings/site", protectStepUp(adminsettings.StepUpOperationSystem, siteSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("GET /admin/v1/settings/api-endpoints", authMiddleware.Protect(
+		auth.AudienceAdmin,
+		"security:read",
+	)(apiEndpointListHandler(services.SecuritySettings)))
+	mux.Handle("POST /admin/v1/settings/api-endpoints", protectStepUp(adminsettings.StepUpOperationSystem, apiEndpointCreateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("PUT /admin/v1/settings/api-endpoints/{endpointID}", protectStepUp(adminsettings.StepUpOperationSystem, apiEndpointUpdateHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("DELETE /admin/v1/settings/api-endpoints/{endpointID}", protectStepUp(adminsettings.StepUpOperationSystem, apiEndpointDeleteHandler(services.SecuritySettings), "security:update"))
 	mux.Handle("GET /admin/v1/settings/email", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
@@ -628,55 +635,60 @@ func newHandler(
 		),
 	))
 
-	mux.Handle("POST /v1/chat/completions", authMiddleware.ProtectScopes(
+	registerRelayRoute := func(method, canonicalPath string, handler http.Handler) {
+		for _, path := range relayPathAliases(canonicalPath) {
+			mux.Handle(method+" "+path, handler)
+		}
+	}
+	registerRelayRoute("POST", "/v1/chat/completions", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayChatCompletionsHandler(relayService)))
-	mux.Handle("POST /v1/embeddings", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/embeddings", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayEmbeddingsHandler(relayService)))
-	mux.Handle("GET /v1/models", authMiddleware.ProtectScopes(
+	registerRelayRoute("GET", "/v1/models", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayModelListHandler(modelCatalog)))
-	mux.Handle("POST /v1/responses", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/responses", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayResponsesHandler(relayService)))
-	mux.Handle("POST /v1/messages", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/messages", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayAnthropicMessagesHandler(relayService)))
-	mux.Handle("POST /v1/images/generations", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/images/generations", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayImageGenerationHandler(relayService)))
-	mux.Handle("POST /v1/images/edits", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/images/edits", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayImageEditHandler(relayService)))
-	mux.Handle("POST /v1/audio/transcriptions", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/audio/transcriptions", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayAudioHandler(relayService, false)))
-	mux.Handle("POST /v1/audio/translations", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/audio/translations", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayAudioHandler(relayService, true)))
-	mux.Handle("POST /v1/audio/speech", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/audio/speech", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relaySpeechHandler(relayService)))
-	mux.Handle("POST /v1/videos", authMiddleware.ProtectScopes(
+	registerRelayRoute("POST", "/v1/videos", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayVideoCreateHandler(relayService)))
-	mux.Handle("GET /v1/videos/{videoID}", authMiddleware.ProtectScopes(
+	registerRelayRoute("GET", "/v1/videos/{videoID}", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayVideoGetHandler(relayService)))
-	mux.Handle("GET /v1/videos/{videoID}/content", authMiddleware.ProtectScopes(
+	registerRelayRoute("GET", "/v1/videos/{videoID}/content", authMiddleware.ProtectScopes(
 		auth.AudienceRelay,
 		"model:use",
 	)(relayVideoContentHandler(relayService)))
@@ -702,7 +714,37 @@ func newHandler(
 }
 
 func isAPIPath(path string) bool {
-	return path == "/healthz" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/console/") || strings.HasPrefix(path, "/public/") || strings.HasPrefix(path, "/v1/")
+	if path == "/healthz" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/console/") || strings.HasPrefix(path, "/public/") || strings.HasPrefix(path, "/v1/") {
+		return true
+	}
+	for _, prefix := range []string{
+		"/chat/completions",
+		"/embeddings",
+		"/models",
+		"/responses",
+		"/messages",
+		"/images/",
+		"/audio/",
+		"/videos",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func relayPathAliases(canonicalPath string) []string {
+	const versionPrefix = "/v1/"
+	if !strings.HasPrefix(canonicalPath, versionPrefix) {
+		return []string{canonicalPath}
+	}
+	suffix := strings.TrimPrefix(canonicalPath, versionPrefix)
+	return []string{
+		canonicalPath,
+		"/" + suffix,
+		"/v1" + canonicalPath,
+	}
 }
 
 func frontendHandler(webDir string) http.Handler {
@@ -833,7 +875,7 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-API-Key, X-MFA-Code")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-API-Key, X-MFA-Code, anthropic-version, anthropic-beta, openai-beta, openai-organization, openai-project")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
@@ -1422,7 +1464,10 @@ func adminMFADisableHandler(service auth.MFAEnrollmentProvider, security auth.Se
 
 func publicSystemSettingsHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Branding and published API endpoints should reflect administrator changes immediately.
+		w.Header().Set("Cache-Control", "no-store")
 		settings := adminsettings.SystemSettings{SiteName: adminsettings.DefaultSiteName}
+		endpoints := make([]adminsettings.PublicAPIEndpoint, 0)
 		if provider, ok := service.(adminsettings.SystemSettingsProvider); ok && provider != nil {
 			loaded, err := provider.GetSystemSettings(r.Context())
 			if err != nil {
@@ -1431,10 +1476,22 @@ func publicSystemSettingsHandler(service auth.SecuritySettingsProvider) http.Han
 			}
 			settings = loaded
 		}
-		writeJSON(w, http.StatusOK, map[string]string{
+		if provider, ok := service.(adminsettings.APIEndpointProvider); ok && provider != nil {
+			loaded, err := provider.ListAPIEndpoints(r.Context(), true)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "SYSTEM_SETTINGS_UNAVAILABLE"})
+				return
+			}
+			endpoints = make([]adminsettings.PublicAPIEndpoint, 0, len(loaded))
+			for _, endpoint := range loaded {
+				endpoints = append(endpoints, adminsettings.PublicAPIEndpointFrom(endpoint))
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
 			"site_name":        settings.SiteName,
 			"site_logo_url":    settings.SiteLogoURL,
 			"site_favicon_url": settings.SiteFaviconURL,
+			"api_endpoints":    endpoints,
 		})
 	}
 }
@@ -1481,6 +1538,92 @@ type systemSettingsPayload struct {
 	SMTPPassword      string `json:"smtp_password"`
 	SMTPPasswordClear bool   `json:"smtp_password_clear"`
 	PublicBaseURL     string `json:"public_base_url"`
+}
+
+func apiEndpointListHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.APIEndpointProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API_ENDPOINTS_UNAVAILABLE"})
+			return
+		}
+		items, err := provider.ListAPIEndpoints(r.Context(), false)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API_ENDPOINTS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"api_endpoints": items})
+	})
+}
+
+func apiEndpointCreateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.APIEndpointProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API_ENDPOINTS_UNAVAILABLE"})
+			return
+		}
+		var payload adminsettings.APIEndpointMutation
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_API_ENDPOINT"})
+			return
+		}
+		item, err := provider.CreateAPIEndpoint(r.Context(), principalID(r), payload)
+		if err != nil {
+			writeAPIEndpointError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	})
+}
+
+func apiEndpointUpdateHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.APIEndpointProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API_ENDPOINTS_UNAVAILABLE"})
+			return
+		}
+		var payload adminsettings.APIEndpointMutation
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_API_ENDPOINT"})
+			return
+		}
+		item, err := provider.UpdateAPIEndpoint(r.Context(), principalID(r), r.PathValue("endpointID"), payload)
+		if err != nil {
+			writeAPIEndpointError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func apiEndpointDeleteHandler(service auth.SecuritySettingsProvider) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.APIEndpointProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API_ENDPOINTS_UNAVAILABLE"})
+			return
+		}
+		if err := provider.DeleteAPIEndpoint(r.Context(), principalID(r), r.PathValue("endpointID")); err != nil {
+			writeAPIEndpointError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})
+}
+
+func writeAPIEndpointError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, adminsettings.ErrInvalidAPIEndpoint):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_API_ENDPOINT"})
+	case errors.Is(err, adminsettings.ErrAPIEndpointExists):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "API_ENDPOINT_EXISTS"})
+	case errors.Is(err, adminsettings.ErrAPIEndpointNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "API_ENDPOINT_NOT_FOUND"})
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "API_ENDPOINTS_UNAVAILABLE"})
+	}
 }
 
 func systemSettingsReadHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {

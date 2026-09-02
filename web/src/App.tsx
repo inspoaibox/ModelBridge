@@ -16,8 +16,11 @@ import { NotFoundView } from "@/components/NotFoundView";
 import { ResetPasswordView } from "@/components/ResetPasswordView";
 import { EmailVerificationView } from "@/components/EmailVerificationView";
 import { StepUpDialog } from "@/components/StepUpDialog";
+import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 import {
   AdminSection,
+  APIEndpoint,
+  APIEndpointFormState,
   AuditReport,
   Audience,
   BillingAccount,
@@ -51,6 +54,7 @@ import {
   ModelMonitorFormState,
   ModelStatusReport,
   PublicFeatureSettings,
+  PublicAPIEndpoint,
   PlatformRole,
   PlatformPermission,
   PlatformRoleFormState,
@@ -150,11 +154,30 @@ function newFormRowID() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+function defaultChannelModels(provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine"): ChannelFormModel[] {
+  const models =
+    provider === "openai"
+      ? ["gpt-5"]
+      : provider === "anthropic"
+      ? ["claude-sonnet-5"]
+      : provider === "grok"
+      ? ["grok-4.6"]
+      : provider === "gemini"
+      ? ["gemini-3.7-flash"]
+      : ["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"];
+  return models.map((model) => ({
+    id: newFormRowID(),
+    model,
+    upstream_model: model,
+    enabled: true,
+  }));
+}
+
 function parseTokenList(value: string) {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
-function defaultProviderBaseURL(provider: "openai" | "anthropic" | "grok" | "gemini") {
+function defaultProviderBaseURL(provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine") {
   switch (provider) {
     case "anthropic":
       return "https://api.anthropic.com";
@@ -162,28 +185,44 @@ function defaultProviderBaseURL(provider: "openai" | "anthropic" | "grok" | "gem
       return "https://api.x.ai/v1";
     case "gemini":
       return "https://generativelanguage.googleapis.com";
+    case "volcengine":
+      return "https://ark.cn-beijing.volces.com/api/v3";
     default:
       return "https://api.openai.com/v1";
   }
 }
 
-function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini" = "openai"): ChannelFormState {
-  const model = provider === "openai" ? "gpt-5" : provider === "anthropic" ? "claude-sonnet-5" : provider === "grok" ? "grok-4.6" : "gemini-3.7-flash";
+function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine" = "openai"): ChannelFormState {
   return {
     id: "",
-    name: provider === "openai" ? "OpenAI Official" : provider === "anthropic" ? "Anthropic Official" : provider === "grok" ? "Grok Official" : "Gemini Official",
+    name:
+      provider === "openai"
+        ? "OpenAI Official"
+        : provider === "anthropic"
+        ? "Anthropic Official"
+        : provider === "grok"
+        ? "Grok Official"
+        : provider === "gemini"
+        ? "Gemini Official"
+        : "Volcano Ark Official",
     provider,
     base_url: defaultProviderBaseURL(provider),
     api_key: "",
     status: "active",
     priority: 100,
     weight: 100,
-    models: [{ id: newFormRowID(), model, upstream_model: model, enabled: true }],
+    models: defaultChannelModels(provider),
   };
 }
 
 function channelFormFromSummary(channel: ChannelSummary): ChannelFormState {
-  const provider = channel.provider === "anthropic" || channel.provider === "grok" || channel.provider === "gemini" ? channel.provider : "openai";
+  const provider =
+    channel.provider === "anthropic" ||
+    channel.provider === "grok" ||
+    channel.provider === "gemini" ||
+    channel.provider === "volcengine"
+      ? channel.provider
+      : "openai";
   return {
     id: channel.id,
     name: channel.name,
@@ -254,6 +293,10 @@ function defaultCreditForm(): CreditFormState {
 
 function defaultSiteSettings(): SiteSettings {
   return { site_name: "AI Token Gateway", site_logo_url: "", site_favicon_url: "" };
+}
+
+function defaultAPIEndpointForm(): APIEndpointFormState {
+  return { id: "", name: "", base_url: "", enabled: true };
 }
 
 function defaultSMTPSettings(): SMTPSettingsForm {
@@ -452,6 +495,17 @@ function resolveSystemSettingsError(
   return status === 503 ? t("systemSettingsUnavailable") : t("systemSettingsSaveFailed");
 }
 
+function resolveAPIEndpointError(
+  status: number,
+  error: string | undefined,
+  t: (key: TranslationKey) => string
+) {
+  if (error === "INVALID_API_ENDPOINT") return t("systemAPIEndpointValidation");
+  if (error === "API_ENDPOINT_EXISTS") return t("systemAPIEndpointExists");
+  if (error === "API_ENDPOINT_NOT_FOUND") return t("systemAPIEndpointUnavailable");
+  return status === 503 ? t("systemAPIEndpointUnavailable") : t("systemSettingsSaveFailed");
+}
+
 function resolveFeatureSettingsError(
   status: number,
   error: string | undefined,
@@ -581,6 +635,13 @@ export default function App() {
   const [adminMfaBusy, setAdminMfaBusy] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(() => defaultSiteSettings());
   const [adminSiteForm, setAdminSiteForm] = useState<SiteSettings>(() => defaultSiteSettings());
+  const [publicAPIEndpoints, setPublicAPIEndpoints] = useState<PublicAPIEndpoint[]>([]);
+  const [adminAPIEndpoints, setAdminAPIEndpoints] = useState<APIEndpoint[]>([]);
+  const [apiEndpointFormOpen, setAPIEndpointFormOpen] = useState(false);
+  const [apiEndpointForm, setAPIEndpointForm] = useState<APIEndpointFormState>(() => defaultAPIEndpointForm());
+  const [apiEndpointBusy, setAPIEndpointBusy] = useState(false);
+  const [apiEndpointActionBusy, setAPIEndpointActionBusy] = useState("");
+  const [apiEndpointMessage, setAPIEndpointMessage] = useState<LoginMessage>({ kind: "", text: "" });
 	  const [siteSettingsMessage, setSiteSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
 	  const [siteSettingsBusy, setSiteSettingsBusy] = useState(false);
 	  const [smtpForm, setSmtpForm] = useState<SMTPSettingsForm>(() => defaultSMTPSettings());
@@ -749,13 +810,14 @@ export default function App() {
     async function loadSiteSettings() {
       try {
         const response = await fetch("/public/v1/settings", { headers: { Accept: "application/json" } });
-        const result = (await response.json().catch(() => ({}))) as Partial<SiteSettings>;
+        const result = (await response.json().catch(() => ({}))) as Partial<SiteSettings> & { api_endpoints?: PublicAPIEndpoint[] };
         if (!cancelled && response.ok) {
           setSiteSettings({
             site_name: result.site_name?.trim() || "AI Token Gateway",
             site_logo_url: result.site_logo_url?.trim() || "",
             site_favicon_url: result.site_favicon_url?.trim() || "",
           });
+          setPublicAPIEndpoints(result.api_endpoints || []);
         }
       } catch {
         // Keep the bundled brand when the public settings endpoint is unavailable.
@@ -1385,23 +1447,26 @@ export default function App() {
     setAdminProfileBusy(true);
     if (showPending) setAdminProfileMessage({ kind: "pending", text: t("systemSettingsLoading") });
     try {
-	      const [profileResponse, mfaResponse, settingsResponse, emailResponse, featureResponse, templateResponse] = await Promise.all([
+	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse] = await Promise.all([
 	        fetch("/admin/v1/profile", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/auth/mfa/status", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/api-endpoints", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/email", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/features", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/email/templates", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	      ]);
       const profileResult = (await profileResponse.json().catch(() => ({}))) as ConsoleProfile & { error?: string };
-      const mfaResult = (await mfaResponse.json().catch(() => ({}))) as MFAStatus & { error?: string };
+	      const mfaResult = (await mfaResponse.json().catch(() => ({}))) as MFAStatus & { error?: string };
 	      const settingsResult = (await settingsResponse.json().catch(() => ({}))) as Partial<SystemSettings> & { error?: string };
+	      const endpointResult = (await endpointResponse.json().catch(() => ({}))) as { api_endpoints?: APIEndpoint[]; error?: string };
 	      const emailResult = (await emailResponse.json().catch(() => ({}))) as EmailSettings & { error?: string };
 	      const featureResult = (await featureResponse.json().catch(() => ({}))) as FeatureSettings & { error?: string };
 	      const templateResult = (await templateResponse.json().catch(() => ({}))) as { templates?: EmailTemplate[]; error?: string };
 	      if (!profileResponse.ok) throw new Error(resolveProfileError(profileResponse.status, profileResult.error, t));
 	      if (!mfaResponse.ok) throw new Error(resolveProfileError(mfaResponse.status, mfaResult.error, t));
 	      if (!settingsResponse.ok) throw new Error(resolveSystemSettingsError(settingsResponse.status, settingsResult.error, t));
+	      if (!endpointResponse.ok) throw new Error(resolveAPIEndpointError(endpointResponse.status, endpointResult.error, t));
 	      if (!emailResponse.ok || !featureResponse.ok || !templateResponse.ok) throw new Error(t("emailSettingsUnavailable"));
       setAdminProfile(profileResult);
       setAdminProfileForm({ display_name: profileResult.display_name || "" });
@@ -1415,11 +1480,12 @@ export default function App() {
         updated_at: settingsResult.updated_at || "",
         updated_by: settingsResult.updated_by || "",
       });
-      setAdminSiteForm({
-        site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
-        site_logo_url: settingsResult.site_logo_url?.trim() || "",
-        site_favicon_url: settingsResult.site_favicon_url?.trim() || "",
-      });
+	      setAdminSiteForm({
+	        site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
+	        site_logo_url: settingsResult.site_logo_url?.trim() || "",
+	        site_favicon_url: settingsResult.site_favicon_url?.trim() || "",
+	      });
+	      setAdminAPIEndpoints(endpointResult.api_endpoints || []);
 	      setEmailSettings(emailResult);
 	      setSmtpForm({
 	        smtp_host: emailResult.smtp_host || "",
@@ -1640,6 +1706,137 @@ export default function App() {
       setSiteSettingsMessage({ kind: "error", text: error instanceof Error ? error.message : t("systemSettingsSaveFailed") });
     } finally {
       setSiteSettingsBusy(false);
+    }
+  }
+
+  function openCreateAPIEndpoint() {
+    setAPIEndpointForm(defaultAPIEndpointForm());
+    setAPIEndpointFormOpen(true);
+    setAPIEndpointMessage({ kind: "", text: "" });
+  }
+
+  function openEditAPIEndpoint(endpoint: APIEndpoint) {
+    setAPIEndpointForm({
+      id: endpoint.id,
+      name: endpoint.name,
+      base_url: endpoint.base_url,
+      enabled: endpoint.enabled,
+    });
+    setAPIEndpointFormOpen(true);
+    setAPIEndpointMessage({ kind: "", text: "" });
+  }
+
+  function closeAPIEndpointForm() {
+    if (apiEndpointBusy) return;
+    setAPIEndpointFormOpen(false);
+    setAPIEndpointForm(defaultAPIEndpointForm());
+    setAPIEndpointMessage({ kind: "", text: "" });
+  }
+
+  function applyAPIEndpointUpdate(endpoint: APIEndpoint, previousBaseURL = "") {
+    const endpointURLs = resolveAPIEndpointURLs(endpoint);
+    const normalizedEndpoint: APIEndpoint = {
+      ...endpoint,
+      base_url: endpointURLs.root,
+      openai_base_url: endpointURLs.openai,
+      anthropic_base_url: endpointURLs.anthropic,
+    };
+    setAdminAPIEndpoints((current) => {
+      const next = normalizedEndpoint.id
+        ? [...current.filter((item) => item.id !== normalizedEndpoint.id), normalizedEndpoint]
+        : [...current, normalizedEndpoint];
+      return next.sort((left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name));
+    });
+    setPublicAPIEndpoints((current) => {
+      const next = current.filter((item) => item.base_url !== normalizedEndpoint.base_url && (!previousBaseURL || item.base_url !== previousBaseURL));
+      return normalizedEndpoint.enabled
+        ? [...next, {
+          name: normalizedEndpoint.name,
+          base_url: normalizedEndpoint.base_url,
+          openai_base_url: normalizedEndpoint.openai_base_url,
+          anthropic_base_url: normalizedEndpoint.anthropic_base_url,
+        }].sort((left, right) => left.name.localeCompare(right.name))
+        : next;
+    });
+  }
+
+  async function saveAPIEndpoint(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!apiEndpointForm.name.trim() || !apiEndpointForm.base_url.trim()) {
+      setAPIEndpointMessage({ kind: "error", text: t("systemAPIEndpointValidation") });
+      return;
+    }
+    setAPIEndpointBusy(true);
+    setAPIEndpointMessage({ kind: "pending", text: t("systemAPIEndpointSaving") });
+    try {
+      const response = await fetchAdminSensitive(
+        apiEndpointForm.id
+          ? `/admin/v1/settings/api-endpoints/${encodeURIComponent(apiEndpointForm.id)}`
+          : "/admin/v1/settings/api-endpoints",
+        {
+          method: apiEndpointForm.id ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            name: apiEndpointForm.name.trim(),
+            base_url: apiEndpointForm.base_url.trim(),
+            enabled: apiEndpointForm.enabled,
+          }),
+        }
+      );
+      const result = (await response.json().catch(() => ({}))) as APIEndpoint & { error?: string };
+      if (!response.ok) throw new Error(resolveAPIEndpointError(response.status, result.error, t));
+      applyAPIEndpointUpdate(result, apiEndpointForm.id ? adminAPIEndpoints.find((item) => item.id === apiEndpointForm.id)?.base_url : "");
+      setAPIEndpointFormOpen(false);
+      setAPIEndpointForm(defaultAPIEndpointForm());
+      setAPIEndpointMessage({ kind: "success", text: t("systemAPIEndpointSaved") });
+    } catch (error) {
+      setAPIEndpointMessage({ kind: "error", text: error instanceof Error ? error.message : t("systemAPIEndpointUnavailable") });
+    } finally {
+      setAPIEndpointBusy(false);
+    }
+  }
+
+  async function toggleAPIEndpoint(endpoint: APIEndpoint) {
+    setAPIEndpointActionBusy(endpoint.id);
+    setAPIEndpointMessage({ kind: "pending", text: t("systemAPIEndpointSaving") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/settings/api-endpoints/${encodeURIComponent(endpoint.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name: endpoint.name, base_url: endpoint.base_url, enabled: !endpoint.enabled }),
+      });
+      const result = (await response.json().catch(() => ({}))) as APIEndpoint & { error?: string };
+      if (!response.ok) throw new Error(resolveAPIEndpointError(response.status, result.error, t));
+      applyAPIEndpointUpdate(result);
+      setAPIEndpointMessage({ kind: "success", text: result.enabled ? t("systemAPIEndpointEnabled") : t("systemAPIEndpointDisabled") });
+    } catch (error) {
+      setAPIEndpointMessage({ kind: "error", text: error instanceof Error ? error.message : t("systemAPIEndpointUnavailable") });
+    } finally {
+      setAPIEndpointActionBusy("");
+    }
+  }
+
+  async function deleteAPIEndpoint(endpoint: APIEndpoint) {
+    if (!window.confirm(t("systemAPIEndpointDeleteConfirm"))) return;
+    setAPIEndpointActionBusy(endpoint.id);
+    setAPIEndpointMessage({ kind: "pending", text: t("systemAPIEndpointSaving") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/settings/api-endpoints/${encodeURIComponent(endpoint.id)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(resolveAPIEndpointError(response.status, result.error, t));
+      setAdminAPIEndpoints((current) => current.filter((item) => item.id !== endpoint.id));
+      setPublicAPIEndpoints((current) => current.filter((item) => item.base_url !== endpoint.base_url));
+      setAPIEndpointMessage({ kind: "success", text: t("systemAPIEndpointDeleted") });
+    } catch (error) {
+      setAPIEndpointMessage({ kind: "error", text: error instanceof Error ? error.message : t("systemAPIEndpointUnavailable") });
+    } finally {
+      setAPIEndpointActionBusy("");
     }
   }
 
@@ -3054,7 +3251,7 @@ export default function App() {
     }
   }
 
-  function openCreateChannel(provider: "openai" | "anthropic" | "grok" | "gemini" = "openai") {
+  function openCreateChannel(provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine" = "openai") {
     setChannelForm(defaultChannelForm(provider));
     setChannelFormOpen(true);
     setChannelDeleteConfirm("");
@@ -3079,12 +3276,16 @@ export default function App() {
     setModelDiscoveryMessage({ kind: "", text: "" });
   }
 
-  function setChannelProvider(provider: "openai" | "anthropic" | "grok" | "gemini") {
+  function setChannelProvider(provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine") {
     setDiscoveredModels([]);
     setModelDiscoveryMessage({ kind: "", text: "" });
     setChannelForm((current) => {
       const currentDefault = defaultProviderBaseURL(current.provider);
-      const nextModel = provider === "openai" ? "gpt-5" : provider === "anthropic" ? "claude-sonnet-5" : provider === "grok" ? "grok-4.6" : "gemini-3.7-flash";
+      const defaultModels = ["gpt-5", "claude-sonnet-5", "grok-4.6", "gemini-3.7-flash", "doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"];
+      const shouldReplaceDefaults =
+        current.models.length === 0 ||
+        current.models.every((model) => !model.model.trim()) ||
+        (!current.id && current.models.length === 1 && defaultModels.includes(current.models[0].model.trim()));
       return {
         ...current,
         provider,
@@ -3093,8 +3294,8 @@ export default function App() {
             ? defaultProviderBaseURL(provider)
             : current.base_url,
         models:
-          current.models.length === 0 || current.models.every((model) => !model.model.trim())
-            ? [{ id: newFormRowID(), model: nextModel, upstream_model: nextModel, enabled: true }]
+          shouldReplaceDefaults
+            ? defaultChannelModels(provider)
             : current.models,
       };
     });
@@ -3530,6 +3731,7 @@ export default function App() {
             handleSignOut={handleSignOut}
             models={modelCatalog}
             registrationEnabled={publicFeatures?.registration_enabled !== false}
+            apiEndpoints={publicAPIEndpoints}
           />
         ) : currentView === "models" ? (
           <ModelPlazaView
@@ -3619,6 +3821,7 @@ export default function App() {
             usageMessage={usageMessage}
             refreshUsage={refreshConsoleUsage}
 			 consoleUsageReport={consoleUsageReport}
+            apiEndpoints={publicAPIEndpoints}
             modelStatusEnabled={publicFeatures?.model_status_enabled !== false}
             modelStatusReport={modelStatusReport}
             modelStatusBusy={modelStatusBusy}
@@ -3742,6 +3945,19 @@ export default function App() {
             siteBusy={siteSettingsBusy}
             siteMessage={siteSettingsMessage}
             saveSiteSettings={saveSystemSettings}
+            apiEndpoints={adminAPIEndpoints}
+            apiEndpointFormOpen={apiEndpointFormOpen}
+            apiEndpointForm={apiEndpointForm}
+            setAPIEndpointForm={setAPIEndpointForm}
+            apiEndpointBusy={apiEndpointBusy}
+            apiEndpointActionBusy={apiEndpointActionBusy}
+            apiEndpointMessage={apiEndpointMessage}
+            openCreateAPIEndpoint={openCreateAPIEndpoint}
+            openEditAPIEndpoint={openEditAPIEndpoint}
+            closeAPIEndpointForm={closeAPIEndpointForm}
+            saveAPIEndpoint={saveAPIEndpoint}
+            toggleAPIEndpoint={toggleAPIEndpoint}
+            deleteAPIEndpoint={deleteAPIEndpoint}
 	            smtpForm={smtpForm}
 	            setSmtpForm={setSmtpForm}
 	            emailSettings={emailSettings}

@@ -54,3 +54,22 @@ test("TOTP operation policies are submitted and only shown after TOTP is enabled
   assert.match(panel, /featureStepUpPoliciesTitle/);
   assert.match(panel, /draft\.totp_enabled \? \(/);
 });
+
+test("API endpoints are configured centrally and shown on the customer token page", () => {
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  const panel = readFileSync(resolve(root, "src", "components", "admin", "AdminSettingsPanel.tsx"), "utf8");
+  const consoleView = readFileSync(resolve(root, "src", "components", "ConsoleView.tsx"), "utf8");
+  const usageDocs = readFileSync(resolve(root, "src", "components", "UsageDocsPanel.tsx"), "utf8");
+  assert.match(app, /\/admin\/v1\/settings\/api-endpoints/);
+  assert.match(app, /apiEndpoints=\{publicAPIEndpoints\}/);
+  assert.match(panel, /systemAPIEndpointsTitle/);
+  assert.match(consoleView, /tokensAPIEndpointsTitle/);
+  assert.match(consoleView, /navigator\.clipboard\.writeText/);
+  assert.match(consoleView, /document\.execCommand\("copy"\)/);
+  assert.match(app, /openai_base_url/);
+  assert.match(app, /anthropic_base_url/);
+  assert.match(usageDocs, /apiEndpoints/);
+  assert.match(usageDocs, /ANTHROPIC_BASE_URL/);
+  assert.doesNotMatch(usageDocs, /window\.location\.origin \+ "\/v1"/);
+  assert.doesNotMatch(readFileSync(resolve(root, "src", "components", "HomeView.tsx"), "utf8"), /window\.location\.origin \+ "\/v1"/);
+});

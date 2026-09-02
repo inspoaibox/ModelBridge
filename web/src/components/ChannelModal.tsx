@@ -41,7 +41,7 @@ interface ChannelModalProps {
   modelDiscoveryMessage: LoginMessage;
   addDiscoveredModel: (model: DiscoveredModel) => void;
   isChannelModelMapped: (modelID: string) => boolean;
-  setChannelProvider: (provider: "openai" | "anthropic" | "grok" | "gemini") => void;
+  setChannelProvider: (provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine") => void;
   updateChannelModel: (rowID: string, patch: Partial<Omit<ChannelFormModel, "id">>) => void;
   addChannelModel: () => void;
   removeChannelModel: (rowID: string) => void;
@@ -147,13 +147,21 @@ export function ChannelModal({
                     value={channelForm.provider}
                     onChange={(e) => {
                       const provider = e.target.value;
-                      setChannelProvider(provider === "anthropic" || provider === "grok" || provider === "gemini" ? provider : "openai");
+                      setChannelProvider(
+                        provider === "anthropic" ||
+                          provider === "grok" ||
+                          provider === "gemini" ||
+                          provider === "volcengine"
+                          ? provider
+                          : "openai"
+                      );
                     }}
                   >
                     <option value="openai">{t("channelsProviderOpenAI")}</option>
                     <option value="anthropic">{t("channelsProviderAnthropic")}</option>
                     <option value="grok">{t("channelsProviderGrok")}</option>
                     <option value="gemini">{t("channelsProviderGemini")}</option>
+                    <option value="volcengine">{t("channelsProviderVolcengine")}</option>
                   </select>
                 </div>
 
@@ -203,7 +211,17 @@ export function ChannelModal({
                     onChange={(e) => {
                       setChannelForm((curr) => ({ ...curr, base_url: e.target.value }));
                     }}
-                    placeholder={channelForm.provider === "grok" ? "https://api.x.ai/v1" : channelForm.provider === "gemini" ? "https://generativelanguage.googleapis.com" : channelForm.provider === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"}
+                    placeholder={
+                      channelForm.provider === "grok"
+                        ? "https://api.x.ai/v1"
+                        : channelForm.provider === "gemini"
+                        ? "https://generativelanguage.googleapis.com"
+                        : channelForm.provider === "anthropic"
+                        ? "https://api.anthropic.com"
+                        : channelForm.provider === "volcengine"
+                        ? "https://ark.cn-beijing.volces.com/api/v3"
+                        : "https://api.openai.com/v1"
+                    }
                     required
                   />
                 </div>
@@ -253,6 +271,14 @@ export function ChannelModal({
                   />
                 </div>
               </div>
+
+              {channelForm.provider === "volcengine" && (
+                <p className="rounded-lg border border-sky-500/20 bg-sky-50/70 px-3 py-2 text-xs text-sky-700 dark:border-sky-400/20 dark:bg-sky-500/10 dark:text-sky-300">
+                  {language === "zh"
+                    ? "火山方舟官方 Content Generation：支持 Seedance 2.0/2.5 视频异步任务。可填写根地址，系统会自动补全 /api/v3。"
+                    : "Volcano Ark Content Generation: supports asynchronous Seedance 2.0/2.5 video tasks. The /api/v3 path is added automatically when needed."}
+                </p>
+              )}
             </div>
 
             {/* Section 3: Model Mapping & Upstream Discovery */}

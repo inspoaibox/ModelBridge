@@ -21,9 +21,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Language, PublicModelSummary, TranslationKey } from "@/types";
+import { Language, PublicAPIEndpoint, PublicModelSummary, TranslationKey } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
+import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 
 interface HomeViewProps {
   language: Language;
@@ -33,13 +34,14 @@ interface HomeViewProps {
   handleSignOut: () => void;
   models: PublicModelSummary[];
   registrationEnabled: boolean;
+  apiEndpoints: PublicAPIEndpoint[];
 }
 
-export function HomeView({ language, signedIn, workspaceRoute, routeTo, handleSignOut, models, registrationEnabled }: HomeViewProps) {
+export function HomeView({ language, signedIn, workspaceRoute, routeTo, handleSignOut, models, registrationEnabled, apiEndpoints }: HomeViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [activeCodeLang, setActiveCodeLang] = useState<"curl" | "python" | "nodejs" | "golang">("python");
   const [copiedCode, setCopiedCode] = useState(false);
-  const gatewayBaseURL = window.location.origin + "/v1";
+  const gatewayBaseURL = apiEndpoints[0] ? resolveAPIEndpointURLs(apiEndpoints[0]).openai : "YOUR_OPENAI_BASE_URL";
 
   const codeSnippets = {
     python: `import openai

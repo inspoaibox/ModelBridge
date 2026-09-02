@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,28 @@ func TestCookieMutationAcceptsSameOriginRefererPath(t *testing.T) {
 	handler.ServeHTTP(deniedRec, denied)
 	if deniedRec.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin referer should be rejected, got %d", deniedRec.Code)
+	}
+}
+
+func TestCORSAllowsOfficialProviderHeaders(t *testing.T) {
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com")
+	handler := withSecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodOptions, "/messages", nil)
+	req.Host = "gateway.example.com"
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Headers", "x-api-key, anthropic-version")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("allowed provider preflight should succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+	allowedHeaders := strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers"))
+	for _, header := range []string{"x-api-key", "anthropic-version", "anthropic-beta", "openai-beta"} {
+		if !strings.Contains(allowedHeaders, header) {
+			t.Fatalf("CORS headers must include %q, got %q", header, allowedHeaders)
+		}
 	}
 }
 
@@ -564,6 +587,79 @@ func TestRelayRequiresTokenScope(t *testing.T) {
 	handler.ServeHTTP(deniedRec, deniedReq)
 	if deniedRec.Code != http.StatusForbidden {
 		t.Fatalf("expected missing scope 403, got %d", deniedRec.Code)
+	}
+}
+
+func TestRelayRouteAliasesRequireTheSameTokenScope(t *testing.T) {
+	handler := New(auth.NewMiddleware(testResolver{
+		"relay-no-scope": {
+			ID:       "token-2",
+			Type:     auth.PrincipalAPIToken,
+			Audience: auth.AudienceRelay,
+			Scopes:   map[string]struct{}{},
+			TenantID: "tenant-1",
+		},
+	}), nil, false, "../../web")
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/v1/chat/completions"},
+		{http.MethodPost, "/chat/completions"},
+		{http.MethodPost, "/v1/v1/chat/completions"},
+		{http.MethodPost, "/v1/embeddings"},
+		{http.MethodPost, "/embeddings"},
+		{http.MethodGet, "/v1/models"},
+		{http.MethodGet, "/models"},
+		{http.MethodPost, "/v1/responses"},
+		{http.MethodPost, "/responses"},
+		{http.MethodPost, "/v1/messages"},
+		{http.MethodPost, "/messages"},
+		{http.MethodPost, "/v1/v1/messages"},
+		{http.MethodPost, "/v1/images/generations"},
+		{http.MethodPost, "/images/generations"},
+		{http.MethodPost, "/v1/audio/transcriptions"},
+		{http.MethodPost, "/audio/transcriptions"},
+		{http.MethodPost, "/v1/videos"},
+		{http.MethodPost, "/videos"},
+	}
+	for _, test := range tests {
+		t.Run(test.method+"_"+strings.ReplaceAll(test.path, "/", "_"), func(t *testing.T) {
+			req := httptest.NewRequest(test.method, test.path, nil)
+			req.Header.Set("Authorization", "Bearer relay-no-scope")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("alias %s %s must enforce model:use, got %d: %s", test.method, test.path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRelayChatRouteAliasesInvokeTheSameService(t *testing.T) {
+	for _, path := range []string{"/v1/chat/completions", "/chat/completions", "/v1/v1/chat/completions"} {
+		t.Run(strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
+			service := &fakeRelayService{}
+			handler := NewWithRelay(auth.NewMiddleware(testResolver{
+				"relay-ok": {
+					ID:       "token-1",
+					Type:     auth.PrincipalAPIToken,
+					Audience: auth.AudienceRelay,
+					Scopes:   map[string]struct{}{"model:use": {}},
+					TenantID: "tenant-1",
+				},
+			}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}}, service, false, "../../web")
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(
+				`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`,
+			))
+			req.Header.Set("Authorization", "Bearer relay-ok")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK || service.model != "gpt-5" {
+				t.Fatalf("alias %s must invoke relay, got %d: %s", path, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -1427,6 +1523,72 @@ func TestSystemSettingsRouteRequiresAdminPermission(t *testing.T) {
 	}
 }
 
+func TestAPIEndpointManagementIsAdminOnlyAndPublicListHidesDisabled(t *testing.T) {
+	settings := &fakeSystemSettingsService{
+		endpoints: []adminsettings.APIEndpoint{
+			{ID: "endpoint-1", Name: "Primary", BaseURL: "https://gateway.example.com/v1", Enabled: true, SortOrder: 0},
+			{ID: "endpoint-2", Name: "Legacy", BaseURL: "https://legacy.example.com/v1", Enabled: false, SortOrder: 1},
+		},
+	}
+	handler := New(auth.NewMiddleware(testResolver{
+		"endpoint-admin": {
+			ID:       "11111111-1111-4111-8111-111111111111",
+			Type:     auth.PrincipalPlatformUser,
+			Audience: auth.AudienceAdmin,
+			Permissions: map[string]struct{}{
+				"security:read":   {},
+				"security:update": {},
+			},
+		},
+		"endpoint-readonly": {
+			ID:       "22222222-2222-4222-8222-222222222222",
+			Type:     auth.PrincipalPlatformUser,
+			Audience: auth.AudienceAdmin,
+			Permissions: map[string]struct{}{
+				"security:read": {},
+			},
+		},
+	}), &auth.Services{StepUpMFA: &fakeStepUpVerifier{}, SecuritySettings: settings}, false, "../../web")
+
+	publicRequest := httptest.NewRequest(http.MethodGet, "/public/v1/settings", nil)
+	publicRecord := httptest.NewRecorder()
+	handler.ServeHTTP(publicRecord, publicRequest)
+	if publicRecord.Code != http.StatusOK ||
+		!strings.Contains(publicRecord.Body.String(), `"name":"Primary"`) ||
+		strings.Contains(publicRecord.Body.String(), "Legacy") ||
+		strings.Contains(publicRecord.Body.String(), `"id":"endpoint-1"`) ||
+		publicRecord.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("public settings must expose enabled endpoint names and URLs only, got %d: %s", publicRecord.Code, publicRecord.Body.String())
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/admin/v1/settings/api-endpoints", nil)
+	listRequest.Header.Set("Authorization", "Bearer endpoint-admin")
+	listRecord := httptest.NewRecorder()
+	handler.ServeHTTP(listRecord, listRequest)
+	if listRecord.Code != http.StatusOK ||
+		!strings.Contains(listRecord.Body.String(), "Legacy") ||
+		!strings.Contains(listRecord.Body.String(), `"enabled":false`) {
+		t.Fatalf("admin list must include disabled endpoint, got %d: %s", listRecord.Code, listRecord.Body.String())
+	}
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/admin/v1/settings/api-endpoints", strings.NewReader(`{"name":"Backup","base_url":"https://backup.example.com/v1","enabled":true}`))
+	createRequest.Header.Set("Authorization", "Bearer endpoint-admin")
+	createRequest.Header.Set("X-MFA-Code", "123456")
+	createRecord := httptest.NewRecorder()
+	handler.ServeHTTP(createRecord, createRequest)
+	if createRecord.Code != http.StatusCreated || !strings.Contains(createRecord.Body.String(), `"name":"Backup"`) {
+		t.Fatalf("admin endpoint create must succeed, got %d: %s", createRecord.Code, createRecord.Body.String())
+	}
+
+	deniedRequest := httptest.NewRequest(http.MethodPost, "/admin/v1/settings/api-endpoints", strings.NewReader(`{"name":"Nope","base_url":"https://nope.example.com"}`))
+	deniedRequest.Header.Set("Authorization", "Bearer endpoint-readonly")
+	deniedRecord := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRecord, deniedRequest)
+	if deniedRecord.Code != http.StatusForbidden {
+		t.Fatalf("console user must not manage API endpoints, got %d: %s", deniedRecord.Code, deniedRecord.Body.String())
+	}
+}
+
 func TestAdminEmailSettingsRoutesAreProtectedAndSeparated(t *testing.T) {
 	settings := &fakeSystemSettingsService{}
 	stepUp := &fakeStepUpVerifier{}
@@ -1695,6 +1857,8 @@ type fakeSystemSettingsService struct {
 	features         adminsettings.FeatureSettings
 	featureUpdateErr error
 	templates        []adminsettings.EmailTemplate
+	endpoints        []adminsettings.APIEndpoint
+	endpointSequence int
 }
 
 func (s *fakeSystemSettingsService) GetSystemSettings(_ context.Context) (adminsettings.SystemSettings, error) {
@@ -1751,6 +1915,72 @@ func (s *fakeSystemSettingsService) UpdateEmailTemplate(context.Context, string,
 
 func (s *fakeSystemSettingsService) DeleteEmailTemplate(context.Context, string, string) error {
 	return nil
+}
+
+func (s *fakeSystemSettingsService) ListAPIEndpoints(_ context.Context, enabledOnly bool) ([]adminsettings.APIEndpoint, error) {
+	result := make([]adminsettings.APIEndpoint, 0, len(s.endpoints))
+	for _, item := range s.endpoints {
+		if enabledOnly && !item.Enabled {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (s *fakeSystemSettingsService) CreateAPIEndpoint(_ context.Context, _ string, mutation adminsettings.APIEndpointMutation) (adminsettings.APIEndpoint, error) {
+	if strings.TrimSpace(mutation.Name) == "" || strings.TrimSpace(mutation.BaseURL) == "" {
+		return adminsettings.APIEndpoint{}, adminsettings.ErrInvalidAPIEndpoint
+	}
+	for _, item := range s.endpoints {
+		if item.BaseURL == mutation.BaseURL {
+			return adminsettings.APIEndpoint{}, adminsettings.ErrAPIEndpointExists
+		}
+	}
+	s.endpointSequence++
+	enabled := true
+	if mutation.Enabled != nil {
+		enabled = *mutation.Enabled
+	}
+	item := adminsettings.APIEndpoint{
+		ID:        "endpoint-" + strconv.Itoa(s.endpointSequence),
+		Name:      mutation.Name,
+		BaseURL:   mutation.BaseURL,
+		Enabled:   enabled,
+		SortOrder: len(s.endpoints),
+	}
+	s.endpoints = append(s.endpoints, item)
+	return item, nil
+}
+
+func (s *fakeSystemSettingsService) UpdateAPIEndpoint(_ context.Context, _ string, endpointID string, mutation adminsettings.APIEndpointMutation) (adminsettings.APIEndpoint, error) {
+	for index, item := range s.endpoints {
+		if item.ID != endpointID {
+			continue
+		}
+		if strings.TrimSpace(mutation.Name) == "" || strings.TrimSpace(mutation.BaseURL) == "" {
+			return adminsettings.APIEndpoint{}, adminsettings.ErrInvalidAPIEndpoint
+		}
+		if mutation.Enabled == nil {
+			mutation.Enabled = &item.Enabled
+		}
+		s.endpoints[index] = adminsettings.APIEndpoint{
+			ID: item.ID, Name: mutation.Name, BaseURL: mutation.BaseURL,
+			Enabled: *mutation.Enabled, SortOrder: item.SortOrder,
+		}
+		return s.endpoints[index], nil
+	}
+	return adminsettings.APIEndpoint{}, adminsettings.ErrAPIEndpointNotFound
+}
+
+func (s *fakeSystemSettingsService) DeleteAPIEndpoint(_ context.Context, _ string, endpointID string) error {
+	for index, item := range s.endpoints {
+		if item.ID == endpointID {
+			s.endpoints = append(s.endpoints[:index], s.endpoints[index+1:]...)
+			return nil
+		}
+	}
+	return adminsettings.ErrAPIEndpointNotFound
 }
 
 type fakeRelayService struct {

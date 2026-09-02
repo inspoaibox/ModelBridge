@@ -53,11 +53,11 @@ Token 价格按 USD / 1M Token 展示；非 Token 组件按自身单位展示，
 - `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`、`POST /v1/audio/speech`
 - `POST /v1/videos`、`GET /v1/videos/{videoID}`、`GET /v1/videos/{videoID}/content`
 
-图片输入、工具调用和结构化输出会按渠道协议转换；具体模型是否支持仍以渠道和上游模型能力为准。OpenAI 使用官方 OpenAI API；Grok 的文本/Embedding 使用 OpenAI-compatible API，媒体使用 xAI 官方路径；Gemini 使用官方 GenerateContent、EmbedContent、Imagen 和 Veo 协议；Anthropic 仅开放其官方 Messages 能力，不伪装成图片/视频生成或 Embedding 渠道。视频为异步任务，平台保存任务与账务关联并只向客户返回平台任务 ID。客户端提交不适用能力会得到稳定的 unsupported/invalid 错误，不会静默降级成文本请求。
+图片输入、工具调用和结构化输出会按渠道协议转换；具体模型是否支持仍以渠道和上游模型能力为准。OpenAI 使用官方 OpenAI API；Grok 的文本/Embedding 使用 OpenAI-compatible API，媒体使用 xAI 官方路径；Gemini 使用官方 GenerateContent、EmbedContent、Imagen 和 Veo 协议；Anthropic 仅开放其官方 Messages 能力，不伪装成图片/视频生成或 Embedding 渠道；字节跳动/火山方舟使用官方 Ark Content Generation API，支持 Seedance 2.0/2.5 视频异步任务。Seedance 2.0 与 2.5 使用独立的模型能力描述和请求校验：2.0 的视频时长上限为 15 秒并支持 4K，2.5 的视频时长上限为 30 秒并支持 MOV、更多参考素材及单独音频输入。视频为异步任务，平台保存任务与账务关联并只向客户返回平台任务 ID。客户端提交不适用能力会得到稳定的 unsupported/invalid 错误，不会静默降级成文本请求。
 
 流式和非流式请求在上游明确提供 Usage 时按真实 Usage 结算；OpenAI 的 `prompt_tokens`/`completion_tokens`、Gemini 的 prompt/candidates/thoughts、Anthropic 的 input/output/cache creation/cache read 都按父量与子集关系归一化，缓存、推理和媒体 Token 不会重复计费。媒体优先使用上游 Usage，其次使用能够从请求或文件元数据验证的图片数量、音频时长、视频秒数和语音字符数；无法可靠推导的计量不会伪造为 0，付费请求会返回明确的 Usage 不可用错误。
 
-支持的官方参考价格组件包括普通/缓存创建/缓存读取/推理/音频/图片/视频 Token，图片数量、像素、字符、秒数、请求、查询、会话、页数、文件检索、向量存储、Grounding、搜索、OCR、代码解释器、DBU，以及 Priority、Flex、Batch 和上下文阶梯价格。LiteLLM 的 `tiered_pricing` 与 `*_above_N_tokens` 会按官方规则选择整单上下文档位；带 `*_interval` 的计量才按该组件数量做分段。媒体生成和音频接口已经有路由，但仍受渠道模型映射和上游账户权限约束。
+支持的官方参考价格组件包括普通/缓存创建/缓存读取/推理/音频/图片/视频 Token，图片数量、像素、字符、秒数、请求、查询、会话、页数、文件检索、向量存储、Grounding、搜索、OCR、代码解释器、DBU，以及 Priority、Flex、Batch 和上下文阶梯价格。LiteLLM 的 `tiered_pricing` 与 `*_above_N_tokens` 会按官方规则选择整单上下文档位；带 `*_interval` 的计量才按该组件数量做分段。媒体生成和音频接口已经有路由，但仍受渠道模型映射和上游账户权限约束。火山方舟渠道只实现视频任务创建、查询和结果下载；不会把不支持的聊天、Embedding、图片或音频请求转发到 Ark。
 
 ## 安全执行点
 

@@ -309,7 +309,7 @@ func (r *SQLResolver) loadTenantAccess(ctx context.Context, principal *Principal
 var tenantRolePermissions = map[string][]string{
 	"tenant_owner": {
 		"tenant:read", "tenant:update", "member:invite", "member:remove",
-	"project:read", "project:update", "token:read", "token:create", "token:revoke",
+		"project:read", "project:update", "token:read", "token:create", "token:revoke",
 		"usage:read", "billing:read", "model:use", "model:status:read",
 	},
 	"tenant_admin": {

@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS model_monitor_config_models_model_idx
 
 INSERT INTO platform_permissions (id, resource, action, name)
 VALUES
-    ('11111111-1111-4111-8111-111111111901', 'operations', 'update', 'operations:update')
+    ('11111111-1111-4111-8111-111111111903', 'operations', 'update', 'operations:update')
 ON CONFLICT (resource, action) DO UPDATE SET name = EXCLUDED.name;
 
 INSERT INTO platform_role_permissions (role_id, permission_id)

@@ -156,7 +156,7 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
             const platformPrice = findPlatformPrice(model, groupID);
             return <Card key={model.id} className="group border-slate-200/80 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-lg hover:shadow-indigo-500/10 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-indigo-500/50">
               <CardHeader className="space-y-3 pb-3"><div className="flex items-start justify-between gap-3"><div className={cn("inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold", providerClass(model.provider))}><Cpu className="h-3.5 w-3.5" />{model.provider}</div><Badge variant={model.available ? "success" : "muted"}>{model.available ? <><CheckCircle2 className="mr-1 h-3.5 w-3.5" />{t("modelsStatusAvailable")}</> : <><CircleOff className="mr-1 h-3.5 w-3.5" />{t("modelsStatusUnavailable")}</>}</Badge></div><div className="flex items-start gap-2"><div className="rounded-lg bg-slate-100 p-2 text-slate-500 dark:bg-slate-800 dark:text-slate-300">{(() => { const Icon = categoryIcon(model.category); return <Icon className="h-4 w-4" />; })()}</div><div><CardTitle className="text-xl text-slate-950 dark:text-white">{model.display_name}</CardTitle><CardDescription className="mt-1 font-mono text-xs">{model.name}</CardDescription></div></div></CardHeader>
-              <CardContent className="space-y-4"><div className="flex flex-wrap gap-1.5">{capabilities.length > 0 ? capabilities.map((item) => <span key={item} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{item}</span>) : <span className="text-xs text-slate-500">{t("modelsCapabilitiesPending")}</span>}</div><div className="grid grid-cols-2 gap-3 border-y border-slate-100 py-3 dark:border-slate-800"><div className="flex items-start gap-2"><Server className="mt-0.5 h-4 w-4 text-cyan-600 dark:text-cyan-400" /><div><div className="text-[11px] text-slate-500">{t("modelsRoutes")}</div><div className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-200">{model.active_channel_count} / {model.channel_count}</div></div></div><div className="flex items-start gap-2"><Code2 className="mt-0.5 h-4 w-4 text-indigo-600 dark:text-indigo-400" /><div><div className="text-[11px] text-slate-500">{t("modelsProtocol")}</div><div className="mt-1 truncate text-xs font-semibold text-slate-700 dark:text-slate-300">{model.protocol_family}</div></div></div></div>{model.pricing ? <PriceComparison official={model.pricing} platform={platformPrice} language={language} t={t} /> : <div className="flex items-center gap-2 text-xs text-slate-500"><Layers3 className="h-4 w-4" />{t("modelsPricingPending")}</div>}</CardContent>
+              <CardContent className="space-y-4"><div className="flex flex-wrap gap-1.5">{capabilities.length > 0 ? capabilities.map((item) => <span key={item} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{item}</span>) : <span className="text-xs text-slate-500">{t("modelsCapabilitiesPending")}</span>}</div>{model.capabilities.seedance_version ? <SeedanceCapabilitySummary capabilities={model.capabilities} t={t} /> : null}<div className="grid grid-cols-2 gap-3 border-y border-slate-100 py-3 dark:border-slate-800"><div className="flex items-start gap-2"><Server className="mt-0.5 h-4 w-4 text-cyan-600 dark:text-cyan-400" /><div><div className="text-[11px] text-slate-500">{t("modelsRoutes")}</div><div className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-200">{model.active_channel_count} / {model.channel_count}</div></div></div><div className="flex items-start gap-2"><Code2 className="mt-0.5 h-4 w-4 text-indigo-600 dark:text-indigo-400" /><div><div className="text-[11px] text-slate-500">{t("modelsProtocol")}</div><div className="mt-1 truncate text-xs font-semibold text-slate-700 dark:text-slate-300">{model.protocol_family}</div></div></div></div>{model.pricing ? <PriceComparison official={model.pricing} platform={platformPrice} language={language} t={t} /> : <div className="flex items-center gap-2 text-xs text-slate-500"><Layers3 className="h-4 w-4" />{t("modelsPricingPending")}</div>}</CardContent>
             </Card>;
           })}
         </div>}
@@ -177,6 +177,36 @@ function capabilityItems(model: PublicModelSummary, t: (key: TranslationKey) => 
   if (model.capabilities.multimodal_input === true) items.push(t("modelMultimodal"));
   if (model.capabilities.reasoning === true) items.push(t("modelReasoning"));
   return items.slice(0, 4);
+}
+
+function SeedanceCapabilitySummary({ capabilities, t }: { capabilities: Record<string, unknown>; t: (key: TranslationKey) => string }) {
+  const version = typeof capabilities.seedance_version === "string" ? capabilities.seedance_version : "-";
+  const defaultDuration = typeof capabilities.default_duration_seconds === "number"
+    ? capabilities.default_duration_seconds === -1 ? "-1" : `${capabilities.default_duration_seconds}s`
+    : "-";
+  const maxDuration = typeof capabilities.max_duration_seconds === "number" ? `${capabilities.max_duration_seconds}s` : "-";
+  const references = [
+    { label: t("modelSeedanceReferenceImages"), value: capabilities.max_reference_images },
+    { label: t("modelSeedanceReferenceVideos"), value: capabilities.max_reference_videos },
+    { label: t("modelSeedanceReferenceAudios"), value: capabilities.max_reference_audios },
+  ].filter((item) => typeof item.value === "number");
+  const flags = [
+    capabilities.supports_4k === true ? t("modelSeedance4K") : "",
+    capabilities.supports_output_format === true ? t("modelSeedanceOutputFormat") : "",
+    capabilities.audio_only_reference === true ? t("modelSeedanceAudioOnly") : t("modelSeedanceRequiresVisual"),
+    capabilities.supports_omni_task_type === true ? t("modelSeedanceTaskTypes") : "",
+  ].filter(Boolean);
+  return <div className="space-y-2 rounded-xl border border-cyan-500/20 bg-cyan-500/[0.045] p-3 dark:border-cyan-400/20 dark:bg-cyan-400/[0.06]">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-cyan-800 dark:text-cyan-200">
+      <span>{t("modelSeedanceVersion")} {version}</span>
+      <span>{t("modelSeedanceDefaultDuration")} {defaultDuration}</span>
+      <span>{t("modelSeedanceMaxDuration")} {maxDuration}</span>
+    </div>
+    <div className="grid grid-cols-3 gap-2 text-[10px] text-cyan-900/70 dark:text-cyan-100/70">
+      {references.map((item) => <div key={item.label} className="min-w-0"><span className="block truncate">{item.label}</span><strong className="mt-0.5 block text-xs text-cyan-900 dark:text-cyan-100">{String(item.value)}</strong></div>)}
+    </div>
+    {flags.length > 0 ? <div className="flex flex-wrap gap-1.5">{flags.map((flag) => <span key={flag} className="rounded-md border border-cyan-500/20 bg-white/60 px-1.5 py-1 text-[10px] font-medium text-cyan-800 dark:border-cyan-400/20 dark:bg-slate-900/40 dark:text-cyan-200">{flag}</span>)}</div> : null}
+  </div>;
 }
 
 function findPlatformPrice(model: PublicModelSummary, groupID: string) {

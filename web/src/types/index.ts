@@ -123,6 +123,32 @@ export interface SiteSettings {
   site_favicon_url: string;
 }
 
+export interface APIEndpoint {
+  id: string;
+  name: string;
+  base_url: string;
+  openai_base_url: string;
+  anthropic_base_url: string;
+  enabled: boolean;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PublicAPIEndpoint {
+  name: string;
+  base_url: string;
+  openai_base_url: string;
+  anthropic_base_url: string;
+}
+
+export interface APIEndpointFormState {
+  id: string;
+  name: string;
+  base_url: string;
+  enabled: boolean;
+}
+
 export interface SystemSettings extends SecuritySettings, SiteSettings {
   smtp_addr: string;
   smtp_from: string;
@@ -463,7 +489,7 @@ export interface ChannelFormModel {
 export interface ChannelFormState {
   id: string;
   name: string;
-  provider: "openai" | "anthropic" | "grok" | "gemini";
+  provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine";
   base_url: string;
   api_key: string;
   status: "active" | "disabled" | "draining";

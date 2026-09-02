@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	ProviderOpenAI    = "openai"
-	ProviderAnthropic = "anthropic"
-	ProviderGrok      = "grok"
-	ProviderGemini    = "gemini"
+	ProviderOpenAI     = "openai"
+	ProviderAnthropic  = "anthropic"
+	ProviderGrok       = "grok"
+	ProviderGemini     = "gemini"
+	ProviderVolcengine = "volcengine"
 
 	defaultAnthropicMaxTokens = 1024
 	maxRequestedTokens        = 1_000_000
@@ -528,10 +529,11 @@ func (s *Service) channelMutator() (ChannelMutator, error) {
 
 func DefaultProviders() map[string]Provider {
 	return map[string]Provider{
-		ProviderOpenAI:    OpenAIProvider{},
-		ProviderAnthropic: AnthropicProvider{},
-		ProviderGrok:      GrokProvider{},
-		ProviderGemini:    GeminiProvider{},
+		ProviderOpenAI:     OpenAIProvider{},
+		ProviderAnthropic:  AnthropicProvider{},
+		ProviderGrok:       GrokProvider{},
+		ProviderGemini:     GeminiProvider{},
+		ProviderVolcengine: VolcengineProvider{},
 	}
 }
 
@@ -1571,6 +1573,8 @@ func canonicalProvider(provider string) string {
 		return ProviderGrok
 	case "google", "google-gemini", "google_genai":
 		return ProviderGemini
+	case "ark", "byteplus", "bytedance", "volc", "volcengine-ark":
+		return ProviderVolcengine
 	default:
 		return provider
 	}
@@ -1578,7 +1582,7 @@ func canonicalProvider(provider string) string {
 
 func supportedProvider(provider string) bool {
 	switch canonicalProvider(provider) {
-	case ProviderOpenAI, ProviderAnthropic, ProviderGrok, ProviderGemini:
+	case ProviderOpenAI, ProviderAnthropic, ProviderGrok, ProviderGemini, ProviderVolcengine:
 		return true
 	default:
 		return false

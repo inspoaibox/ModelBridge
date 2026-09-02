@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import {
   Copy,
+  Globe2,
   KeyRound,
   Mail,
+  Pencil,
   PlugZap,
   Plus,
   Save,
@@ -13,6 +15,7 @@ import {
   Trash2,
   ToggleRight,
   UserRound,
+  X,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -22,7 +25,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 import {
+  APIEndpoint,
+  APIEndpointFormState,
   ConsoleProfile,
   EmailFormState,
   EmailSettings,
@@ -76,6 +82,19 @@ interface AdminSettingsPanelProps {
   siteBusy: boolean;
   siteMessage: LoginMessage;
   saveSiteSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  apiEndpoints: APIEndpoint[];
+  apiEndpointFormOpen: boolean;
+  apiEndpointForm: APIEndpointFormState;
+  setAPIEndpointForm: React.Dispatch<React.SetStateAction<APIEndpointFormState>>;
+  apiEndpointBusy: boolean;
+  apiEndpointActionBusy: string;
+  apiEndpointMessage: LoginMessage;
+  openCreateAPIEndpoint: () => void;
+  openEditAPIEndpoint: (endpoint: APIEndpoint) => void;
+  closeAPIEndpointForm: () => void;
+  saveAPIEndpoint: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  toggleAPIEndpoint: (endpoint: APIEndpoint) => Promise<void>;
+  deleteAPIEndpoint: (endpoint: APIEndpoint) => Promise<void>;
   smtpForm: SMTPSettingsForm;
   setSmtpForm: React.Dispatch<React.SetStateAction<SMTPSettingsForm>>;
   emailSettings: EmailSettings | null;
@@ -116,6 +135,7 @@ export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
       {tab === "base" ? <BaseTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "email" ? <EmailTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "features" ? <FeatureTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
+      {props.apiEndpointFormOpen ? <APIEndpointModal {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
     </div>
   );
 }
@@ -145,8 +165,162 @@ function MFAAdminCard({ t, mfaStatus, mfaEnrollment, mfaCode, setMfaCode, mfaBus
   return <Card className="border-emerald-500/20"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><ShieldCheck className="h-5 w-5 text-emerald-600" />{t("adminMFATitle")}</CardTitle><CardDescription>{t("adminMFADescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("adminMFAStatus")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{mfaStatus.enabled ? t("adminMFAEnabledBody") : t("adminMFADisabledBody")}</div></div><Badge variant={mfaStatus.enabled ? "success" : "muted"}>{mfaStatus.enabled ? t("adminMFAEnabled") : t("adminMFADisabled")}</Badge></div>{mfaStatus.enabled ? <form className="space-y-3" onSubmit={disableMFA}><InputField id="admin-mfa-disable-code" label={t("profileMFACode")} value={mfaCode} onChange={(value) => setMfaCode(value.replace(/\D/g, "").slice(0, 6))} disabled={mfaBusy} /><Button type="submit" variant="destructive" disabled={mfaBusy || enforced} className="gap-2"><ShieldOff className="h-4 w-4" />{t("adminMFADisable")}</Button></form> : mfaEnrollment ? <div className="space-y-3"><div className="flex justify-center rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700"><QRCodeSVG value={mfaEnrollment.otpauth_url} size={145} includeMargin /></div><div className="flex items-center gap-2"><code className="min-w-0 flex-1 break-all font-mono text-xs">{mfaEnrollment.secret}</code><Button type="button" variant="outline" size="icon" onClick={() => void copySecret()} aria-label={t("profileMFACopySecret")}><Copy className="h-4 w-4" /></Button></div><form className="space-y-3" onSubmit={confirmMFA}><InputField id="admin-mfa-confirm-code" label={t("profileMFACode")} value={mfaCode} onChange={(value) => setMfaCode(value.replace(/\D/g, "").slice(0, 6))} disabled={mfaBusy} /><div className="flex gap-2"><Button type="submit" disabled={mfaBusy}>{t("profileMFAConfirm")}</Button><Button type="button" variant="outline" onClick={cancelMFA} disabled={mfaBusy}>{t("profileMFACancel")}</Button></div></form></div> : <Button type="button" variant="emerald" onClick={() => void beginMFA()} disabled={mfaBusy} className="gap-2"><ShieldCheck className="h-4 w-4" />{t("adminMFAEnable")}</Button>}</CardContent></Card>;
 }
 
-function BaseTab({ t, siteForm, setSiteForm, siteBusy, siteMessage, saveSiteSettings, canUpdate }: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean }) {
-  return <Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Settings2 className="h-5 w-5 text-indigo-600" />{t("systemSettingsBaseTitle")}</CardTitle><CardDescription>{t("systemSettingsBaseDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={saveSiteSettings}><InputField id="system-site-name" label={t("systemSiteName")} value={siteForm.site_name} onChange={(value) => setSiteForm((current) => ({ ...current, site_name: value }))} disabled={siteBusy || !canUpdate} /><InputField id="system-site-logo" label={t("systemSiteLogo")} value={siteForm.site_logo_url} onChange={(value) => setSiteForm((current) => ({ ...current, site_logo_url: value }))} disabled={siteBusy || !canUpdate} /><p className="-mt-3 text-xs text-slate-500 dark:text-slate-400">{t("systemAssetURLHint")}</p><InputField id="system-site-favicon" label={t("systemSiteFavicon")} value={siteForm.site_favicon_url} onChange={(value) => setSiteForm((current) => ({ ...current, site_favicon_url: value }))} disabled={siteBusy || !canUpdate} /><div className="grid gap-4 md:grid-cols-2"><AssetPreview label={t("systemSitePreview")} name={siteForm.site_name} source={siteForm.site_logo_url} /><AssetPreview label={t("systemSiteFaviconPreview")} name={siteForm.site_name} source={siteForm.site_favicon_url} compact /></div>{siteMessage.text ? <Notice message={siteMessage} /> : null}<Button type="submit" disabled={siteBusy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{siteBusy ? t("systemSettingsSaving") : t("systemSettingsSave")}</Button></form></CardContent></Card>;
+function BaseTab({
+  t,
+  siteForm,
+  setSiteForm,
+  siteBusy,
+  siteMessage,
+  saveSiteSettings,
+  apiEndpoints,
+  apiEndpointActionBusy,
+  apiEndpointMessage,
+  openCreateAPIEndpoint,
+  openEditAPIEndpoint,
+  toggleAPIEndpoint,
+  deleteAPIEndpoint,
+  canUpdate,
+}: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean }) {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Settings2 className="h-5 w-5 text-indigo-600" />
+            {t("systemSettingsBaseTitle")}
+          </CardTitle>
+          <CardDescription>{t("systemSettingsBaseDescription")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={saveSiteSettings}>
+            <InputField id="system-site-name" label={t("systemSiteName")} value={siteForm.site_name} onChange={(value) => setSiteForm((current) => ({ ...current, site_name: value }))} disabled={siteBusy || !canUpdate} />
+            <InputField id="system-site-logo" label={t("systemSiteLogo")} value={siteForm.site_logo_url} onChange={(value) => setSiteForm((current) => ({ ...current, site_logo_url: value }))} disabled={siteBusy || !canUpdate} />
+            <p className="-mt-3 text-xs text-slate-500 dark:text-slate-400">{t("systemAssetURLHint")}</p>
+            <InputField id="system-site-favicon" label={t("systemSiteFavicon")} value={siteForm.site_favicon_url} onChange={(value) => setSiteForm((current) => ({ ...current, site_favicon_url: value }))} disabled={siteBusy || !canUpdate} />
+            <div className="grid gap-4 md:grid-cols-2">
+              <AssetPreview label={t("systemSitePreview")} name={siteForm.site_name} source={siteForm.site_logo_url} />
+              <AssetPreview label={t("systemSiteFaviconPreview")} name={siteForm.site_name} source={siteForm.site_favicon_url} compact />
+            </div>
+            {siteMessage.text ? <Notice message={siteMessage} /> : null}
+            <Button type="submit" disabled={siteBusy || !canUpdate} className="gap-2">
+              <Save className="h-4 w-4" />
+              {siteBusy ? t("systemSettingsSaving") : t("systemSettingsSave")}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="border-cyan-500/20">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Globe2 className="h-5 w-5 text-cyan-600" />
+              {t("systemAPIEndpointsTitle")}
+            </CardTitle>
+            <CardDescription>{t("systemAPIEndpointsDescription")}</CardDescription>
+          </div>
+          <Button type="button" onClick={openCreateAPIEndpoint} disabled={!canUpdate} className="gap-2">
+            <Plus className="h-4 w-4" />
+            {t("systemAPIEndpointAdd")}
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {apiEndpointMessage.text ? <Notice message={apiEndpointMessage} /> : null}
+          {apiEndpoints.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-300 px-4 py-12 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+              {t("systemAPIEndpointsEmpty")}
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+              {apiEndpoints.map((endpoint) => {
+                const busy = apiEndpointActionBusy === endpoint.id;
+                const endpointURLs = resolveAPIEndpointURLs(endpoint);
+                return (
+                  <div key={endpoint.id} className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-slate-900 dark:text-white">{endpoint.name}</span>
+                        <Badge variant={endpoint.enabled ? "success" : "muted"}>{endpoint.enabled ? t("systemAPIEndpointEnabled") : t("systemAPIEndpointDisabled")}</Badge>
+                      </div>
+                      <div className="mt-2 space-y-1 text-[11px]">
+                        <div><span className="mr-2 font-semibold text-slate-500 dark:text-slate-400">{t("systemAPIEndpointRootURL")}</span><code className="break-all text-slate-600 dark:text-slate-300">{endpointURLs.root || "-"}</code></div>
+                        <div><span className="mr-2 font-semibold text-indigo-600 dark:text-indigo-400">OpenAI</span><code className="break-all text-slate-600 dark:text-slate-300">{endpointURLs.openai || "-"}</code></div>
+                        <div><span className="mr-2 font-semibold text-cyan-600 dark:text-cyan-400">Anthropic</span><code className="break-all text-slate-600 dark:text-slate-300">{endpointURLs.anthropic || "-"}</code></div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Switch checked={endpoint.enabled} onCheckedChange={() => void toggleAPIEndpoint(endpoint)} disabled={busy || !canUpdate} aria-label={endpoint.enabled ? t("systemAPIEndpointDisable") : t("systemAPIEndpointEnable")} />
+                      <Button type="button" variant="outline" size="icon" onClick={() => openEditAPIEndpoint(endpoint)} disabled={busy || !canUpdate} title={t("systemAPIEndpointEdit")} aria-label={t("systemAPIEndpointEdit")}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => void deleteAPIEndpoint(endpoint)} disabled={busy || !canUpdate} title={t("systemAPIEndpointDelete")} aria-label={t("systemAPIEndpointDelete")}>
+                        <Trash2 className="h-4 w-4 text-rose-600" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function APIEndpointModal({
+  t,
+  apiEndpointForm,
+  setAPIEndpointForm,
+  apiEndpointBusy,
+  apiEndpointMessage,
+  closeAPIEndpointForm,
+  saveAPIEndpoint,
+  canUpdate,
+}: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean }) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
+      <Card className="w-full max-w-xl border-slate-200/80 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <CardHeader className="flex flex-row items-start justify-between gap-4 border-b border-slate-200/80 pb-4 dark:border-slate-800">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-xl text-slate-900 dark:text-white">
+              <Globe2 className="h-5 w-5 text-cyan-600" />
+              {apiEndpointForm.id ? t("systemAPIEndpointEdit") : t("systemAPIEndpointAdd")}
+            </CardTitle>
+            <CardDescription className="mt-1">{t("systemAPIEndpointModalDescription")}</CardDescription>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={closeAPIEndpointForm} disabled={apiEndpointBusy} aria-label={t("close")}>
+            <X className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={(event) => void saveAPIEndpoint(event)}>
+            <InputField id="api-endpoint-name" label={t("systemAPIEndpointName")} value={apiEndpointForm.name} onChange={(value) => setAPIEndpointForm((current) => ({ ...current, name: value }))} disabled={apiEndpointBusy || !canUpdate} required />
+            <div className="space-y-2">
+              <Label htmlFor="api-endpoint-base-url">{t("systemAPIEndpointBaseURL")}</Label>
+              <Input id="api-endpoint-base-url" type="url" value={apiEndpointForm.base_url} onChange={(event) => setAPIEndpointForm((current) => ({ ...current, base_url: event.target.value }))} placeholder="https://gateway.example.com" disabled={apiEndpointBusy || !canUpdate} required />
+              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t("systemAPIEndpointBaseURLHint")}</p>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">{t("systemAPIEndpointStatus")}</div>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t("systemAPIEndpointStatusHint")}</p>
+              </div>
+              <Switch checked={apiEndpointForm.enabled} onCheckedChange={(checked) => setAPIEndpointForm((current) => ({ ...current, enabled: checked }))} disabled={apiEndpointBusy || !canUpdate} />
+            </div>
+            {apiEndpointMessage.text ? <Notice message={apiEndpointMessage} /> : null}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={closeAPIEndpointForm} disabled={apiEndpointBusy}>{t("cancel")}</Button>
+              <Button type="submit" disabled={apiEndpointBusy || !canUpdate} className="gap-2">
+                <Save className="h-4 w-4" />
+                {apiEndpointBusy ? t("systemAPIEndpointSaving") : t("systemAPIEndpointSave")}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 function EmailTab({ t, emailSettings, smtpForm, setSmtpForm, emailBusy, emailMessage, emailTestRecipient, setEmailTestRecipient, smtpConnectionBusy, smtpMessageBusy, saveEmailSettings, testSMTPConnection, sendTestEmail, emailTemplates, emailTemplatesBusy, emailTemplatesMessage, templateForm, setTemplateForm, openTemplate, submitTemplate, deleteEmailTemplate, canUpdate }: AdminSettingsPanelProps & { t: Translator; canUpdate: boolean; templateForm?: EmailTemplateFormState | null; setTemplateForm?: React.Dispatch<React.SetStateAction<EmailTemplateFormState | null>>; openTemplate?: (template?: EmailTemplate) => void; submitTemplate?: (event: React.FormEvent<HTMLFormElement>) => Promise<void> }) {

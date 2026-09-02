@@ -538,7 +538,18 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 	if status != "completed" {
 		return ErrInvalidRequest
 	}
-	response.Usage = mergeMediaUsage(response.Usage, job.EstimatedMetrics)
+	// Seedance reports billable video tokens after the asynchronous task
+	// completes. A requested duration is only a reservation estimate and must
+	// not become a final charge when Ark did not return usage.
+	if canonicalProvider(job.Provider) != ProviderVolcengine {
+		response.Usage = mergeMediaUsage(response.Usage, job.EstimatedMetrics)
+	} else if len(response.Usage.Metrics) > 0 && !volcengineUsageAuthoritative(response.Usage) {
+		response.Usage.Metrics = nil
+		response.Usage.InputTokens = 0
+		response.Usage.OutputTokens = 0
+		response.Usage.CachedInputTokens = 0
+		response.Usage.ReasoningTokens = 0
+	}
 	if len(response.Usage.Metrics) == 0 && strings.TrimSpace(job.ReservationID) != "" {
 		if marker, ok := s.billing.(billing.ReservationPendingMarker); ok {
 			if err := marker.MarkSettlementPending(ctx, job.ReservationID, "upstream_video_usage_unavailable"); err == nil {
@@ -843,7 +854,16 @@ func validateSpeechRequest(request *SpeechRequest) error {
 }
 
 func validateVideoCreateRequest(request *VideoCreateRequest) error {
-	if request == nil || strings.TrimSpace(request.Model) == "" || strings.TrimSpace(request.Prompt) == "" || len([]rune(request.Prompt)) > 10000 || len(request.Payload) > maxMediaJSONSize {
+	if request == nil || strings.TrimSpace(request.Model) == "" || len(request.Payload) > maxMediaJSONSize {
+		return ErrInvalidRequest
+	}
+	if strings.TrimSpace(request.Prompt) == "" {
+		request.Prompt = videoPromptFromPayload(request.Payload)
+	}
+	if len([]rune(request.Prompt)) > 10000 {
+		return ErrInvalidRequest
+	}
+	if strings.TrimSpace(request.Prompt) == "" && !videoPayloadHasMediaContent(request.Payload) {
 		return ErrInvalidRequest
 	}
 	if strings.TrimSpace(request.Duration) == "" {
@@ -857,10 +877,103 @@ func validateVideoCreateRequest(request *VideoCreateRequest) error {
 			}
 		}
 	}
-	if strings.TrimSpace(request.Duration) == "" || !validVideoDuration(request.Duration) {
+	if strings.TrimSpace(request.Duration) == "" && !validVideoFrames(request.Payload) &&
+		!videoPayloadAllowsOmittedDuration(request.Payload) && !seedanceModelName(request.Model) {
 		return ErrInvalidRequest
 	}
+	if strings.TrimSpace(request.Duration) != "" && !validVideoDuration(request.Duration) &&
+		!(strings.TrimSpace(request.Duration) == "-1" &&
+			(videoPayloadTaskType(request.Payload) == "edit" || seedanceModelName(request.Model))) {
+		return ErrInvalidRequest
+	}
+	if strings.TrimSpace(request.Duration) == "" && seedanceModelName(request.Model) {
+		return nil
+	}
 	return nil
+}
+
+func seedanceModelName(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(strings.ReplaceAll(strings.ReplaceAll(normalized, "-", ""), "_", ""), "seedance")
+}
+
+func videoPayloadHasMediaContent(payload []byte) bool {
+	var value map[string]any
+	if json.Unmarshal(payload, &value) != nil {
+		return false
+	}
+	items, ok := value["content"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(object["type"]))) {
+		case "image_url", "video_url", "audio_url", "draft_task":
+			return true
+		}
+	}
+	return false
+}
+
+func videoPayloadTaskType(payload []byte) string {
+	var value map[string]any
+	if json.Unmarshal(payload, &value) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(fmt.Sprint(value["omni_reference_task_type"])))
+}
+
+func videoPayloadAllowsOmittedDuration(payload []byte) bool {
+	return videoPayloadTaskType(payload) == "extend"
+}
+
+func validVideoFrames(payload []byte) bool {
+	var value map[string]any
+	if json.Unmarshal(payload, &value) != nil {
+		return false
+	}
+	raw, ok := value["frames"]
+	if !ok {
+		return false
+	}
+	frames, err := strconv.ParseInt(strings.TrimSpace(stringValue(raw)), 10, 64)
+	return err == nil && frames > 0 && frames <= 100000
+}
+
+func videoPromptFromPayload(payload []byte) string {
+	var value map[string]any
+	if json.Unmarshal(payload, &value) != nil {
+		return ""
+	}
+	var findText func(any) string
+	findText = func(current any) string {
+		switch item := current.(type) {
+		case map[string]any:
+			if text, ok := item["text"].(string); ok && strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+			for key, child := range item {
+				if key == "text" {
+					continue
+				}
+				if result := findText(child); result != "" {
+					return result
+				}
+			}
+		case []any:
+			for _, child := range item {
+				if result := findText(child); result != "" {
+					return result
+				}
+			}
+		}
+		return ""
+	}
+	return findText(value["content"])
 }
 
 func validVideoDuration(value string) bool {
@@ -1175,6 +1288,8 @@ func normalizeVideoStatus(value string) string {
 		return "completed"
 	case "failed", "error":
 		return "failed"
+	case "expired":
+		return "failed"
 	case "cancelled", "canceled":
 		return "cancelled"
 	case "running", "in_progress", "processing":
@@ -1201,6 +1316,11 @@ func extractVideoURI(data []byte) string {
 	var value map[string]any
 	if json.Unmarshal(data, &value) != nil {
 		return ""
+	}
+	for _, key := range []string{"video_url", "videoUrl", "file_url", "fileUrl"} {
+		if result := findStringKey(value, key); result != "" {
+			return result
+		}
 	}
 	if uri := findStringKey(value, "uri"); uri != "" {
 		return uri
@@ -1288,7 +1408,10 @@ func videoEstimatedMetrics(request VideoCreateRequest) billing.MeteredUsage {
 			}
 		}
 	}
-	if seconds == "" {
+	if seconds == "" || strings.TrimSpace(seconds) == "-1" {
+		return billing.MeteredUsage{}
+	}
+	if parsed, err := strconv.ParseFloat(seconds, 64); err != nil || parsed <= 0 {
 		return billing.MeteredUsage{}
 	}
 	return billing.MeteredUsage{"output_seconds": seconds}

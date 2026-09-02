@@ -35,6 +35,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  APIEndpoint,
+  APIEndpointFormState,
   AdminSection,
   BillingAccount,
   ChannelSummary,
@@ -93,7 +95,7 @@ interface AdminConsoleProps {
   channelsBusy: boolean;
   channelsMessage: LoginMessage;
   refreshChannels: (showPending?: boolean) => Promise<void>;
-  openCreateChannel: (provider?: "openai" | "anthropic" | "grok" | "gemini") => void;
+  openCreateChannel: (provider?: "openai" | "anthropic" | "grok" | "gemini" | "volcengine") => void;
   openEditChannel: (channel: ChannelSummary) => void;
   changeChannelStatus: (channel: ChannelSummary, nextStatus: "active" | "disabled") => Promise<void>;
   deleteChannel: (channel: ChannelSummary) => Promise<void>;
@@ -173,6 +175,19 @@ interface AdminConsoleProps {
   siteBusy: boolean;
   siteMessage: LoginMessage;
   saveSiteSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  apiEndpoints: APIEndpoint[];
+  apiEndpointFormOpen: boolean;
+  apiEndpointForm: APIEndpointFormState;
+  setAPIEndpointForm: React.Dispatch<React.SetStateAction<APIEndpointFormState>>;
+  apiEndpointBusy: boolean;
+  apiEndpointActionBusy: string;
+  apiEndpointMessage: LoginMessage;
+  openCreateAPIEndpoint: () => void;
+  openEditAPIEndpoint: (endpoint: APIEndpoint) => void;
+  closeAPIEndpointForm: () => void;
+  saveAPIEndpoint: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  toggleAPIEndpoint: (endpoint: APIEndpoint) => Promise<void>;
+  deleteAPIEndpoint: (endpoint: APIEndpoint) => Promise<void>;
   smtpForm: SMTPSettingsForm;
   setSmtpForm: React.Dispatch<React.SetStateAction<SMTPSettingsForm>>;
 	emailSettings: EmailSettings | null;
@@ -344,6 +359,19 @@ export function AdminConsole({
   siteBusy,
   siteMessage,
   saveSiteSettings,
+  apiEndpoints,
+  apiEndpointFormOpen,
+  apiEndpointForm,
+  setAPIEndpointForm,
+  apiEndpointBusy,
+  apiEndpointActionBusy,
+  apiEndpointMessage,
+  openCreateAPIEndpoint,
+  openEditAPIEndpoint,
+  closeAPIEndpointForm,
+  saveAPIEndpoint,
+  toggleAPIEndpoint,
+  deleteAPIEndpoint,
   smtpForm,
   setSmtpForm,
 	emailSettings,
@@ -1576,6 +1604,19 @@ export function AdminConsole({
             siteBusy={siteBusy}
             siteMessage={siteMessage}
             saveSiteSettings={saveSiteSettings}
+            apiEndpoints={apiEndpoints}
+            apiEndpointFormOpen={apiEndpointFormOpen}
+            apiEndpointForm={apiEndpointForm}
+            setAPIEndpointForm={setAPIEndpointForm}
+            apiEndpointBusy={apiEndpointBusy}
+            apiEndpointActionBusy={apiEndpointActionBusy}
+            apiEndpointMessage={apiEndpointMessage}
+            openCreateAPIEndpoint={openCreateAPIEndpoint}
+            openEditAPIEndpoint={openEditAPIEndpoint}
+            closeAPIEndpointForm={closeAPIEndpointForm}
+            saveAPIEndpoint={saveAPIEndpoint}
+            toggleAPIEndpoint={toggleAPIEndpoint}
+            deleteAPIEndpoint={deleteAPIEndpoint}
 	            smtpForm={smtpForm}
 	            setSmtpForm={setSmtpForm}
 	            emailSettings={emailSettings}
@@ -1680,6 +1721,8 @@ function providerDisplayName(provider: string) {
       return "Grok";
     case "gemini":
       return "Gemini";
+    case "volcengine":
+      return "Volcano Ark";
     default:
       return provider || "Unknown provider";
   }

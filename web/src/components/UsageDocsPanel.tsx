@@ -20,15 +20,17 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Language } from "@/types";
+import { Language, PublicAPIEndpoint } from "@/types";
 import { cn } from "@/lib/utils";
+import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 
 interface UsageDocsPanelProps {
   language: Language;
   routeTo: (target: string) => void;
+  apiEndpoints: PublicAPIEndpoint[];
 }
 
-type CodeTab = "python" | "node" | "curl";
+type CodeTab = "python" | "node" | "curl" | "anthropic";
 
 const sectionIDs = [
   "getting-started",
@@ -92,9 +94,12 @@ function InfoStep({ number, icon: Icon, title, body, tone }: { number: string; i
   );
 }
 
-export function UsageDocsPanel({ language, routeTo }: UsageDocsPanelProps) {
+export function UsageDocsPanel({ language, routeTo, apiEndpoints }: UsageDocsPanelProps) {
   const zh = language === "zh";
-  const gatewayBaseURL = window.location.origin + "/v1";
+  const configuredEndpoint = apiEndpoints[0];
+  const endpointURLs = configuredEndpoint ? resolveAPIEndpointURLs(configuredEndpoint) : { root: "", openai: "", anthropic: "" };
+  const gatewayBaseURL = endpointURLs.openai || "YOUR_OPENAI_BASE_URL";
+  const anthropicBaseURL = endpointURLs.anthropic || "YOUR_ANTHROPIC_BASE_URL";
   const [activeTab, setActiveTab] = useState<CodeTab>("python");
   const [copied, setCopied] = useState("");
 
@@ -132,8 +137,24 @@ const message = response.choices[0].message.content;`,
     "model": "YOUR_MODEL_NAME",
     "messages": [{"role": "user", "content": "你好"}]
   }'`,
+    anthropic: `import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  apiKey: process.env.GATEWAY_API_KEY,
+  baseURL: "ANTHROPIC_BASE_URL",
+});
+
+const message = await client.messages.create({
+  model: "YOUR_MODEL_NAME",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello AI Gateway!" }],
+});
+
+console.log(message.content);`,
   }), []);
-  const activeCode = codeSamples[activeTab].replaceAll("GATEWAY_BASE_URL", gatewayBaseURL);
+  const activeCode = codeSamples[activeTab]
+    .replaceAll("GATEWAY_BASE_URL", gatewayBaseURL)
+    .replaceAll("ANTHROPIC_BASE_URL", anthropicBaseURL);
 
   const copyCode = async (id: string, value: string) => {
     try {
@@ -246,14 +267,23 @@ const message = response.choices[0].message.content;`,
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/30"><div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Base URL</div><code className="mt-2 block break-all text-xs text-indigo-700 dark:text-indigo-300">{gatewayBaseURL}</code><p className="mt-2 text-[11px] leading-5 text-slate-500">{zh ? "必须以 /v1 作为 API 前缀。" : "Use /v1 as the API prefix."}</p></div>
+                  <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.06] p-4 dark:border-indigo-400/20">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-indigo-700 dark:text-indigo-300">OpenAI-compatible <span className="rounded-full border border-indigo-500/25 px-2 py-0.5 text-[10px] tracking-normal">{zh ? "推荐" : "Recommended"}</span></div>
+                    <code className="mt-2 block break-all text-xs text-indigo-700 dark:text-indigo-300">{gatewayBaseURL}</code>
+                    <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{configuredEndpoint ? (zh ? "用于 OpenAI SDK、兼容客户端和大多数第三方工具。" : "Use this with the OpenAI SDK, compatible clients, and most third-party tools.") : (zh ? "管理员尚未配置公开终端，请先在 API 令牌页面查看可用地址。" : "The administrator has not configured a public endpoint yet. Check the API token page first.")}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/[0.06] p-4 dark:border-cyan-400/20">
+                    <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-700 dark:text-cyan-300">Anthropic / Claude</div>
+                    <code className="mt-2 block break-all text-xs text-cyan-700 dark:text-cyan-300">{anthropicBaseURL}</code>
+                    <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{zh ? "使用 Anthropic SDK 时填写根地址；服务端同时兼容 /v1/messages 和 /messages。" : "Use the gateway root with the Anthropic SDK. The server accepts both /v1/messages and /messages."}</p>
+                  </div>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/30"><div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Authorization</div><code className="mt-2 block break-all text-xs text-emerald-700 dark:text-emerald-300">Bearer YOUR_GATEWAY_TOKEN</code><p className="mt-2 text-[11px] leading-5 text-slate-500">{zh ? "完整令牌只在创建成功时显示一次。" : "The full token is shown only once after creation."}</p></div>
                 </div>
                 <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 dark:border-slate-800">
-                  {(["python", "node", "curl"] as CodeTab[]).map((tab) => <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", activeTab === tab ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800")}>{tab === "python" ? "Python" : tab === "node" ? "Node.js" : "cURL"}</button>)}
+                  {(["python", "node", "curl", "anthropic"] as CodeTab[]).map((tab) => <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={cn("rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors", activeTab === tab ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800")}>{tab === "python" ? "Python" : tab === "node" ? "Node.js" : tab === "curl" ? "cURL" : "Anthropic"}</button>)}
                 </div>
                 <CodeBlock language={language} code={activeCode} copied={copied === `code-${activeTab}`} onCopy={() => void copyCode(`code-${activeTab}`, activeCode)} />
-                <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{zh ? "先把 YOUR_MODEL_NAME 替换为模型广场或 GET /v1/models 返回的模型 ID，不要填写上游真实模型别名，除非管理员就是这样配置的。" : "Replace YOUR_MODEL_NAME with a model ID from the Model Plaza or GET /v1/models. Do not use the vendor alias unless the administrator configured that exact mapping."}</p>
+                <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{zh ? "Base URL 建议直接复制 API 令牌页面的对应地址。平台会兼容根地址、/v1 以及客户端误拼出的 /v1/v1，不需要客户手动修改请求路径。" : "Copy the matching address from the API token page. The gateway accepts the root, /v1, and an accidental /v1/v1 prefix, so clients do not need manual path workarounds."}</p>
               </CardContent>
             </Card>
           </section>
