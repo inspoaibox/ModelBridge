@@ -3259,6 +3259,7 @@ func adminModelStatusHandler(service groups.Service) http.Handler {
 		}
 		report, err := lister.ListAdminModelStatuses(r.Context())
 		if err != nil {
+			log.Printf("admin model status request_id=%s failed: %v", r.Header.Get("X-Request-ID"), err)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "MODEL_STATUS_UNAVAILABLE"})
 			return
 		}

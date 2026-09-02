@@ -301,13 +301,13 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		       mm.group_id::text, mm.code, mm.name, mm.status,
 		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.updated_at,
 		       mm.model_name, mm.provider,
-		       COUNT(cm.id)::int,
-		       COUNT(cm.id) FILTER (WHERE cm.enabled = true
+		       COUNT(cm.model_id)::int,
+		       COUNT(cm.model_id) FILTER (WHERE cm.enabled = true
 		           AND c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
-		       COUNT(cm.id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable'))::int,
-		       COUNT(cm.id) FILTER (WHERE cm.last_success_at IS NOT NULL
+		       COUNT(cm.model_id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable'))::int,
+		       COUNT(cm.model_id) FILTER (WHERE cm.last_success_at IS NOT NULL
 		           OR cm.last_failure_at IS NOT NULL)::int,
 		       COALESCE(MAX(cm.consecutive_failures), 0)::int,
 		       MAX(cm.last_success_at), MAX(cm.last_failure_at),
