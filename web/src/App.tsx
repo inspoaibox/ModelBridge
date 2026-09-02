@@ -3101,6 +3101,7 @@ export default function App() {
       };
       if (!response.ok) throw new Error("official price sync failed");
       await refreshBilling();
+      await refreshModelCatalog(false);
       setBillingMessage({
         kind: "success",
         text: `${t("billingOfficialSyncSuccess")} ${result.models_matched || 0} ${t("billingOfficialMatched")}，${result.models_updated || 0} ${t("billingOfficialUpdated")}，${result.unmatched?.length || 0} ${t("billingOfficialUnmatched")}。`,
