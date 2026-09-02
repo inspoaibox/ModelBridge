@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	mathrand "math/rand"
 	"net/http"
 	"strconv"
@@ -211,35 +212,37 @@ type Service struct {
 }
 
 type Channel struct {
-	ID                string
-	Name              string
-	Provider          string
-	BaseURL           string
-	CredentialRef     string
-	ModelName         string
-	UpstreamModelName string
-	Priority          int
-	Weight            int
+	ID                   string
+	Name                 string
+	Provider             string
+	BaseURL              string
+	CredentialRef        string
+	ModelName            string
+	UpstreamModelName    string
+	UpstreamCostDiscount string
+	Priority             int
+	Weight               int
 }
 
 type ChannelSummary struct {
-	ID                  string                `json:"id"`
-	Name                string                `json:"name"`
-	Provider            string                `json:"provider"`
-	BaseURL             string                `json:"base_url"`
-	CredentialRef       string                `json:"credential_ref"`
-	CredentialMode      string                `json:"credential_mode"`
-	CredentialPreview   string                `json:"credential_preview"`
-	HasCredential       bool                  `json:"has_credential"`
-	Status              string                `json:"status"`
-	Priority            int                   `json:"priority"`
-	Weight              int                   `json:"weight"`
-	ConsecutiveFailures int                   `json:"consecutive_failures"`
-	AutoDisabledUntil   *time.Time            `json:"auto_disabled_until,omitempty"`
-	LastFailureStatus   *int                  `json:"last_failure_status,omitempty"`
-	Models              []ChannelModelSummary `json:"models"`
-	CreatedAt           time.Time             `json:"created_at"`
-	UpdatedAt           time.Time             `json:"updated_at"`
+	ID                   string                `json:"id"`
+	Name                 string                `json:"name"`
+	Provider             string                `json:"provider"`
+	BaseURL              string                `json:"base_url"`
+	CredentialRef        string                `json:"credential_ref"`
+	CredentialMode       string                `json:"credential_mode"`
+	CredentialPreview    string                `json:"credential_preview"`
+	HasCredential        bool                  `json:"has_credential"`
+	Status               string                `json:"status"`
+	UpstreamCostDiscount string                `json:"upstream_cost_discount"`
+	Priority             int                   `json:"priority"`
+	Weight               int                   `json:"weight"`
+	ConsecutiveFailures  int                   `json:"consecutive_failures"`
+	AutoDisabledUntil    *time.Time            `json:"auto_disabled_until,omitempty"`
+	LastFailureStatus    *int                  `json:"last_failure_status,omitempty"`
+	Models               []ChannelModelSummary `json:"models"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
 }
 
 type ChannelModelSummary struct {
@@ -275,14 +278,15 @@ type DiscoveredModel struct {
 }
 
 type ChannelMutation struct {
-	Name     string                 `json:"name"`
-	Provider string                 `json:"provider"`
-	BaseURL  string                 `json:"base_url"`
-	APIKey   string                 `json:"api_key,omitempty"`
-	Status   string                 `json:"status,omitempty"`
-	Priority int                    `json:"priority"`
-	Weight   int                    `json:"weight"`
-	Models   []ChannelModelMutation `json:"models"`
+	Name                 string                 `json:"name"`
+	Provider             string                 `json:"provider"`
+	BaseURL              string                 `json:"base_url"`
+	APIKey               string                 `json:"api_key,omitempty"`
+	Status               string                 `json:"status,omitempty"`
+	UpstreamCostDiscount string                 `json:"upstream_cost_discount,omitempty"`
+	Priority             int                    `json:"priority"`
+	Weight               int                    `json:"weight"`
+	Models               []ChannelModelMutation `json:"models"`
 }
 
 type ChannelModelMutation struct {
@@ -544,6 +548,11 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	m.BaseURL = strings.TrimSpace(m.BaseURL)
 	m.APIKey = strings.TrimSpace(m.APIKey)
 	m.Status = normalizeChannelStatus(m.Status)
+	if normalized, ok := normalizeUpstreamCostDiscount(m.UpstreamCostDiscount); ok {
+		m.UpstreamCostDiscount = normalized
+	} else {
+		return ChannelMutation{}, ErrInvalidRequest
+	}
 	m.Models = cleanChannelModels(m.Models)
 
 	if m.Name == "" || !supportedProvider(m.Provider) || m.BaseURL == "" {
@@ -559,6 +568,27 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 		return ChannelMutation{}, ErrInvalidRequest
 	}
 	return m, nil
+}
+
+func normalizeUpstreamCostDiscount(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "1"
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && char != '.' {
+			return "", false
+		}
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || (len(parts) == 2 && len(parts[1]) > 6) {
+		return "", false
+	}
+	rat, ok := new(big.Rat).SetString(value)
+	if !ok || rat.Sign() < 0 || rat.Cmp(new(big.Rat).SetInt64(1000)) > 0 {
+		return "", false
+	}
+	return rat.FloatString(6), true
 }
 
 func (s *Service) ChatCompletions(
@@ -662,6 +692,7 @@ func (s *Service) ChatCompletions(
 				ChannelID:             channel.ID,
 				GroupID:               groupPolicy.ID,
 				GroupMultiplier:       groupPolicy.Multiplier,
+				UpstreamCostDiscount:  channel.UpstreamCostDiscount,
 				EstimatedInputTokens:  estimateInputTokens(request),
 				EstimatedOutputTokens: estimateOutputTokens(request),
 				Endpoint:              metadata.Endpoint,
@@ -682,22 +713,23 @@ func (s *Service) ChatCompletions(
 		if !billingEnabled && freeRequestID == "" {
 			if recorder, ok := s.billing.(billing.FreeRequestRecorder); ok {
 				freeRequestID, err = recorder.StartFreeRequest(ctx, billing.Request{
-					RequestID:       request.RequestID,
-					IdempotencyKey:  scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey),
-					TenantID:        principal.TenantID,
-					ProjectID:       principalProjectID(principal),
-					TokenID:         principal.TokenID,
-					Model:           request.Model,
-					Provider:        canonicalProvider(channel.Provider),
-					ChannelID:       channel.ID,
-					GroupID:         groupPolicy.ID,
-					GroupMultiplier: groupPolicy.Multiplier,
-					Endpoint:        metadata.Endpoint,
-					ClientIP:        metadata.ClientIP,
-					RequestType:     requestType,
-					ReasoningEffort: request.ReasoningEffort,
-					PricingTier:     request.ServiceTier,
-					BillingType:     groupPolicy.BillingType,
+					RequestID:            request.RequestID,
+					IdempotencyKey:       scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey),
+					TenantID:             principal.TenantID,
+					ProjectID:            principalProjectID(principal),
+					TokenID:              principal.TokenID,
+					Model:                request.Model,
+					Provider:             canonicalProvider(channel.Provider),
+					ChannelID:            channel.ID,
+					GroupID:              groupPolicy.ID,
+					GroupMultiplier:      groupPolicy.Multiplier,
+					UpstreamCostDiscount: channel.UpstreamCostDiscount,
+					Endpoint:             metadata.Endpoint,
+					ClientIP:             metadata.ClientIP,
+					RequestType:          requestType,
+					ReasoningEffort:      request.ReasoningEffort,
+					PricingTier:          request.ServiceTier,
+					BillingType:          groupPolicy.BillingType,
 				})
 				if err != nil {
 					return ChatCompletionResponse{}, err

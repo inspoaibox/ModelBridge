@@ -190,6 +190,7 @@ function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini"
     base_url: defaultProviderBaseURL(provider),
     api_key: "",
     status: "active",
+    upstream_cost_discount: "1.000000",
     priority: 100,
     weight: 100,
     // Model mappings are explicit. A new channel must never inherit a
@@ -218,6 +219,7 @@ function channelFormFromSummary(channel: ChannelSummary): ChannelFormState {
         : channel.status === "disabled"
         ? "disabled"
         : "active",
+    upstream_cost_discount: channel.upstream_cost_discount || "1.000000",
     priority: channel.priority,
     weight: channel.weight,
     models:
@@ -3404,6 +3406,7 @@ export default function App() {
         base_url: channelForm.base_url.trim(),
         api_key: channelForm.api_key.trim(),
         status: channelForm.status,
+        upstream_cost_discount: channelForm.upstream_cost_discount.trim(),
         priority: Number(channelForm.priority),
         weight: Number(channelForm.weight),
         models,

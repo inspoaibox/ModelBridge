@@ -435,6 +435,7 @@ func (s *Service) startRelayBilling(
 		TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID,
 		Model: request.Model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID,
 		GroupID: policy.ID, GroupMultiplier: policy.Multiplier,
+		UpstreamCostDiscount: channel.UpstreamCostDiscount,
 		EstimatedInputTokens: estimateInputTokens(request), EstimatedOutputTokens: estimateOutputTokens(request),
 		Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType,
 		ReasoningEffort: request.ReasoningEffort, PricingTier: request.ServiceTier, BillingType: policy.BillingType,
@@ -676,8 +677,9 @@ func (s *Service) CreateEmbeddings(ctx context.Context, principal *auth.Principa
 			RequestID: request.RequestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, request.IdempotencyKey), TenantID: principal.TenantID,
 			ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: request.Model,
 			Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID,
-			GroupMultiplier: policy.Multiplier, EstimatedInputTokens: estimateEmbeddingTokens(request),
-			Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: metadata.RequestType,
+			GroupMultiplier: policy.Multiplier, UpstreamCostDiscount: channel.UpstreamCostDiscount,
+			EstimatedInputTokens: estimateEmbeddingTokens(request),
+			Endpoint:             metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: metadata.RequestType,
 			BillingType: policy.BillingType,
 		}
 		if reservation.ID == "" && freeID == "" {

@@ -3677,6 +3677,13 @@ func consoleUsageHandler(service billing.AdminService) http.Handler {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "USAGE_REPORT_UNAVAILABLE"})
 			return
 		}
+		// Upstream cost and discount are internal margin data. Keep the shared
+		// report query, but strip those fields before returning tenant usage.
+		for index := range report.Records {
+			report.Records[index].UpstreamCost = ""
+			report.Records[index].EstimatedUpstreamCost = ""
+			report.Records[index].UpstreamCostDiscount = ""
+		}
 		writeJSON(w, http.StatusOK, report)
 	})
 }

@@ -310,6 +310,7 @@ export interface ChannelSummary {
   credential_preview: string;
   has_credential: boolean;
   status: string;
+  upstream_cost_discount: string;
   priority: number;
   weight: number;
   consecutive_failures?: number;
@@ -493,6 +494,7 @@ export interface ChannelFormState {
   base_url: string;
   api_key: string;
   status: "active" | "disabled" | "draining";
+  upstream_cost_discount: string;
   priority: number;
   weight: number;
   models: ChannelFormModel[];
@@ -622,6 +624,9 @@ export interface UsageRecord {
   total_tokens: number;
   cost: string;
   estimated_cost: string;
+  upstream_cost?: string;
+  estimated_upstream_cost?: string;
+  upstream_cost_discount?: string;
   currency: string;
   latency_ms: number;
   started_at: string;

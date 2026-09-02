@@ -12,41 +12,44 @@ import (
 )
 
 type UsageRecord struct {
-	ID              string         `json:"id"`
-	RequestID       string         `json:"request_id"`
-	TokenID         string         `json:"token_id"`
-	TokenName       string         `json:"token_name"`
-	TokenPrefix     string         `json:"token_prefix"`
-	TenantID        string         `json:"tenant_id"`
-	TenantName      string         `json:"tenant_name"`
-	ModelID         string         `json:"model_id"`
-	Provider        string         `json:"provider"`
-	Model           string         `json:"model"`
-	ReasoningEffort string         `json:"reasoning_effort"`
-	Endpoint        string         `json:"endpoint"`
-	ClientIP        string         `json:"client_ip"`
-	GroupID         string         `json:"group_id"`
-	GroupCode       string         `json:"group_code"`
-	GroupName       string         `json:"group_name"`
-	RequestType     string         `json:"request_type"`
-	BillingType     string         `json:"billing_type"`
-	Status          string         `json:"status"`
-	FailureReason   string         `json:"failure_reason,omitempty"`
-	InputTokens     int64          `json:"input_tokens"`
-	OutputTokens    int64          `json:"output_tokens"`
-	CachedInput     int64          `json:"cached_input_tokens"`
-	ReasoningTokens int64          `json:"reasoning_tokens"`
-	TotalTokens     int64          `json:"total_tokens"`
-	Cost            string         `json:"cost"`
-	EstimatedCost   string         `json:"estimated_cost"`
-	Currency        string         `json:"currency"`
-	LatencyMS       int64          `json:"latency_ms"`
-	StartedAt       time.Time      `json:"started_at"`
-	FinishedAt      *time.Time     `json:"finished_at,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UsageMetrics    MeteredUsage   `json:"usage_metrics,omitempty"`
-	ChargeBreakdown []ChargeLine   `json:"charge_breakdown,omitempty"`
-	PriceSnapshot   map[string]any `json:"price_snapshot,omitempty"`
+	ID                    string         `json:"id"`
+	RequestID             string         `json:"request_id"`
+	TokenID               string         `json:"token_id"`
+	TokenName             string         `json:"token_name"`
+	TokenPrefix           string         `json:"token_prefix"`
+	TenantID              string         `json:"tenant_id"`
+	TenantName            string         `json:"tenant_name"`
+	ModelID               string         `json:"model_id"`
+	Provider              string         `json:"provider"`
+	Model                 string         `json:"model"`
+	ReasoningEffort       string         `json:"reasoning_effort"`
+	Endpoint              string         `json:"endpoint"`
+	ClientIP              string         `json:"client_ip"`
+	GroupID               string         `json:"group_id"`
+	GroupCode             string         `json:"group_code"`
+	GroupName             string         `json:"group_name"`
+	RequestType           string         `json:"request_type"`
+	BillingType           string         `json:"billing_type"`
+	Status                string         `json:"status"`
+	FailureReason         string         `json:"failure_reason,omitempty"`
+	InputTokens           int64          `json:"input_tokens"`
+	OutputTokens          int64          `json:"output_tokens"`
+	CachedInput           int64          `json:"cached_input_tokens"`
+	ReasoningTokens       int64          `json:"reasoning_tokens"`
+	TotalTokens           int64          `json:"total_tokens"`
+	Cost                  string         `json:"cost"`
+	EstimatedCost         string         `json:"estimated_cost"`
+	UpstreamCost          string         `json:"upstream_cost,omitempty"`
+	EstimatedUpstreamCost string         `json:"estimated_upstream_cost,omitempty"`
+	UpstreamCostDiscount  string         `json:"upstream_cost_discount,omitempty"`
+	Currency              string         `json:"currency"`
+	LatencyMS             int64          `json:"latency_ms"`
+	StartedAt             time.Time      `json:"started_at"`
+	FinishedAt            *time.Time     `json:"finished_at,omitempty"`
+	CreatedAt             time.Time      `json:"created_at"`
+	UsageMetrics          MeteredUsage   `json:"usage_metrics,omitempty"`
+	ChargeBreakdown       []ChargeLine   `json:"charge_breakdown,omitempty"`
+	PriceSnapshot         map[string]any `json:"price_snapshot,omitempty"`
 }
 
 type UsageQuery struct {
@@ -255,6 +258,8 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		       COALESCE(grp.billing_type, CASE WHEN COALESCE(mr.price_version_id, mr.official_price_version_id) IS NULL THEN 'free' ELSE 'prepaid' END),
 		       mr.status, COALESCE(mr.failure_reason, ''), mr.input_tokens, mr.output_tokens, mr.cached_input_tokens,
 			   mr.reasoning_tokens, mr.settled_amount::text, mr.estimated_amount::text,
+			   mr.upstream_cost::text, mr.estimated_upstream_cost::text,
+			   mr.upstream_cost_discount::text,
 			   mr.currency, mr.latency_ms, mr.started_at, mr.finished_at, mr.created_at,
 			   mr.usage_metrics_json, mr.charge_breakdown_json, mr.price_snapshot_json
 		FROM model_requests mr
@@ -280,7 +285,9 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 			&record.ReasoningEffort, &record.Endpoint, &record.ClientIP, &record.GroupID,
 			&record.GroupCode, &record.GroupName, &record.RequestType, &record.BillingType,
 			&record.Status, &record.FailureReason, &record.InputTokens, &record.OutputTokens, &record.CachedInput,
-			&record.ReasoningTokens, &record.Cost, &record.EstimatedCost, &record.Currency,
+			&record.ReasoningTokens, &record.Cost, &record.EstimatedCost,
+			&record.UpstreamCost, &record.EstimatedUpstreamCost, &record.UpstreamCostDiscount,
+			&record.Currency,
 			&record.LatencyMS, &record.StartedAt, &finishedAt, &record.CreatedAt,
 			&usageMetricsRaw, &chargeBreakdownRaw, &priceSnapshotRaw,
 		); err != nil {
@@ -300,6 +307,9 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		record.Currency = strings.ToUpper(strings.TrimSpace(record.Currency))
 		record.Cost = normalizeDecimalText(record.Cost)
 		record.EstimatedCost = normalizeDecimalText(record.EstimatedCost)
+		record.UpstreamCost = normalizeDecimalText(record.UpstreamCost)
+		record.EstimatedUpstreamCost = normalizeDecimalText(record.EstimatedUpstreamCost)
+		record.UpstreamCostDiscount = normalizeDecimalText(record.UpstreamCostDiscount)
 		if finishedAt.Valid {
 			value := finishedAt.Time
 			record.FinishedAt = &value

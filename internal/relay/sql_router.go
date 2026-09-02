@@ -230,7 +230,8 @@ func (r *SQLChannelRouter) selectCandidates(ctx context.Context, model, groupID 
 	}
 	query := `
 		SELECT c.id::text, c.name, c.provider, c.base_url, c.credential_ref,
-		       m.model_name, cm.upstream_model_name, c.priority, c.weight
+		       m.model_name, cm.upstream_model_name, c.upstream_cost_discount::text,
+		       c.priority, c.weight
 		FROM models m
 		JOIN channel_models cm ON cm.model_id = m.id
 		JOIN channels c ON c.id = cm.channel_id
@@ -275,6 +276,7 @@ func (r *SQLChannelRouter) selectCandidates(ctx context.Context, model, groupID 
 			&channel.CredentialRef,
 			&channel.ModelName,
 			&channel.UpstreamModelName,
+			&channel.UpstreamCostDiscount,
 			&channel.Priority,
 			&channel.Weight,
 		); err != nil {
@@ -358,14 +360,14 @@ func (r *SQLChannelRouter) CreateChannel(
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO channels (
-			id, name, provider, base_url, credential_ref, status, priority, weight,
+			id, name, provider, base_url, credential_ref, status, upstream_cost_discount, priority, weight,
 			created_by, updated_by
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8,
-			NULLIF($9, '')::uuid, NULLIF($9, '')::uuid
+			$1, $2, $3, $4, $5, $6, $7::numeric, $8, $9,
+			NULLIF($10, '')::uuid, NULLIF($10, '')::uuid
 		)
 	`, channelID, request.Name, request.Provider, request.BaseURL, "pending:"+channelID,
-		request.Status, request.Priority, request.Weight, actorID)
+		request.Status, request.UpstreamCostDiscount, request.Priority, request.Weight, actorID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
@@ -454,18 +456,19 @@ func (r *SQLChannelRouter) UpdateChannel(
 		    base_url = $4,
 		    credential_ref = $5,
 		    status = $6,
+		    upstream_cost_discount = $7::numeric,
 		    consecutive_failures = CASE WHEN $6 = 'active' THEN 0 ELSE consecutive_failures END,
 		    auto_disabled_until = CASE WHEN $6 = 'active' THEN NULL ELSE auto_disabled_until END,
 		    last_failure_status = CASE WHEN $6 = 'active' THEN NULL ELSE last_failure_status END,
 		    last_success_at = CASE WHEN $6 = 'active' THEN NULL ELSE last_success_at END,
-		    priority = $7,
-		    weight = $8,
-		    updated_by = NULLIF($9, '')::uuid,
+		    priority = $8,
+		    weight = $9,
+		    updated_by = NULLIF($10, '')::uuid,
 		    updated_at = now()
 		WHERE id = $1
 		  AND deleted_at IS NULL
 	`, channelID, request.Name, request.Provider, request.BaseURL, credentialRef,
-		request.Status, request.Priority, request.Weight, actorID)
+		request.Status, request.UpstreamCostDiscount, request.Priority, request.Weight, actorID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
@@ -786,6 +789,7 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 			&channel.CredentialPreview,
 			&channel.HasCredential,
 			&channel.Status,
+			&channel.UpstreamCostDiscount,
 			&channel.Priority,
 			&channel.Weight,
 			&channel.ConsecutiveFailures,
@@ -838,7 +842,7 @@ func channelListQuery(where string) string {
 		           WHEN c.credential_ref LIKE 'secret:%' THEN cs.id IS NOT NULL
 		           ELSE c.credential_ref <> ''
 		       END AS has_credential,
-		       c.status, c.priority, c.weight, c.consecutive_failures,
+		       c.status, c.upstream_cost_discount::text, c.priority, c.weight, c.consecutive_failures,
 		       c.auto_disabled_until, c.last_failure_status,
 		       c.created_at, c.updated_at,
 		       COALESCE(
@@ -863,7 +867,7 @@ func channelListQuery(where string) string {
 		WHERE ` + where + `
 		GROUP BY c.id, c.name, c.provider, c.base_url, c.credential_ref,
 		         cs.id, cs.secret_prefix, cs.secret_suffix,
-		         c.status, c.priority, c.weight, c.consecutive_failures,
+		         c.status, c.upstream_cost_discount, c.priority, c.weight, c.consecutive_failures,
 		         c.auto_disabled_until, c.last_failure_status,
 		         c.created_at, c.updated_at
 		ORDER BY c.priority DESC, c.provider ASC, c.name ASC

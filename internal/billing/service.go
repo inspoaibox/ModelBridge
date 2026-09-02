@@ -81,6 +81,7 @@ type Request struct {
 	ChannelID             string
 	GroupID               string
 	GroupMultiplier       string
+	UpstreamCostDiscount  string
 	EstimatedInputTokens  int64
 	EstimatedOutputTokens int64
 	EstimatedMetrics      MeteredUsage
@@ -995,6 +996,11 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		return Reservation{}, err
 	}
 	request.GroupMultiplier = groupMultiplier
+	upstreamCostDiscount, err := normalizeUpstreamCostDiscount(request.UpstreamCostDiscount)
+	if err != nil {
+		return Reservation{}, err
+	}
+	request.UpstreamCostDiscount = upstreamCostDiscount
 	if err := validateRequest(request); err != nil {
 		return Reservation{}, err
 	}
@@ -1047,10 +1053,58 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	if err != nil {
 		return Reservation{}, err
 	}
+	upstreamPrice, upstreamPriceBasis, err := resolveUpstreamPrice(
+		ctx, tx, modelID, currency, s.now(), price,
+	)
+	if err != nil {
+		return Reservation{}, err
+	}
+	upstreamEstimatedMetrics := addImplicitRequestMetric(
+		priceComponentsFor(upstreamPrice),
+		requestMetricsFor(request),
+		request.PricingTier,
+	)
+	upstreamEstimatedMetrics, err = prepareReservationMetrics(
+		priceComponentsFor(upstreamPrice),
+		upstreamEstimatedMetrics,
+		request.PricingTier,
+	)
+	if err != nil {
+		return Reservation{}, err
+	}
+	estimatedUpstreamCost, err := calculateUpstreamCost(
+		priceComponentsFor(upstreamPrice),
+		upstreamEstimatedMetrics,
+		upstreamPrice.MinimumCharge,
+		request.UpstreamCostDiscount,
+		request.PricingTier,
+	)
+	if err != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
+		// Official data can lag a newly introduced meter. The customer price
+		// remains the safe estimation fallback until the catalog is refreshed.
+		upstreamPrice = price
+		upstreamPriceBasis = "customer_price_fallback"
+		upstreamEstimatedMetrics = estimatedMetrics
+		estimatedUpstreamCost, err = calculateUpstreamCost(
+			priceComponentsFor(upstreamPrice),
+			upstreamEstimatedMetrics,
+			upstreamPrice.MinimumCharge,
+			request.UpstreamCostDiscount,
+			request.PricingTier,
+		)
+	}
+	if err != nil {
+		return Reservation{}, err
+	}
 	estimatedMetricsJSON := marshalJSON(estimatedMetrics, []byte(`{}`))
 	priceSnapshotValue := priceSnapshot(price)
 	priceSnapshotValue["pricing_tier"] = request.PricingTier
+	priceSnapshotValue["upstream_cost_discount"] = request.UpstreamCostDiscount
 	priceSnapshotJSON := marshalJSON(priceSnapshotValue, []byte(`{}`))
+	upstreamPriceSnapshotJSON := marshalJSON(
+		priceSnapshotWithBasis(upstreamPrice, upstreamPriceBasis),
+		[]byte(`{}`),
+	)
 
 	var accountID, accountCurrency string
 	err = tx.QueryRowContext(ctx, `
@@ -1095,19 +1149,24 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		INSERT INTO model_requests (
 			id, request_id, idempotency_key, tenant_id, project_id, token_id,
 			model_id, channel_id, price_version_id, official_price_version_id, group_id, group_multiplier,
+			upstream_cost_discount, estimated_upstream_cost, upstream_cost,
 			status, estimated_amount, currency, endpoint, client_ip,
-			request_type, reasoning_effort, price_snapshot_json, usage_metrics_json
+			request_type, reasoning_effort, price_snapshot_json,
+			upstream_price_snapshot_json, usage_metrics_json
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid,
 			NULLIF($9, '')::uuid, NULLIF($10, '')::uuid, NULLIF($11, '')::uuid,
-			$12::numeric, 'started', $13, $14, $15, $16, $17, $18,
-			$19::jsonb, $20::jsonb
+			$12::numeric, $13::numeric, $14::numeric,
+			$15::numeric, 'started', $16, $17, $18, $19, $20, $21,
+			$22::jsonb, $23::jsonb, $24::jsonb
 		)
 	`, modelRequestID, request.RequestID, request.IdempotencyKey,
 		request.TenantID, request.ProjectID, request.TokenID, modelID,
 		request.ChannelID, price.PriceVersionID, officialPriceVersionID(price), request.GroupID, request.GroupMultiplier,
+		request.UpstreamCostDiscount, estimatedUpstreamCost, "0",
 		reservedAmount, currency, request.Endpoint, request.ClientIP,
-		request.RequestType, request.ReasoningEffort, priceSnapshotJSON, []byte(`{}`))
+		request.RequestType, request.ReasoningEffort, priceSnapshotJSON,
+		upstreamPriceSnapshotJSON, []byte(`{}`))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Reservation{}, ErrDuplicateRequest
@@ -1151,6 +1210,11 @@ func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (str
 		return "", err
 	}
 	request.GroupMultiplier = groupMultiplier
+	upstreamCostDiscount, err := normalizeUpstreamCostDiscount(request.UpstreamCostDiscount)
+	if err != nil {
+		return "", err
+	}
+	request.UpstreamCostDiscount = upstreamCostDiscount
 	if strings.TrimSpace(request.RequestType) == "" {
 		request.RequestType = "sync"
 	}
@@ -1177,6 +1241,67 @@ func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (str
 	if err != nil {
 		return "", ErrModelNotFound
 	}
+	priceSnapshotJSON := []byte(`{}`)
+	upstreamPriceSnapshotJSON := []byte(`{}`)
+	estimatedUpstreamCost := "0"
+	if price, priceErr := resolvePrice(ctx, tx, request, modelID, currency, s.now()); priceErr == nil {
+		estimatedMetrics := requestMetricsFor(request)
+		estimatedMetrics, priceErr = prepareReservationMetrics(priceComponentsFor(price), estimatedMetrics, request.PricingTier)
+		if priceErr != nil {
+			return "", priceErr
+		}
+		upstreamPrice, upstreamPriceBasis, upstreamPriceErr := resolveUpstreamPrice(
+			ctx, tx, modelID, currency, s.now(), price,
+		)
+		if upstreamPriceErr != nil {
+			return "", upstreamPriceErr
+		}
+		upstreamEstimatedMetrics := addImplicitRequestMetric(
+			priceComponentsFor(upstreamPrice),
+			requestMetricsFor(request),
+			request.PricingTier,
+		)
+		upstreamEstimatedMetrics, priceErr = prepareReservationMetrics(
+			priceComponentsFor(upstreamPrice),
+			upstreamEstimatedMetrics,
+			request.PricingTier,
+		)
+		if priceErr != nil {
+			return "", priceErr
+		}
+		estimatedUpstreamCost, priceErr = calculateUpstreamCost(
+			priceComponentsFor(upstreamPrice),
+			upstreamEstimatedMetrics,
+			upstreamPrice.MinimumCharge,
+			request.UpstreamCostDiscount,
+			request.PricingTier,
+		)
+		if priceErr != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
+			upstreamPrice = price
+			upstreamPriceBasis = "customer_price_fallback"
+			upstreamEstimatedMetrics = estimatedMetrics
+			estimatedUpstreamCost, priceErr = calculateUpstreamCost(
+				priceComponentsFor(upstreamPrice),
+				upstreamEstimatedMetrics,
+				upstreamPrice.MinimumCharge,
+				request.UpstreamCostDiscount,
+				request.PricingTier,
+			)
+		}
+		if priceErr != nil {
+			return "", priceErr
+		}
+		snapshot := priceSnapshot(price)
+		snapshot["pricing_tier"] = request.PricingTier
+		snapshot["upstream_cost_discount"] = request.UpstreamCostDiscount
+		priceSnapshotJSON = marshalJSON(snapshot, []byte(`{}`))
+		upstreamPriceSnapshotJSON = marshalJSON(
+			priceSnapshotWithBasis(upstreamPrice, upstreamPriceBasis),
+			[]byte(`{}`),
+		)
+	} else if !errors.Is(priceErr, ErrPriceNotConfigured) {
+		return "", priceErr
+	}
 	modelRequestID, err := ids.New()
 	if err != nil {
 		return "", err
@@ -1184,18 +1309,23 @@ func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (str
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO model_requests (
 			id, request_id, idempotency_key, tenant_id, project_id, token_id,
-			model_id, channel_id, price_version_id, group_id, group_multiplier,
-			status, estimated_amount, currency, endpoint, client_ip,
-			request_type, reasoning_effort
+			model_id, channel_id,
+			group_id, group_multiplier, upstream_cost_discount,
+			estimated_upstream_cost, upstream_cost, status, estimated_amount,
+			currency, endpoint, client_ip, request_type, reasoning_effort,
+			price_snapshot_json, upstream_price_snapshot_json
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid,
-			NULL, NULLIF($9, '')::uuid, $10::numeric, 'started', 0, $11,
-			$12, $13, $14, $15
+			NULLIF($9, '')::uuid, $10::numeric, $11::numeric,
+			$12::numeric, $13::numeric, 'started', 0, $14,
+			$15, $16, $17, $18, $19::jsonb, $20::jsonb
 		)
 	`, modelRequestID, request.RequestID, request.IdempotencyKey,
 		request.TenantID, request.ProjectID, request.TokenID, modelID,
-		request.ChannelID, request.GroupID, request.GroupMultiplier, currency,
-		request.Endpoint, request.ClientIP, request.RequestType, request.ReasoningEffort)
+		request.ChannelID, request.GroupID, request.GroupMultiplier,
+		request.UpstreamCostDiscount, estimatedUpstreamCost, "0", currency,
+		request.Endpoint, request.ClientIP, request.RequestType,
+		request.ReasoningEffort, priceSnapshotJSON, upstreamPriceSnapshotJSON)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return "", ErrDuplicateRequest
@@ -1229,8 +1359,18 @@ func (s *SQLService) CompleteFreeRequest(ctx context.Context, modelRequestID str
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM model_requests WHERE id = $1 FOR UPDATE`, modelRequestID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+	var status, currency, upstreamCostDiscount string
+	var priceSnapshotRaw, upstreamPriceSnapshotRaw []byte
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, currency, upstream_cost_discount::text,
+		       price_snapshot_json, upstream_price_snapshot_json
+		FROM model_requests
+		WHERE id = $1
+		FOR UPDATE
+	`, modelRequestID).Scan(
+		&status, &currency, &upstreamCostDiscount,
+		&priceSnapshotRaw, &upstreamPriceSnapshotRaw,
+	); errors.Is(err, sql.ErrNoRows) {
 		return ErrReservationNotFound
 	} else if err != nil {
 		return err
@@ -1244,6 +1384,57 @@ func (s *SQLService) CompleteFreeRequest(ctx context.Context, modelRequestID str
 	rawUsage := usage.Raw
 	if len(rawUsage) == 0 {
 		rawUsage, _ = json.Marshal(usage)
+	}
+	upstreamCost := "0"
+	upstreamPriceSnapshotJSON := []byte(`{}`)
+	if upstreamPrice, priceErr := priceFromSnapshot(upstreamPriceSnapshotRaw, currency); priceErr == nil {
+		var snapshot struct {
+			PricingTier string `json:"pricing_tier"`
+		}
+		_ = json.Unmarshal(priceSnapshotRaw, &snapshot)
+		upstreamPriceSnapshotJSON = upstreamPriceSnapshotRaw
+		upstreamCost, priceErr = calculateUpstreamCost(
+			priceComponentsFor(upstreamPrice),
+			usage.Metrics,
+			upstreamPrice.MinimumCharge,
+			upstreamCostDiscount,
+			snapshot.PricingTier,
+		)
+		if priceErr != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
+			if customerPrice, customerPriceErr := priceFromSnapshot(priceSnapshotRaw, currency); customerPriceErr == nil {
+				upstreamPriceSnapshotJSON = marshalJSON(
+					priceSnapshotWithBasis(customerPrice, "customer_price_fallback"),
+					[]byte(`{}`),
+				)
+				upstreamCost, priceErr = calculateUpstreamCost(
+					priceComponentsFor(customerPrice),
+					usage.Metrics,
+					customerPrice.MinimumCharge,
+					upstreamCostDiscount,
+					snapshot.PricingTier,
+				)
+			}
+		}
+		if priceErr != nil && !errors.Is(priceErr, ErrPriceNotConfigured) {
+			return priceErr
+		}
+	} else if customerPrice, priceErr := priceFromSnapshot(priceSnapshotRaw, currency); priceErr == nil {
+		// Requests created before the upstream price snapshot migration only
+		// have the customer-facing price snapshot available.
+		upstreamPriceSnapshotJSON = marshalJSON(
+			priceSnapshotWithBasis(customerPrice, "customer_price_fallback"),
+			[]byte(`{}`),
+		)
+		upstreamCost, priceErr = calculateUpstreamCost(
+			priceComponentsFor(customerPrice),
+			usage.Metrics,
+			customerPrice.MinimumCharge,
+			upstreamCostDiscount,
+			"",
+		)
+		if priceErr != nil && !errors.Is(priceErr, ErrPriceNotConfigured) {
+			return priceErr
+		}
 	}
 	usageEventID, err := ids.New()
 	if err != nil {
@@ -1263,10 +1454,12 @@ func (s *SQLService) CompleteFreeRequest(ctx context.Context, modelRequestID str
 		UPDATE model_requests
 		SET status = 'settled', provider_request_id = NULLIF($2, ''),
 			input_tokens = $3, output_tokens = $4, cached_input_tokens = $5,
-			reasoning_tokens = $6, settled_amount = 0, finished_at = now(),
-			usage_metrics_json = $7::jsonb, charge_breakdown_json = $8::jsonb
+			reasoning_tokens = $6, settled_amount = 0, upstream_cost = $7::numeric,
+			finished_at = now(), usage_metrics_json = $8::jsonb,
+			charge_breakdown_json = $9::jsonb,
+			upstream_price_snapshot_json = $10::jsonb
 		WHERE id = $1 AND status = 'started'
-	`, modelRequestID, providerRequestID, usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens, usage.ReasoningTokens, usageMetricsJSON, chargeBreakdownJSON); err != nil {
+	`, modelRequestID, providerRequestID, usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens, usage.ReasoningTokens, upstreamCost, usageMetricsJSON, chargeBreakdownJSON, upstreamPriceSnapshotJSON); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1504,41 +1697,188 @@ func (s *SQLService) RebindRequestChannel(ctx context.Context, modelRequestID, c
 	if s == nil || s.db == nil {
 		return ErrUnavailable
 	}
-	if !ids.Valid(strings.TrimSpace(modelRequestID)) || !ids.Valid(strings.TrimSpace(channelID)) {
+	modelRequestID = strings.TrimSpace(modelRequestID)
+	channelID = strings.TrimSpace(channelID)
+	if !ids.Valid(modelRequestID) || !ids.Valid(channelID) {
 		return ErrInvalidRequest
 	}
-	// The public model can be backed by different model rows when a fallback
-	// crosses providers. Keep both the concrete model and channel aligned so
-	// free requests produce the same auditable record as paid reservations.
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE model_requests mr
-		SET channel_id = $2,
-		    model_id = target_model.id
-		FROM models current_model
-		JOIN channels target_channel
-		  ON target_channel.id = $2::uuid
-		 AND target_channel.status = 'active'
-		 AND target_channel.deleted_at IS NULL
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		currentModelID, currentModel                            string
+		targetModelID, targetProvider, targetCostDiscount       string
+		tenantID, projectID, tokenID, currency, groupMultiplier string
+		estimatedUpstreamCost                                   string
+		estimatedMetricsRaw, priceSnapshotRaw                   []byte
+		upstreamPriceSnapshotRaw                                []byte
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT mr.model_id::text, current_model.model_name,
+		       target_model.id::text, target_model.provider,
+		       c.upstream_cost_discount::text,
+		       mr.tenant_id::text, mr.project_id::text, mr.token_id::text, mr.currency,
+		       mr.group_multiplier::text,
+		       mr.estimated_upstream_cost::text, mr.usage_metrics_json,
+		       mr.price_snapshot_json, mr.upstream_price_snapshot_json
+		FROM model_requests mr
+		JOIN models current_model ON current_model.id = mr.model_id
+		JOIN channels c
+		  ON c.id = $2::uuid
+		 AND c.status = 'active'
+		 AND c.deleted_at IS NULL
 		JOIN channel_models target_mapping
-		  ON target_mapping.channel_id = target_channel.id
+		  ON target_mapping.channel_id = c.id
 		 AND target_mapping.enabled = true
 		JOIN models target_model
 		  ON target_model.id = target_mapping.model_id
 		 AND target_model.status = 'active'
 		 AND target_model.model_name = current_model.model_name
 		WHERE mr.id = $1
-		  AND mr.model_id = current_model.id
 		  AND mr.status = 'started'
-	`, modelRequestID, channelID)
+		FOR UPDATE OF mr
+	`, modelRequestID, channelID).Scan(
+		&currentModelID, &currentModel,
+		&targetModelID, &targetProvider,
+		&targetCostDiscount,
+		&tenantID, &projectID, &tokenID, &currency, &groupMultiplier,
+		&estimatedUpstreamCost,
+		&estimatedMetricsRaw, &priceSnapshotRaw, &upstreamPriceSnapshotRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrModelNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	priceSnapshotValue := map[string]any{}
+	if len(priceSnapshotRaw) > 0 && string(priceSnapshotRaw) != "null" {
+		_ = json.Unmarshal(priceSnapshotRaw, &priceSnapshotValue)
+	}
+	pricingTier := ""
+	if value, ok := priceSnapshotValue["pricing_tier"].(string); ok {
+		pricingTier = value
+	}
+
+	if targetModelID == currentModelID {
+		estimatedUpstreamCost = "0"
+		if customerPrice, priceErr := priceFromSnapshot(priceSnapshotRaw, ""); priceErr == nil {
+			var estimatedMetrics MeteredUsage
+			if len(estimatedMetricsRaw) > 0 && string(estimatedMetricsRaw) != "null" {
+				_ = json.Unmarshal(estimatedMetricsRaw, &estimatedMetrics)
+			}
+			upstreamPrice, upstreamPriceBasis, upstreamPriceErr := resolveUpstreamPrice(
+				ctx, tx, targetModelID, currency, s.now(), customerPrice,
+			)
+			if upstreamPriceErr != nil {
+				return upstreamPriceErr
+			}
+			estimatedUpstreamCost, priceErr = calculateUpstreamCost(
+				priceComponentsFor(upstreamPrice),
+				estimatedMetrics,
+				upstreamPrice.MinimumCharge,
+				targetCostDiscount,
+				pricingTier,
+			)
+			if priceErr != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
+				upstreamPrice = customerPrice
+				upstreamPriceBasis = "customer_price_fallback"
+				estimatedUpstreamCost, priceErr = calculateUpstreamCost(
+					priceComponentsFor(upstreamPrice),
+					estimatedMetrics,
+					upstreamPrice.MinimumCharge,
+					targetCostDiscount,
+					pricingTier,
+				)
+			}
+			if priceErr != nil {
+				return priceErr
+			}
+			priceSnapshotValue["upstream_cost_discount"] = targetCostDiscount
+			upstreamPriceSnapshotRaw = marshalJSON(
+				priceSnapshotWithBasis(upstreamPrice, upstreamPriceBasis),
+				[]byte(`{}`),
+			)
+		} else {
+			priceSnapshotValue = map[string]any{}
+			upstreamPriceSnapshotRaw = []byte(`{}`)
+		}
+	} else {
+		// A free request may start without a configured platform price. Do not
+		// carry the previous provider's snapshot into a cross-provider fallback.
+		priceSnapshotValue = map[string]any{}
+		estimatedUpstreamCost = "0"
+		price, priceErr := resolvePrice(ctx, tx, Request{
+			TenantID: tenantID, ProjectID: projectID, TokenID: tokenID,
+			Model: currentModel, Provider: targetProvider,
+			GroupMultiplier: groupMultiplier,
+		}, targetModelID, currency, s.now())
+		if priceErr == nil {
+			var estimatedMetrics MeteredUsage
+			if len(estimatedMetricsRaw) > 0 && string(estimatedMetricsRaw) != "null" {
+				if err := json.Unmarshal(estimatedMetricsRaw, &estimatedMetrics); err != nil {
+					return ErrInvalidRequest
+				}
+			}
+			upstreamPrice, upstreamPriceBasis, upstreamPriceErr := resolveUpstreamPrice(
+				ctx, tx, targetModelID, currency, s.now(), price,
+			)
+			if upstreamPriceErr != nil {
+				return upstreamPriceErr
+			}
+			estimatedMetrics, err = prepareReservationMetrics(priceComponentsFor(upstreamPrice), estimatedMetrics, pricingTier)
+			if err != nil {
+				return err
+			}
+			estimatedUpstreamCost, err = calculateUpstreamCost(
+				priceComponentsFor(upstreamPrice),
+				estimatedMetrics,
+				upstreamPrice.MinimumCharge,
+				targetCostDiscount,
+				pricingTier,
+			)
+			if err != nil {
+				return err
+			}
+			priceSnapshotValue = priceSnapshot(price)
+			priceSnapshotValue["pricing_tier"] = pricingTier
+			priceSnapshotValue["upstream_cost_discount"] = targetCostDiscount
+			upstreamPriceSnapshotRaw = marshalJSON(
+				priceSnapshotWithBasis(upstreamPrice, upstreamPriceBasis),
+				[]byte(`{}`),
+			)
+		} else if !errors.Is(priceErr, ErrPriceNotConfigured) {
+			return priceErr
+		}
+	}
+	if len(priceSnapshotValue) == 0 {
+		priceSnapshotValue["upstream_cost_discount"] = targetCostDiscount
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE model_requests
+		SET channel_id = $2,
+		    model_id = $3,
+		    upstream_cost_discount = $4::numeric,
+		    estimated_upstream_cost = $5::numeric,
+		    price_snapshot_json = $6::jsonb,
+		    upstream_price_snapshot_json = $7::jsonb
+		WHERE id = $1 AND status = 'started'
+	`, modelRequestID, channelID, targetModelID, targetCostDiscount,
+		estimatedUpstreamCost, marshalJSON(priceSnapshotValue, []byte(`{}`)),
+		upstreamPriceSnapshotRaw)
 	if err != nil {
 		return err
 	}
 	if affected, err := result.RowsAffected(); err != nil {
 		return err
 	} else if affected != 1 {
-		return ErrModelNotFound
+		return ErrReservationClosed
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *SQLService) RecordRequestMetrics(ctx context.Context, modelRequestID string, latencyMS int64) error {
@@ -1583,28 +1923,34 @@ func (s *SQLService) Settle(
 	}()
 
 	var (
-		modelRequestID   string
-		accountID        string
-		reservedAmount   string
-		currency         string
-		status           string
-		priceID          sql.NullString
-		officialPriceID  sql.NullString
-		groupMultiplier  string
-		priceSnapshotRaw []byte
+		modelRequestID           string
+		accountID                string
+		reservedAmount           string
+		currency                 string
+		status                   string
+		priceID                  sql.NullString
+		officialPriceID          sql.NullString
+		groupMultiplier          string
+		upstreamCostDiscount     string
+		estimatedUpstreamCost    string
+		priceSnapshotRaw         []byte
+		upstreamPriceSnapshotRaw []byte
 	)
 	err = tx.QueryRowContext(ctx, `
 		SELECT br.request_id::text, br.account_id::text, br.reserved_amount::text,
 		       br.currency, br.status, mr.price_version_id::text,
 		       mr.official_price_version_id::text,
-		       mr.group_multiplier::text, mr.price_snapshot_json
+		       mr.group_multiplier::text, mr.upstream_cost_discount::text,
+		       mr.estimated_upstream_cost::text, mr.price_snapshot_json,
+		       mr.upstream_price_snapshot_json
 		FROM billing_reservations br
 		JOIN model_requests mr ON mr.id = br.request_id
 		WHERE br.id = $1
 		FOR UPDATE
 	`, reservationID).Scan(
 		&modelRequestID, &accountID, &reservedAmount, &currency, &status, &priceID,
-		&officialPriceID, &groupMultiplier, &priceSnapshotRaw,
+		&officialPriceID, &groupMultiplier, &upstreamCostDiscount,
+		&estimatedUpstreamCost, &priceSnapshotRaw, &upstreamPriceSnapshotRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrReservationNotFound
@@ -1706,11 +2052,48 @@ func (s *SQLService) Settle(
 		return err
 	}
 	actualAmount := charge.Amount
+	upstreamPrice := price
+	upstreamPriceSnapshotJSON := marshalJSON(
+		priceSnapshotWithBasis(price, "customer_price_fallback"),
+		[]byte(`{}`),
+	)
+	if snapshotPrice, snapshotErr := priceFromSnapshot(upstreamPriceSnapshotRaw, currency); snapshotErr == nil {
+		upstreamPrice = snapshotPrice
+		upstreamPriceSnapshotJSON = upstreamPriceSnapshotRaw
+	}
+	upstreamCost, err := calculateUpstreamCost(
+		priceComponentsFor(upstreamPrice),
+		usage.Metrics,
+		upstreamPrice.MinimumCharge,
+		upstreamCostDiscount,
+		usage.PricingTier,
+	)
+	if err != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
+		// An official catalog can lag a newly introduced provider meter. Keep
+		// customer settlement usable and mark the cost basis as a fallback
+		// instead of blocking the successful upstream request.
+		upstreamPrice = price
+		upstreamPriceSnapshotJSON = marshalJSON(
+			priceSnapshotWithBasis(price, "customer_price_fallback"),
+			[]byte(`{}`),
+		)
+		upstreamCost, err = calculateUpstreamCost(
+			priceComponentsFor(upstreamPrice),
+			usage.Metrics,
+			upstreamPrice.MinimumCharge,
+			upstreamCostDiscount,
+			usage.PricingTier,
+		)
+	}
+	if err != nil {
+		return err
+	}
 	usageMetricsJSON := marshalJSON(usage.Metrics, []byte(`{}`))
 	chargeBreakdownJSON := marshalJSON(charge.Lines, []byte(`[]`))
 	priceSnapshotValue := priceSnapshot(price)
 	priceSnapshotValue["pricing_tier"] = usage.PricingTier
 	priceSnapshotValue["group_multiplier"] = groupMultiplier
+	priceSnapshotValue["upstream_cost_discount"] = upstreamCostDiscount
 	priceSnapshotJSON := marshalJSON(priceSnapshotValue, []byte(`{}`))
 
 	// The reservation already reduced the available balance. Final usage may
@@ -1825,10 +2208,16 @@ func (s *SQLService) Settle(
 		usage_metrics_json = $8::jsonb,
 		charge_breakdown_json = $9::jsonb,
 		price_snapshot_json = $10::jsonb,
+		upstream_cost_discount = $11::numeric,
+		estimated_upstream_cost = $12::numeric,
+		upstream_cost = $13::numeric,
+		upstream_price_snapshot_json = $14::jsonb,
 		finished_at = now()
 		WHERE id = $1
 	`, modelRequestID, providerRequestID, usage.InputTokens, usage.OutputTokens,
-		usage.CachedInputTokens, usage.ReasoningTokens, actualAmount, usageMetricsJSON, chargeBreakdownJSON, priceSnapshotJSON); err != nil {
+		usage.CachedInputTokens, usage.ReasoningTokens, actualAmount, usageMetricsJSON,
+		chargeBreakdownJSON, priceSnapshotJSON, upstreamCostDiscount, estimatedUpstreamCost,
+		upstreamCost, upstreamPriceSnapshotJSON); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1895,15 +2284,16 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		groupMultiplier                                            string
 		startedAt                                                  time.Time
 		estimatedMetricsRaw, priceSnapshotRaw                      []byte
-		provider, targetModelID                                    string
+		upstreamPriceSnapshotRaw                                   []byte
+		provider, targetModelID, targetCostDiscount                string
 	)
 	err = tx.QueryRowContext(ctx, `
 		SELECT br.request_id::text, br.account_id::text, br.reserved_amount::text,
 		       br.currency, br.status, mr.tenant_id::text, mr.project_id::text,
 		       mr.token_id::text, mr.model_id::text, current_model.model_name,
 		       mr.group_multiplier::text, br.estimated_metrics_json, mr.price_snapshot_json,
-		       mr.started_at,
-		       c.provider, target_cm.model_id::text
+		       mr.upstream_price_snapshot_json, mr.started_at,
+		       c.provider, target_cm.model_id::text, c.upstream_cost_discount::text
 		FROM billing_reservations br
 		JOIN model_requests mr ON mr.id = br.request_id
 		JOIN models current_model ON current_model.id = mr.model_id
@@ -1918,7 +2308,9 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	`, reservationID, channelID).Scan(
 		&modelRequestID, &accountID, &oldReserved, &currency, &status,
 		&tenantID, &projectID, &tokenID, &currentModelID, &currentModel,
-		&groupMultiplier, &estimatedMetricsRaw, &priceSnapshotRaw, &startedAt, &provider, &targetModelID,
+		&groupMultiplier, &estimatedMetricsRaw, &priceSnapshotRaw, &upstreamPriceSnapshotRaw,
+		&startedAt, &provider, &targetModelID,
+		&targetCostDiscount,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrReservationNotFound
@@ -1933,11 +2325,52 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		return ErrReservationClosed
 	}
 	if targetModelID == currentModelID {
+		estimatedUpstreamCost := "0"
+		priceSnapshotValue := map[string]any{}
+		if len(priceSnapshotRaw) > 0 && string(priceSnapshotRaw) != "null" {
+			_ = json.Unmarshal(priceSnapshotRaw, &priceSnapshotValue)
+		}
+		if customerPrice, priceErr := priceFromSnapshot(priceSnapshotRaw, currency); priceErr == nil {
+			var estimatedMetrics MeteredUsage
+			if len(estimatedMetricsRaw) > 0 && string(estimatedMetricsRaw) != "null" {
+				_ = json.Unmarshal(estimatedMetricsRaw, &estimatedMetrics)
+			}
+			upstreamPrice, upstreamPriceBasis, upstreamPriceErr := resolveUpstreamPrice(
+				ctx, tx, targetModelID, currency, s.now(), customerPrice,
+			)
+			if upstreamPriceErr != nil {
+				return upstreamPriceErr
+			}
+			pricingTier := ""
+			if value, ok := priceSnapshotValue["pricing_tier"].(string); ok {
+				pricingTier = value
+			}
+			estimatedUpstreamCost, priceErr = calculateUpstreamCost(
+				priceComponentsFor(upstreamPrice),
+				estimatedMetrics,
+				upstreamPrice.MinimumCharge,
+				targetCostDiscount,
+				pricingTier,
+			)
+			if priceErr != nil {
+				return priceErr
+			}
+			priceSnapshotValue["upstream_cost_discount"] = targetCostDiscount
+			upstreamPriceSnapshotRaw = marshalJSON(
+				priceSnapshotWithBasis(upstreamPrice, upstreamPriceBasis),
+				[]byte(`{}`),
+			)
+		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE model_requests
-			SET channel_id = $2
+			SET channel_id = $2,
+			    upstream_cost_discount = $3::numeric,
+			    estimated_upstream_cost = $4::numeric,
+			    price_snapshot_json = $5::jsonb,
+			    upstream_price_snapshot_json = $6::jsonb
 			WHERE id = $1 AND status IN ('started', 'settlement_pending')
-		`, modelRequestID, channelID)
+		`, modelRequestID, channelID, targetCostDiscount, estimatedUpstreamCost,
+			marshalJSON(priceSnapshotValue, []byte(`{}`)), upstreamPriceSnapshotRaw)
 		if err != nil {
 			return err
 		}
@@ -1980,6 +2413,43 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	if err != nil {
 		return err
 	}
+	upstreamPrice, upstreamPriceBasis, err := resolveUpstreamPrice(
+		ctx, tx, targetModelID, currency, s.now(), price,
+	)
+	if err != nil {
+		return err
+	}
+	upstreamEstimatedMetrics := addImplicitRequestMetric(
+		priceComponentsFor(upstreamPrice), estimatedMetrics, snapshot.PricingTier,
+	)
+	upstreamEstimatedMetrics, err = prepareReservationMetrics(
+		priceComponentsFor(upstreamPrice), upstreamEstimatedMetrics, snapshot.PricingTier,
+	)
+	if err != nil {
+		return err
+	}
+	estimatedUpstreamCost, err := calculateUpstreamCost(
+		priceComponentsFor(upstreamPrice),
+		upstreamEstimatedMetrics,
+		upstreamPrice.MinimumCharge,
+		targetCostDiscount,
+		snapshot.PricingTier,
+	)
+	if err != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
+		upstreamPrice = price
+		upstreamPriceBasis = "customer_price_fallback"
+		upstreamEstimatedMetrics = estimatedMetrics
+		estimatedUpstreamCost, err = calculateUpstreamCost(
+			priceComponentsFor(upstreamPrice),
+			upstreamEstimatedMetrics,
+			upstreamPrice.MinimumCharge,
+			targetCostDiscount,
+			snapshot.PricingTier,
+		)
+	}
+	if err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE ledger_accounts
 		SET balance = balance + $2::numeric - $3::numeric
@@ -1997,7 +2467,12 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	priceSnapshotValue := priceSnapshot(price)
 	priceSnapshotValue["pricing_tier"] = snapshot.PricingTier
 	priceSnapshotValue["group_multiplier"] = groupMultiplier
+	priceSnapshotValue["upstream_cost_discount"] = targetCostDiscount
 	priceSnapshotJSON := marshalJSON(priceSnapshotValue, []byte(`{}`))
+	upstreamPriceSnapshotRaw = marshalJSON(
+		priceSnapshotWithBasis(upstreamPrice, upstreamPriceBasis),
+		[]byte(`{}`),
+	)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE billing_reservations
 		SET reserved_amount = $2::numeric, estimated_metrics_json = $3::jsonb, updated_at = now()
@@ -2009,9 +2484,12 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		UPDATE model_requests
 		SET channel_id = $2, model_id = $3, price_version_id = NULLIF($4, '')::uuid,
 		    official_price_version_id = NULLIF($5, '')::uuid,
-		    estimated_amount = $6::numeric, price_snapshot_json = $7::jsonb
+		    estimated_amount = $6::numeric, price_snapshot_json = $7::jsonb,
+		    upstream_cost_discount = $8::numeric,
+		    estimated_upstream_cost = $9::numeric,
+		    upstream_price_snapshot_json = $10::jsonb
 		WHERE id = $1 AND status IN ('started', 'settlement_pending')
-	`, modelRequestID, channelID, targetModelID, price.PriceVersionID, officialPriceVersionID(price), newReserved, priceSnapshotJSON); err != nil {
+	`, modelRequestID, channelID, targetModelID, price.PriceVersionID, officialPriceVersionID(price), newReserved, priceSnapshotJSON, targetCostDiscount, estimatedUpstreamCost, upstreamPriceSnapshotRaw); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2275,6 +2753,72 @@ func priceScopeExists(ctx context.Context, tx *sql.Tx, scopeType, scopeID string
 	return exists, nil
 }
 
+func resolveOfficialPrice(
+	ctx context.Context,
+	tx *sql.Tx,
+	modelID string,
+	currency string,
+	now time.Time,
+) (Price, error) {
+	var price Price
+	err := tx.QueryRowContext(ctx, `
+		SELECT id::text, currency, input_price_per_unit::text,
+		       output_price_per_unit::text,
+		       cached_input_price_per_unit::text,
+		       reasoning_price_per_unit::text,
+		       '0'::text
+		FROM official_model_price_versions
+		WHERE model_id = $1
+		  AND source = 'litellm'
+		  AND effective_from <= $2
+		  AND (effective_to IS NULL OR effective_to > $2)
+		ORDER BY effective_from DESC
+		LIMIT 1
+	`, modelID, now).Scan(
+		&price.ID, &price.Currency, &price.InputPricePerUnit,
+		&price.OutputPricePerUnit, &price.CachedInputPricePerUnit,
+		&price.ReasoningPricePerUnit, &price.MinimumCharge,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Price{}, ErrPriceNotConfigured
+	}
+	if err != nil {
+		return Price{}, err
+	}
+	price.ModelID = modelID
+	price.Source = "litellm"
+	price.Currency = strings.ToUpper(strings.TrimSpace(price.Currency))
+	price.Components, err = loadOfficialPriceComponents(ctx, tx, price.ID)
+	if err != nil {
+		return Price{}, err
+	}
+	if price.Currency != strings.ToUpper(strings.TrimSpace(currency)) {
+		return Price{}, ErrPriceNotConfigured
+	}
+	return price, nil
+}
+
+func resolveUpstreamPrice(
+	ctx context.Context,
+	tx *sql.Tx,
+	modelID string,
+	currency string,
+	now time.Time,
+	customerPrice Price,
+) (Price, string, error) {
+	officialPrice, err := resolveOfficialPrice(ctx, tx, modelID, currency, now)
+	if err == nil {
+		return officialPrice, "official_reference", nil
+	}
+	if !errors.Is(err, ErrPriceNotConfigured) {
+		return Price{}, "", err
+	}
+	// An official reference price is preferred, but a manually configured
+	// customer price remains a useful estimate until the official catalog has
+	// been synchronized for this model.
+	return customerPrice, "customer_price_fallback", nil
+}
+
 func resolvePrice(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -2363,42 +2907,7 @@ func resolvePrice(
 	// LiteLLM price when no manual platform price exists. Use the same source
 	// for runtime billing so a model shown as priced in the catalog cannot fail
 	// at reservation time with PRICE_NOT_CONFIGURED.
-	var price Price
-	err := tx.QueryRowContext(ctx, `
-		SELECT id::text, currency, input_price_per_unit::text,
-		       output_price_per_unit::text,
-		       cached_input_price_per_unit::text,
-		       reasoning_price_per_unit::text,
-		       '0'::text
-		FROM official_model_price_versions
-		WHERE model_id = $1
-		  AND source = 'litellm'
-		  AND effective_from <= $2
-		  AND (effective_to IS NULL OR effective_to > $2)
-		ORDER BY effective_from DESC
-		LIMIT 1
-	`, modelID, now).Scan(
-		&price.ID, &price.Currency, &price.InputPricePerUnit,
-		&price.OutputPricePerUnit, &price.CachedInputPricePerUnit,
-		&price.ReasoningPricePerUnit, &price.MinimumCharge,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Price{}, ErrPriceNotConfigured
-	}
-	if err != nil {
-		return Price{}, err
-	}
-	price.ModelID = modelID
-	price.Source = "litellm"
-	price.Currency = strings.ToUpper(strings.TrimSpace(price.Currency))
-	price.Components, err = loadOfficialPriceComponents(ctx, tx, price.ID)
-	if err != nil {
-		return Price{}, err
-	}
-	if price.Currency != currency {
-		return Price{}, ErrPriceNotConfigured
-	}
-	return price, nil
+	return resolveOfficialPrice(ctx, tx, modelID, currency, now)
 }
 
 func calculateAmount(

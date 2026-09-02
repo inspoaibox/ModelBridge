@@ -189,3 +189,47 @@ func TestNormalizeUsageProjectsMetricsIntoLegacyColumns(t *testing.T) {
 		t.Fatalf("metrics were not projected into legacy usage columns: %#v", usage)
 	}
 }
+
+func TestUpstreamCostUsesDiscountWithoutChangingCustomerMultiplier(t *testing.T) {
+	components := []PriceComponent{
+		{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.01"},
+		{ComponentCode: "output_tokens", Unit: "token", PricePerUnit: "0.02"},
+	}
+	cost, err := calculateUpstreamCost(
+		components,
+		MeteredUsage{"input_tokens": "100", "output_tokens": "50"},
+		"0",
+		"0.5",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The reference charge is 2.00; a 50% channel cost factor produces 1.00.
+	if cost != "1" {
+		t.Fatalf("unexpected discounted upstream cost: %s", cost)
+	}
+	customerCharge, err := multiplierCharge(MeteredCharge{Amount: "2"}, "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if customerCharge.Amount != "6" {
+		t.Fatalf("customer group multiplier was affected by upstream discount: %s", customerCharge.Amount)
+	}
+}
+
+func TestUpstreamCostDefaultsToFullReferencePrice(t *testing.T) {
+	cost, err := calculateUpstreamCost(
+		[]PriceComponent{{ComponentCode: "requests", Unit: "request", PricePerUnit: "0.25"}},
+		MeteredUsage{},
+		"0",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cost != "0.25" {
+		t.Fatalf("empty upstream discount should default to 1: %s", cost)
+	}
+}

@@ -1220,6 +1220,7 @@ export function AdminConsole({
                       <TableHead>{t("channelsColProvider")}</TableHead>
                       <TableHead>{t("channelsColStatus")}</TableHead>
                       <TableHead>{t("channelsColPriority")}</TableHead>
+                      <TableHead>{t("channelsColCostDiscount")}</TableHead>
                       <TableHead>{t("channelsColModels")}</TableHead>
                       <TableHead>{t("channelsColCredential")}</TableHead>
                       <TableHead className="text-right">{t("channelsColAction")}</TableHead>
@@ -1228,14 +1229,14 @@ export function AdminConsole({
                   <TableBody>
                     {channelsBusy && channels.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                          <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                           <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-indigo-600 dark:text-indigo-400" />
                           <span>{t("channelsLoading")}</span>
                         </TableCell>
                       </TableRow>
                     ) : filteredChannels.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                           {t("channelsEmpty")}
                         </TableCell>
                       </TableRow>
@@ -1283,6 +1284,16 @@ export function AdminConsole({
                             </div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400">
                               Weight: <span className="font-mono">{channel.weight}</span>
+                            </div>
+                          </TableCell>
+
+                          {/* Upstream cost factor */}
+                          <TableCell className="whitespace-nowrap">
+                            <div className="font-mono text-xs font-semibold text-cyan-700 dark:text-cyan-300">
+                              x{channel.upstream_cost_discount || "1.000000"}
+                            </div>
+                            <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                              {t("channelsCostDiscountHint")}
                             </div>
                           </TableCell>
 

@@ -67,7 +67,8 @@ func (r *SQLChannelRouter) GetMediaJob(ctx context.Context, id, tenantID, tokenI
 		       mj.upstream_job_id, mj.status, COALESCE(mj.output_uri, ''),
 		       mj.response_json, mj.estimated_metrics_json, COALESCE(mj.failure_reason, ''),
 		       mj.created_at, mj.updated_at, mj.completed_at,
-		       c.id::text, c.name, c.base_url, c.credential_ref, c.priority, c.weight
+		       c.id::text, c.name, c.base_url, c.credential_ref,
+		       c.upstream_cost_discount::text, c.priority, c.weight
 		FROM media_jobs mj
 		JOIN channels c ON c.id = mj.channel_id
 		WHERE mj.id = $1::uuid
@@ -77,7 +78,7 @@ func (r *SQLChannelRouter) GetMediaJob(ctx context.Context, id, tenantID, tokenI
 		&job.ID, &job.TenantID, &job.ProjectID, &job.TokenID, &reservationID, &job.GroupID,
 		&job.Model, &job.UpstreamModelName, &job.Provider, &job.UpstreamJobID, &job.Status, &outputURI,
 		&response, &metrics, &failureReason, &job.CreatedAt, &job.UpdatedAt, &completedAt,
-		&channelID, &channelName, &baseURL, &credentialRef, &priority, &weight,
+		&channelID, &channelName, &baseURL, &credentialRef, &job.Channel.UpstreamCostDiscount, &priority, &weight,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MediaJob{}, ErrModelNotFound
@@ -93,7 +94,7 @@ func (r *SQLChannelRouter) GetMediaJob(ctx context.Context, id, tenantID, tokenI
 	}
 	_ = json.Unmarshal(response, &job.Response)
 	_ = json.Unmarshal(metrics, &job.EstimatedMetrics)
-	job.Channel = Channel{ID: channelID, Name: channelName, BaseURL: baseURL, CredentialRef: credentialRef, Provider: job.Provider, Priority: priority, Weight: weight, UpstreamModelName: job.UpstreamModelName}
+	job.Channel = Channel{ID: channelID, Name: channelName, BaseURL: baseURL, CredentialRef: credentialRef, Provider: job.Provider, Priority: priority, Weight: weight, UpstreamModelName: job.UpstreamModelName, UpstreamCostDiscount: job.Channel.UpstreamCostDiscount}
 	if strings.TrimSpace(job.UpstreamModelName) == "" {
 		job.UpstreamModelName = job.Model
 		job.Channel.UpstreamModelName = job.Model
@@ -139,7 +140,8 @@ func (r *SQLChannelRouter) ListPendingMediaJobs(ctx context.Context, limit int) 
 		       mj.status, COALESCE(mj.output_uri, ''), mj.response_json,
 		       mj.estimated_metrics_json, COALESCE(mj.failure_reason, ''),
 		       mj.created_at, mj.updated_at, mj.completed_at,
-		       c.id::text, c.name, c.base_url, c.credential_ref, c.priority, c.weight
+		       c.id::text, c.name, c.base_url, c.credential_ref,
+		       c.upstream_cost_discount::text, c.priority, c.weight
 		FROM media_jobs mj
 		JOIN channels c ON c.id = mj.channel_id
 		WHERE mj.status IN ('queued', 'processing')
@@ -163,6 +165,7 @@ func (r *SQLChannelRouter) ListPendingMediaJobs(ctx context.Context, limit int) 
 			completedAt                             sql.NullTime
 			channelID, channelName, baseURL         string
 			credentialRef                           string
+			upstreamCostDiscount                    string
 			priority, weight                        int
 		)
 		if err := rows.Scan(
@@ -171,6 +174,7 @@ func (r *SQLChannelRouter) ListPendingMediaJobs(ctx context.Context, limit int) 
 			&job.Provider, &job.UpstreamJobID, &job.Status, &outputURI,
 			&response, &metrics, &failureReason, &job.CreatedAt, &job.UpdatedAt,
 			&completedAt, &channelID, &channelName, &baseURL, &credentialRef,
+			&upstreamCostDiscount,
 			&priority, &weight,
 		); err != nil {
 			return nil, err
@@ -182,7 +186,7 @@ func (r *SQLChannelRouter) ListPendingMediaJobs(ctx context.Context, limit int) 
 		}
 		_ = json.Unmarshal(response, &job.Response)
 		_ = json.Unmarshal(metrics, &job.EstimatedMetrics)
-		job.Channel = Channel{ID: channelID, Name: channelName, BaseURL: baseURL, CredentialRef: credentialRef, Provider: job.Provider, Priority: priority, Weight: weight, UpstreamModelName: job.UpstreamModelName}
+		job.Channel = Channel{ID: channelID, Name: channelName, BaseURL: baseURL, CredentialRef: credentialRef, Provider: job.Provider, Priority: priority, Weight: weight, UpstreamModelName: job.UpstreamModelName, UpstreamCostDiscount: upstreamCostDiscount}
 		if strings.TrimSpace(job.UpstreamModelName) == "" {
 			job.UpstreamModelName = job.Model
 			job.Channel.UpstreamModelName = job.Model

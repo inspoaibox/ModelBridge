@@ -568,9 +568,13 @@ func ratDecimal(value *big.Rat) string {
 }
 
 func multiplierCharge(charge MeteredCharge, multiplier string) (MeteredCharge, error) {
-	factor, ok := new(big.Rat).SetString(strings.TrimSpace(multiplier))
+	return factorCharge(charge, multiplier, "group multiplier")
+}
+
+func factorCharge(charge MeteredCharge, factorValue, label string) (MeteredCharge, error) {
+	factor, ok := new(big.Rat).SetString(strings.TrimSpace(factorValue))
 	if !ok || factor.Sign() < 0 {
-		return MeteredCharge{}, errors.New("invalid group multiplier")
+		return MeteredCharge{}, errors.New("invalid " + label)
 	}
 	total, ok := new(big.Rat).SetString(charge.Amount)
 	if !ok {
@@ -591,6 +595,43 @@ func multiplierCharge(charge MeteredCharge, multiplier string) (MeteredCharge, e
 		result.Lines = append(result.Lines, line)
 	}
 	return result, nil
+}
+
+func normalizeUpstreamCostDiscount(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "1"
+	}
+	if !validNonNegativeDecimal(value) {
+		return "", ErrInvalidRequest
+	}
+	factor, ok := new(big.Rat).SetString(value)
+	if !ok || factor.Sign() < 0 || factor.Cmp(big.NewRat(1000, 1)) > 0 {
+		return "", ErrInvalidRequest
+	}
+	return ratDecimal(factor), nil
+}
+
+func calculateUpstreamCost(
+	components []PriceComponent,
+	usage MeteredUsage,
+	minimumCharge string,
+	discount string,
+	pricingTier string,
+) (string, error) {
+	discount, err := normalizeUpstreamCostDiscount(discount)
+	if err != nil {
+		return "", err
+	}
+	charge, err := calculateMeteredChargeForTier(components, usage, minimumCharge, pricingTier)
+	if err != nil {
+		return "", err
+	}
+	factored, err := factorCharge(charge, discount, "upstream cost discount")
+	if err != nil {
+		return "", err
+	}
+	return factored.Amount, nil
 }
 
 // prepareReservationMetrics keeps only request estimates that can be priced by

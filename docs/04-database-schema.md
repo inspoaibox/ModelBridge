@@ -272,8 +272,13 @@ reasoning_tokens
 usage_metrics_json        JSON 中保存音频/图片/视频 Token、图片数量、像素、字符、秒数、请求、查询、会话、页数、搜索、Grounding、OCR、存储等完整计量
 charge_breakdown_json     逐组件数量、单价和金额
 price_snapshot_json       本次请求使用的价格组件、版本和分组倍率快照
+upstream_price_snapshot_json
+                         上游成本估算使用的官方参考价或客户价格回退快照
+upstream_cost_discount    请求实际使用渠道的上游成本折扣系数快照
 estimated_amount
 settled_amount
+estimated_upstream_cost   按请求估算用量计算的上游成本
+upstream_cost             按最终用量计算的上游成本
 currency
 started_at
 finished_at
@@ -452,7 +457,7 @@ published_at
 - 余额缓存可以重建，不能成为唯一事实来源。
 - 数据库账号按服务拆分，Relay 不拥有用户和价格表写权限。
 - 跨租户查询在测试中默认失败。
-- 最新迁移版本为 `041_official_price_runtime_billing.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
+- 最新迁移版本为 `044_upstream_price_snapshot.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
 
 ### `email_templates` 与邮件功能设置
 

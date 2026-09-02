@@ -270,6 +270,30 @@ export function ChannelModal({
                     onChange={(e) => setChannelForm((curr) => ({ ...curr, weight: Number(e.target.value) }))}
                   />
                 </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="channel-upstream-cost-discount" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {t("channelsFormUpstreamCostDiscount")}
+                  </Label>
+                  <Input
+                    id="channel-upstream-cost-discount"
+                    type="number"
+                    min={0}
+                    max={1000}
+                    step="0.000001"
+                    value={channelForm.upstream_cost_discount}
+                    onChange={(e) =>
+                      setChannelForm((curr) => ({
+                        ...curr,
+                        upstream_cost_discount: e.target.value,
+                      }))
+                    }
+                    placeholder="1.000000"
+                  />
+                  <p className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                    {t("channelsFormUpstreamCostDiscountHint")}
+                  </p>
+                </div>
               </div>
 
               {channelForm.provider === "volcengine" && (

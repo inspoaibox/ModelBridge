@@ -39,6 +39,7 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	tokenID := newTestID(t)
 	modelID := newTestID(t)
 	channelID := newTestID(t)
+	officialPriceID := newTestID(t)
 	slug := "billing-test-" + strings.ToLower(strings.ReplaceAll(tenantID[:8], "-", ""))
 	modelName := "billing-test-model-" + strings.ToLower(strings.ReplaceAll(tenantID[:8], "-", ""))
 	testSuffix := strings.ToLower(strings.ReplaceAll(tenantID[:8], "-", ""))
@@ -96,6 +97,34 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	`, channelID, modelID, modelName)
 	if err != nil {
 		t.Fatal(err)
+	}
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO official_model_price_versions (
+			id, model_id, source, source_url, source_model_key, currency,
+			input_price_per_unit, output_price_per_unit,
+			cached_input_price_per_unit, reasoning_price_per_unit,
+			effective_from, fetched_at
+		) VALUES ($1, $2, 'litellm', 'https://prices.example.test', $3, 'TST',
+		          '0.005', '0.01', '0', '0', now(), now())
+	`, officialPriceID, modelID, modelName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, component := range []struct {
+		code, price string
+	}{
+		{"input_tokens", "0.005"},
+		{"output_tokens", "0.01"},
+	} {
+		componentID := newTestID(t)
+		_, err = conn.ExecContext(ctx, `
+			INSERT INTO official_price_components (
+				id, official_price_version_id, component_code, unit, price_per_unit
+			) VALUES ($1, $2, $3, 'token', $4::numeric)
+		`, componentID, officialPriceID, component.code, component.price)
+		if err != nil {
+			t.Fatalf("insert official price component %d: %v", index, err)
+		}
 	}
 	service, err := NewSQLService(conn)
 	if err != nil {
@@ -172,6 +201,7 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 		Provider:              "openai",
 		ChannelID:             channelID,
 		GroupMultiplier:       "2",
+		UpstreamCostDiscount:  "0.5",
 		EstimatedInputTokens:  2,
 		EstimatedOutputTokens: 3,
 		Endpoint:              "/v1/chat/completions",
@@ -195,6 +225,17 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	}
 	if normalizeDecimal(groupMultiplier) != "2" {
 		t.Fatalf("expected group multiplier snapshot 2, got %s", groupMultiplier)
+	}
+	var upstreamCostDiscount, estimatedUpstreamCost string
+	if err := conn.QueryRowContext(ctx, `
+		SELECT upstream_cost_discount::text, estimated_upstream_cost::text
+		FROM model_requests
+		WHERE id = $1
+	`, reservation.ModelRequestID).Scan(&upstreamCostDiscount, &estimatedUpstreamCost); err != nil {
+		t.Fatal(err)
+	}
+	if normalizeDecimal(upstreamCostDiscount) != "0.5" || normalizeDecimal(estimatedUpstreamCost) != "0.02" {
+		t.Fatalf("unexpected upstream cost snapshot: discount=%s estimate=%s", upstreamCostDiscount, estimatedUpstreamCost)
 	}
 	var endpoint, clientIP, requestType, reasoningEffort string
 	if err := conn.QueryRowContext(ctx, `
@@ -252,6 +293,17 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	}
 	if settledStatus != "settled" {
 		t.Fatalf("expected settled reservation, got %s", settledStatus)
+	}
+	var upstreamCost string
+	if err := conn.QueryRowContext(ctx, `
+		SELECT upstream_cost::text
+		FROM model_requests
+		WHERE id = $1
+	`, reservation.ModelRequestID).Scan(&upstreamCost); err != nil {
+		t.Fatal(err)
+	}
+	if normalizeDecimal(upstreamCost) != "0.0125" {
+		t.Fatalf("unexpected settled upstream cost: %s", upstreamCost)
 	}
 
 	failedReservation, err := service.Reserve(ctx, Request{
@@ -451,6 +503,7 @@ func cleanupBillingFixture(
 	_, _ = conn.ExecContext(ctx, `DELETE FROM channel_models WHERE channel_id = $1`, channelID)
 	_, _ = conn.ExecContext(ctx, `DELETE FROM channels WHERE id = $1`, channelID)
 	_, _ = conn.ExecContext(ctx, `DELETE FROM api_tokens WHERE id = $1`, tokenID)
+	_, _ = conn.ExecContext(ctx, `DELETE FROM official_model_price_versions WHERE model_id = $1`, modelID)
 	_, _ = conn.ExecContext(ctx, `DELETE FROM price_versions WHERE model_id = $1`, modelID)
 	_, _ = conn.ExecContext(ctx, `DELETE FROM models WHERE id = $1`, modelID)
 	_, _ = conn.ExecContext(ctx, `DELETE FROM projects WHERE id = $1`, projectID)

@@ -285,6 +285,14 @@ func priceSnapshot(price Price) map[string]any {
 	}
 }
 
+func priceSnapshotWithBasis(price Price, basis string) map[string]any {
+	snapshot := priceSnapshot(price)
+	if strings.TrimSpace(basis) != "" {
+		snapshot["estimate_basis"] = strings.TrimSpace(basis)
+	}
+	return snapshot
+}
+
 func marshalJSON(value any, fallback []byte) []byte {
 	encoded, err := json.Marshal(value)
 	if err != nil {
