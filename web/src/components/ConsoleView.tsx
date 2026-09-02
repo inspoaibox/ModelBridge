@@ -306,6 +306,7 @@ function TokensPanel({ language, t, tokens, tokensBusy, tokensMessage, refreshTo
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <APIEndpointAddresses t={t} apiEndpoints={apiEndpoints} copiedEndpointID={copiedEndpointID} copyEndpoint={copyEndpoint} />
         {tokensMessage.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{tokensMessage.text}</div> : null}
         <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
           <Table>
@@ -315,7 +316,6 @@ function TokensPanel({ language, t, tokens, tokensBusy, tokensMessage, refreshTo
             </TableBody>
           </Table>
         </div>
-        <APIEndpointAddresses t={t} apiEndpoints={apiEndpoints} copiedEndpointID={copiedEndpointID} copyEndpoint={copyEndpoint} />
       </CardContent>
     </Card>
   );
