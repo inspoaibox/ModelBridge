@@ -75,12 +75,8 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
   }, [models]);
 
   useEffect(() => {
-    if (platformGroups.length === 0) {
-      if (groupID) setGroupID("");
-      return;
-    }
-    if (!groupID || !platformGroups.some((group) => group.group_id === groupID)) {
-      setGroupID(platformGroups.find((group) => group.group_code === "default")?.group_id || platformGroups[0].group_id);
+    if (groupID && !platformGroups.some((group) => group.group_id === groupID)) {
+      setGroupID("");
     }
   }, [groupID, platformGroups]);
 
