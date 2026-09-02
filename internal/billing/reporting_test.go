@@ -31,6 +31,21 @@ func TestReportQueriesNormalizePagination(t *testing.T) {
 	}
 }
 
+func TestNormalizeDecimalTextRemovesScalePadding(t *testing.T) {
+	tests := map[string]string{
+		"0.000003000000000000000000000000":  "0.000003",
+		"12.340000000000000000000000000000": "12.34",
+		"00042.000":                         "42",
+		"0.000000000000000000000000000000":  "0",
+		"-0.000000":                         "0",
+	}
+	for input, expected := range tests {
+		if actual := normalizeDecimalText(input); actual != expected {
+			t.Fatalf("normalizeDecimalText(%q) = %q, want %q", input, actual, expected)
+		}
+	}
+}
+
 func TestUsageWhereScopesToAuthorizedProjects(t *testing.T) {
 	where, args := usageWhere(UsageQuery{TenantID: "11111111-1111-4111-8111-111111111111", ProjectIDs: []string{
 		"22222222-2222-4222-8222-222222222222",

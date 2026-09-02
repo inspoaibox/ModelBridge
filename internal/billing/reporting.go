@@ -31,6 +31,7 @@ type UsageRecord struct {
 	RequestType     string         `json:"request_type"`
 	BillingType     string         `json:"billing_type"`
 	Status          string         `json:"status"`
+	FailureReason   string         `json:"failure_reason,omitempty"`
 	InputTokens     int64          `json:"input_tokens"`
 	OutputTokens    int64          `json:"output_tokens"`
 	CachedInput     int64          `json:"cached_input_tokens"`
@@ -178,6 +179,7 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 	); err != nil {
 		return UsageReport{}, err
 	}
+	summary.TotalCost = normalizeDecimalText(summary.TotalCost)
 	var summaryMetricsRaw []byte
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(jsonb_object_agg(metric, total), '{}'::jsonb)
@@ -209,7 +211,7 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		       mr.reasoning_effort, mr.endpoint, mr.client_ip, COALESCE(mr.group_id::text, ''),
 		       COALESCE(grp.code, ''), COALESCE(grp.name, ''), mr.request_type,
 		       COALESCE(grp.billing_type, CASE WHEN COALESCE(mr.price_version_id, mr.official_price_version_id) IS NULL THEN 'free' ELSE 'prepaid' END),
-		       mr.status, mr.input_tokens, mr.output_tokens, mr.cached_input_tokens,
+		       mr.status, COALESCE(mr.failure_reason, ''), mr.input_tokens, mr.output_tokens, mr.cached_input_tokens,
 			   mr.reasoning_tokens, mr.settled_amount::text, mr.estimated_amount::text,
 			   mr.currency, mr.latency_ms, mr.started_at, mr.finished_at, mr.created_at,
 			   mr.usage_metrics_json, mr.charge_breakdown_json, mr.price_snapshot_json
@@ -235,7 +237,7 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 			&record.TenantID, &record.TenantName, &record.ModelID, &record.Provider, &record.Model,
 			&record.ReasoningEffort, &record.Endpoint, &record.ClientIP, &record.GroupID,
 			&record.GroupCode, &record.GroupName, &record.RequestType, &record.BillingType,
-			&record.Status, &record.InputTokens, &record.OutputTokens, &record.CachedInput,
+			&record.Status, &record.FailureReason, &record.InputTokens, &record.OutputTokens, &record.CachedInput,
 			&record.ReasoningTokens, &record.Cost, &record.EstimatedCost, &record.Currency,
 			&record.LatencyMS, &record.StartedAt, &finishedAt, &record.CreatedAt,
 			&usageMetricsRaw, &chargeBreakdownRaw, &priceSnapshotRaw,
@@ -254,6 +256,8 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		record.TotalTokens = record.InputTokens + record.OutputTokens
 		record.Provider = strings.ToLower(strings.TrimSpace(record.Provider))
 		record.Currency = strings.ToUpper(strings.TrimSpace(record.Currency))
+		record.Cost = normalizeDecimalText(record.Cost)
+		record.EstimatedCost = normalizeDecimalText(record.EstimatedCost)
 		if finishedAt.Valid {
 			value := finishedAt.Time
 			record.FinishedAt = &value
@@ -264,6 +268,37 @@ func (s *SQLService) ListUsageRecords(ctx context.Context, query UsageQuery) (Us
 		return UsageReport{}, err
 	}
 	return UsageReport{Records: records, Summary: summary, Limit: query.Limit, Offset: query.Offset}, nil
+}
+
+// PostgreSQL numeric columns retain the configured scale when converted to
+// text. Reports should keep the exact decimal value without rendering padding
+// zeros that have no meaning to a customer.
+func normalizeDecimalText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "0"
+	}
+
+	sign := ""
+	if value[0] == '-' || value[0] == '+' {
+		sign, value = value[:1], value[1:]
+	}
+	parts := strings.SplitN(value, ".", 2)
+	integerPart := strings.TrimLeft(parts[0], "0")
+	if integerPart == "" {
+		integerPart = "0"
+	}
+	fractionPart := ""
+	if len(parts) == 2 {
+		fractionPart = strings.TrimRight(parts[1], "0")
+	}
+	if integerPart == "0" && fractionPart == "" {
+		return "0"
+	}
+	if fractionPart == "" {
+		return sign + integerPart
+	}
+	return sign + integerPart + "." + fractionPart
 }
 
 func (s *SQLService) ListFinanceReport(ctx context.Context, query FinanceQuery) (FinanceReport, error) {

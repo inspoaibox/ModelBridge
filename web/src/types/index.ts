@@ -614,6 +614,7 @@ export interface UsageRecord {
   request_type: string;
   billing_type: string;
   status: string;
+  failure_reason?: string;
   input_tokens: number;
   output_tokens: number;
   cached_input_tokens: number;
