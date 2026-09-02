@@ -557,9 +557,6 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	if m.Priority < 0 || m.Priority > 10000 || m.Weight < 0 || m.Weight > 10000 {
 		return ChannelMutation{}, ErrInvalidRequest
 	}
-	if len(m.Models) == 0 {
-		return ChannelMutation{}, ErrInvalidRequest
-	}
 	return m, nil
 }
 

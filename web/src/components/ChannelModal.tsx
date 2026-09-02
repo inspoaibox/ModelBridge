@@ -364,6 +364,11 @@ export function ChannelModal({
 
               {/* Model Mapping Rows */}
               <div className="space-y-2.5">
+                {channelForm.models.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-400">
+                    {t("channelsFormNoModelsHint")}
+                  </div>
+                )}
                 {channelForm.models.map((model) => (
                   <div
                     key={model.id}
@@ -407,7 +412,7 @@ export function ChannelModal({
                         variant="ghost"
                         size="sm"
                         onClick={() => removeChannelModel(model.id)}
-                        disabled={channelForm.models.length <= 1 || Boolean(channelActionBusy)}
+                        disabled={Boolean(channelActionBusy)}
                         className="h-8 w-8 p-0 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -423,7 +428,7 @@ export function ChannelModal({
         {/* Modal Footer */}
         <div className="flex items-center justify-between border-t border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/60 px-6 py-4">
           <div className="text-xs text-slate-500">
-            {language === "zh" ? "所有配置保存后将即刻热重载生效" : "Changes take effect immediately upon save"}
+            {language === "zh" ? "渠道可以先保存，模型映射可随后手动添加或自动获取" : "Save the channel first, then add or discover model mappings"}
           </div>
 
           <div className="flex items-center gap-3">

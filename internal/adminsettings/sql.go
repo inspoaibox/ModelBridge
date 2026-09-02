@@ -344,7 +344,7 @@ func validAssetURL(value string) bool {
 		return true
 	}
 	parsed, err := url.Parse(value)
-	return err == nil && parsed.Host != "" && parsed.Scheme == "https"
+	return err == nil && parsed.Host != "" && parsed.User == nil && parsed.Scheme == "https"
 }
 
 func validSMTPAddress(value string) bool {

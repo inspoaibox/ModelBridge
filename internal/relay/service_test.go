@@ -96,6 +96,21 @@ func TestChannelMutationKeepsMultipleModelsForOneProvider(t *testing.T) {
 	}
 }
 
+func TestChannelMutationAllowsEmptyModelMappings(t *testing.T) {
+	request, err := (ChannelMutation{
+		Name:     "Anthropic",
+		Provider: ProviderAnthropic,
+		BaseURL:  "https://api.anthropic.com",
+		APIKey:   "sk-ant-test",
+	}).validate(true)
+	if err != nil {
+		t.Fatalf("a channel may be saved before model discovery or manual mapping: %v", err)
+	}
+	if len(request.Models) != 0 {
+		t.Fatalf("empty channel mappings must remain empty, got %#v", request.Models)
+	}
+}
+
 func TestServiceRejectsModelOutsideTokenAllowlist(t *testing.T) {
 	provider := &recordingProvider{}
 	service, err := NewService(

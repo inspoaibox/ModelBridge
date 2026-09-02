@@ -154,25 +154,6 @@ function newFormRowID() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function defaultChannelModels(provider: "openai" | "anthropic" | "grok" | "gemini" | "volcengine"): ChannelFormModel[] {
-  const models =
-    provider === "openai"
-      ? ["gpt-5"]
-      : provider === "anthropic"
-      ? ["claude-sonnet-5"]
-      : provider === "grok"
-      ? ["grok-4.6"]
-      : provider === "gemini"
-      ? ["gemini-3.7-flash"]
-      : ["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"];
-  return models.map((model) => ({
-    id: newFormRowID(),
-    model,
-    upstream_model: model,
-    enabled: true,
-  }));
-}
-
 function parseTokenList(value: string) {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
@@ -211,7 +192,9 @@ function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini"
     status: "active",
     priority: 100,
     weight: 100,
-    models: defaultChannelModels(provider),
+    // Model mappings are explicit. A new channel must never inherit a
+    // model from another provider or silently expose a platform default.
+    models: [],
   };
 }
 
@@ -245,7 +228,7 @@ function channelFormFromSummary(channel: ChannelSummary): ChannelFormState {
             upstream_model: model.upstream_model || model.model,
             enabled: model.enabled,
           }))
-        : [{ id: newFormRowID(), model: "", upstream_model: "", enabled: true }],
+        : [],
   };
 }
 
@@ -866,6 +849,8 @@ export default function App() {
       icon.dataset.siteFavicon = "true";
       document.head.appendChild(icon);
     }
+    const assetPath = siteSettings.site_favicon_url.split(/[?#]/, 1)[0].toLowerCase();
+    icon.type = assetPath.endsWith(".svg") ? "image/svg+xml" : "";
     icon.href = siteSettings.site_favicon_url;
   }, [language, siteSettings.site_favicon_url, siteSettings.site_name]);
 
@@ -3281,11 +3266,6 @@ export default function App() {
     setModelDiscoveryMessage({ kind: "", text: "" });
     setChannelForm((current) => {
       const currentDefault = defaultProviderBaseURL(current.provider);
-      const defaultModels = ["gpt-5", "claude-sonnet-5", "grok-4.6", "gemini-3.7-flash", "doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"];
-      const shouldReplaceDefaults =
-        current.models.length === 0 ||
-        current.models.every((model) => !model.model.trim()) ||
-        (!current.id && current.models.length === 1 && defaultModels.includes(current.models[0].model.trim()));
       return {
         ...current,
         provider,
@@ -3293,10 +3273,10 @@ export default function App() {
           !current.base_url || current.base_url === currentDefault
             ? defaultProviderBaseURL(provider)
             : current.base_url,
-        models:
-          shouldReplaceDefaults
-            ? defaultChannelModels(provider)
-            : current.models,
+        // A model mapping belongs to one provider. Clear it when the
+        // provider changes instead of carrying an OpenAI model into an
+        // Anthropic, Gemini, Grok, or Volcano channel.
+        models: current.provider === provider ? current.models : [],
       };
     });
   }
@@ -3323,10 +3303,7 @@ export default function App() {
   function removeChannelModel(rowID: string) {
     setChannelForm((current) => ({
       ...current,
-      models:
-        current.models.length <= 1
-          ? current.models
-          : current.models.filter((model) => model.id !== rowID),
+      models: current.models.filter((model) => model.id !== rowID),
     }));
   }
 
@@ -3411,8 +3388,7 @@ export default function App() {
     if (
       !channelForm.name.trim() ||
       !channelForm.base_url.trim() ||
-      (!channelForm.id && !channelForm.api_key.trim()) ||
-      models.length === 0
+      (!channelForm.id && !channelForm.api_key.trim())
     ) {
       setChannelsMessage({ kind: "error", text: t("channelsValidationFailed") });
       return;
