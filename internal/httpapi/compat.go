@@ -468,7 +468,7 @@ func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Han
 			if hasFinalUsage {
 				usage = finalUsage
 			}
-			_ = writeSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": finishReason, "stop_sequence": nil}, "usage": anthropicWireUsage(usage)})
+			_ = writeSSE(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": anthropicWireStopReason(finishReason), "stop_sequence": nil}, "usage": anthropicWireUsage(usage)})
 			_ = writeSSE(w, "message_stop", map[string]any{"type": "message_stop"})
 			return
 		}
@@ -505,7 +505,7 @@ func relayAnthropicMessagesHandler(service relay.ChatCompletionService) http.Han
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id": response.ID, "type": "message", "role": "assistant", "model": response.Model,
-			"content": content, "stop_reason": stopReason,
+			"content": content, "stop_reason": anthropicWireStopReason(stopReason),
 			"stop_sequence": nil, "usage": anthropicWireUsage(response.Usage),
 		})
 	})
@@ -546,4 +546,25 @@ func anthropicWireUsage(usage relay.ChatUsage) map[string]any {
 		result["cache_read_input_tokens"] = usage.CacheReadInputTokens
 	}
 	return result
+}
+
+// The relay service uses the internal OpenAI-compatible finish-reason names
+// for all providers. Anthropic clients require Anthropic's wire values.
+func anthropicWireStopReason(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "", "end_turn":
+		return "end_turn"
+	case "stop", "stop_sequence":
+		return "end_turn"
+	case "length", "max_tokens":
+		return "max_tokens"
+	case "tool_calls", "function_call", "tool_use":
+		return "tool_use"
+	case "content_filter", "refusal":
+		return "refusal"
+	default:
+		// Preserve future Anthropic-native values rather than returning an
+		// internal value that Anthropic clients cannot understand.
+		return reason
+	}
 }

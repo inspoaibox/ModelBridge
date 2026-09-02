@@ -369,6 +369,13 @@ function defaultTokenCreateForm(): TokenCreateFormState {
   };
 }
 
+function toDateTimeLocal(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function defaultUserAdminForm(): UserAdminFormState {
   return {
     id: "",
@@ -563,6 +570,11 @@ export default function App() {
   const [usageStatus, setUsageStatus] = useState<ConsoleUsageStatus | null>(null);
 	const [consoleUsageReport, setConsoleUsageReport] = useState<UsageReport | null>(null);
 	const [consoleUsageOffset, setConsoleUsageOffset] = useState(0);
+  const [consoleUsageTokenName, setConsoleUsageTokenName] = useState("");
+  const [consoleUsageModel, setConsoleUsageModel] = useState("");
+  const [consoleUsageGroup, setConsoleUsageGroup] = useState("");
+  const [consoleUsageFrom, setConsoleUsageFrom] = useState("");
+  const [consoleUsageTo, setConsoleUsageTo] = useState("");
   const [usageBusy, setUsageBusy] = useState(false);
   const [usageMessage, setUsageMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [modelStatusReport, setModelStatusReport] = useState<ModelStatusReport | null>(null);
@@ -667,6 +679,8 @@ export default function App() {
   const [tokenCreateBusy, setTokenCreateBusy] = useState(false);
   const [tokenCreateMessage, setTokenCreateMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [issuedToken, setIssuedToken] = useState<IssuedTokenResponse | null>(null);
+  const [tokenEditingID, setTokenEditingID] = useState("");
+  const [consoleTokenSecrets, setConsoleTokenSecrets] = useState<Record<string, string>>({});
   const [tokenRevokeConfirm, setTokenRevokeConfirm] = useState("");
   const [consoleTokenGroups, setConsoleTokenGroups] = useState<TokenGroupOption[]>([]);
   const [consoleTokenGroupsBusy, setConsoleTokenGroupsBusy] = useState(false);
@@ -984,7 +998,7 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens" && consoleSection !== "projects")) return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens" && consoleSection !== "projects" && consoleSection !== "usage")) return;
     refreshConsoleTokens(true);
     refreshConsoleTokenGroups();
   }, [signedIn, audience, route.view, consoleSection, language]);
@@ -2471,7 +2485,13 @@ export default function App() {
     setUsageBusy(true);
     if (showPending) setUsageMessage({ kind: "pending", text: t("consoleUsageLoading") });
     try {
-		const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/usage?limit=50&offset=${offset}`, {
+      const params = new URLSearchParams({ limit: "50", offset: String(offset) });
+      if (consoleUsageTokenName.trim()) params.set("token_name", consoleUsageTokenName.trim());
+      if (consoleUsageModel.trim()) params.set("model", consoleUsageModel.trim());
+      if (consoleUsageGroup) params.set("group_id", consoleUsageGroup);
+      if (consoleUsageFrom) params.set("from", new Date(`${consoleUsageFrom}T00:00:00Z`).toISOString());
+      if (consoleUsageTo) params.set("to", new Date(`${consoleUsageTo}T23:59:59.999Z`).toISOString());
+		const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/usage?${params.toString()}`, {
         headers: { Accept: "application/json" },
         credentials: "same-origin",
       });
@@ -2921,6 +2941,25 @@ export default function App() {
       project_id: projectID,
       group_id: defaultGroup?.id || "",
     });
+    setTokenEditingID("");
+    setTokenCreateMessage({ kind: "", text: "" });
+    setIssuedToken(null);
+    setTokenCreateOpen(true);
+  }
+
+  function openEditToken(token: TokenSummary) {
+    if (!hasConsolePermission("token:update") || token.status === "revoked" || token.status === "expired") return;
+    setTokenEditingID(token.id);
+    setTokenCreateMode("console");
+    setTokenCreateForm({
+      tenant_id: token.tenant_id,
+      project_id: token.project_id,
+      name: token.name,
+      expires_at: token.expires_at ? toDateTimeLocal(token.expires_at) : "",
+      group_id: token.group_id || "",
+      allowed_ips: (token.allowed_ips || []).join("\n"),
+      allowed_domains: (token.allowed_domains || []).join("\n"),
+    });
     setTokenCreateMessage({ kind: "", text: "" });
     setIssuedToken(null);
     setTokenCreateOpen(true);
@@ -2929,6 +2968,7 @@ export default function App() {
   function closeTokenCreate() {
     if (tokenCreateBusy) return;
     setTokenCreateOpen(false);
+    setTokenEditingID("");
     setTokenCreateForm(defaultTokenCreateForm());
     setTokenCreateMessage({ kind: "", text: "" });
     setIssuedToken(null);
@@ -2943,46 +2983,115 @@ export default function App() {
       setTokenCreateMessage({ kind: "error", text: t("tokensCreateValidation") });
       return;
     }
+    const editingToken = tokenEditingID ? tokens.find((token) => token.id === tokenEditingID) : undefined;
     setTokenCreateBusy(true);
-    setTokenCreateMessage({ kind: "pending", text: t("tokensCreating") });
+    setTokenCreateMessage({ kind: "pending", text: editingToken ? t("tokensSaving") : t("tokensCreating") });
     try {
       const payload: Record<string, unknown> = {
         name,
         project_id: projectID,
         group_id: tokenCreateForm.group_id,
-        allowed_models: [],
+        allowed_models: editingToken?.allowed_models || [],
+        rate_limit: editingToken?.rate_limit || {},
         allowed_ips: parseTokenList(tokenCreateForm.allowed_ips),
         allowed_domains: parseTokenList(tokenCreateForm.allowed_domains),
       };
       if (tokenCreateForm.expires_at) {
         payload.expires_at = new Date(tokenCreateForm.expires_at).toISOString();
       }
-      const endpoint = `/console/v1/tenants/${encodeURIComponent(principal?.tenant_id || "")}/tokens`;
+      const baseEndpoint = `/console/v1/tenants/${encodeURIComponent(principal?.tenant_id || "")}/tokens`;
+      const endpoint = editingToken ? `${baseEndpoint}/${encodeURIComponent(editingToken.id)}` : baseEndpoint;
       const response = await fetch(endpoint, {
-        method: "POST",
+        method: editingToken ? "PUT" : "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
         body: JSON.stringify(payload),
       });
-      const result = (await response.json().catch(() => ({}))) as IssuedTokenResponse & { error?: string };
+      const result = (await response.json().catch(() => ({}))) as (IssuedTokenResponse | TokenSummary) & { error?: string };
       if (!response.ok) throw new Error(result.error || "token creation failed");
-      setIssuedToken(result);
-      setTokenCreateMessage({ kind: "success", text: t("tokensCreateSuccess") });
-      await refreshConsoleTokens(false);
+      if (editingToken) {
+        setTokenCreateOpen(false);
+        setTokenEditingID("");
+        setTokenCreateForm(defaultTokenCreateForm());
+        setTokenCreateMessage({ kind: "", text: "" });
+        await refreshConsoleTokens(false);
+        setTokensMessage({ kind: "success", text: t("tokensSaveSuccess") });
+      } else {
+        const issued = result as IssuedTokenResponse;
+        setIssuedToken(issued);
+        setConsoleTokenSecrets((current) => ({ ...current, [issued.id]: issued.token }));
+        setTokenCreateMessage({ kind: "success", text: t("tokensCreateSuccess") });
+        await refreshConsoleTokens(false);
+      }
     } catch {
-      setTokenCreateMessage({ kind: "error", text: t("tokensCreateValidation") });
+      setTokenCreateMessage({ kind: "error", text: editingToken ? t("tokensSaveFailed") : t("tokensCreateValidation") });
     } finally {
       setTokenCreateBusy(false);
     }
   }
 
-  async function revokeConsoleToken(token: TokenSummary) {
-    if (token.status !== "active" || !principal?.tenant_id) return;
-    if (tokenRevokeConfirm !== token.id) {
-      setTokenRevokeConfirm(token.id);
-      setTokensMessage({ kind: "pending", text: t("tokensRevokeConfirm") });
-      return;
+  async function pauseConsoleToken(token: TokenSummary) {
+    if (!principal?.tenant_id) return;
+    if (token.status !== "active") return;
+    setTokenActionBusy(token.id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/tokens/${encodeURIComponent(token.id)}/pause`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      if (!response.ok) throw new Error("token pause failed");
+      await refreshConsoleTokens(false);
+      setTokensMessage({ kind: "success", text: t("tokensPauseSuccess") });
+    } catch {
+      setTokensMessage({ kind: "error", text: t("tokensUnavailable") });
+    } finally {
+      setTokenActionBusy("");
     }
+  }
+
+  async function resumeConsoleToken(token: TokenSummary) {
+    if (!principal?.tenant_id) return;
+    if (token.status !== "disabled") return;
+    setTokenActionBusy(token.id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/tokens/${encodeURIComponent(token.id)}/resume`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      if (!response.ok) throw new Error("token resume failed");
+      await refreshConsoleTokens(false);
+      setTokensMessage({ kind: "success", text: t("tokensResumeSuccess") });
+    } catch {
+      setTokensMessage({ kind: "error", text: t("tokensUnavailable") });
+    } finally {
+      setTokenActionBusy("");
+    }
+  }
+
+  async function terminateConsoleToken(token: TokenSummary) {
+    if (!principal?.tenant_id || (token.status !== "active" && token.status !== "disabled")) return;
+    if (!window.confirm(t("tokensTerminateConfirm"))) return;
+    setTokenActionBusy(token.id);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/tokens/${encodeURIComponent(token.id)}/terminate`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      if (!response.ok) throw new Error("token terminate failed");
+      await refreshConsoleTokens(false);
+      setTokensMessage({ kind: "success", text: t("tokensTerminateSuccess") });
+    } catch {
+      setTokensMessage({ kind: "error", text: t("tokensUnavailable") });
+    } finally {
+      setTokenActionBusy("");
+    }
+  }
+
+  async function deleteConsoleToken(token: TokenSummary) {
+    if (!principal?.tenant_id || !window.confirm(t("tokensDeleteConfirm"))) return;
     setTokenActionBusy(token.id);
     try {
       const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/tokens/${encodeURIComponent(token.id)}`, {
@@ -2990,15 +3099,32 @@ export default function App() {
         headers: { Accept: "application/json" },
         credentials: "same-origin",
       });
-      if (!response.ok) throw new Error("token revoke failed");
-      setTokenRevokeConfirm("");
+      if (!response.ok) throw new Error("token delete failed");
       await refreshConsoleTokens(false);
-      setTokensMessage({ kind: "success", text: t("tokensRevokeSuccess") });
+      setTokensMessage({ kind: "success", text: t("tokensDeleteSuccess") });
     } catch {
       setTokensMessage({ kind: "error", text: t("tokensUnavailable") });
     } finally {
       setTokenActionBusy("");
     }
+  }
+
+  async function copyConsoleToken(token: TokenSummary) {
+    const secret = consoleTokenSecrets[token.id];
+    if (!secret) {
+      setTokensMessage({ kind: "error", text: t("tokensSecretUnavailable") });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(secret);
+      setTokensMessage({ kind: "success", text: t("tokensSecretCopied") });
+    } catch {
+      setTokensMessage({ kind: "error", text: t("tokensSecretCopyFailed") });
+    }
+  }
+
+  function tokenSecretAvailable(token: TokenSummary) {
+    return Boolean(consoleTokenSecrets[token.id]);
   }
 
   async function revokeAdminToken(token: TokenSummary) {
@@ -3512,6 +3638,8 @@ export default function App() {
     setTokenCreateForm(defaultTokenCreateForm());
     setTokenCreateMessage({ kind: "", text: "" });
     setIssuedToken(null);
+    setTokenEditingID("");
+    setConsoleTokenSecrets({});
     setTokenRevokeConfirm("");
     setConsoleTokenGroups([]);
     setConsoleTokenGroupsBusy(false);
@@ -3541,6 +3669,11 @@ export default function App() {
     setUsageStatus(null);
 	setConsoleUsageReport(null);
 	setConsoleUsageOffset(0);
+    setConsoleUsageTokenName("");
+    setConsoleUsageModel("");
+    setConsoleUsageGroup("");
+    setConsoleUsageFrom("");
+    setConsoleUsageTo("");
     setUsageMessage({ kind: "", text: "" });
     setUsageBusy(false);
     setConsoleProfile(null);
@@ -3769,8 +3902,14 @@ export default function App() {
             tokensBusy={tokensBusy}
             tokensMessage={tokensMessage}
             refreshTokens={refreshConsoleTokens}
-            revokeToken={revokeConsoleToken}
-            revokeConfirm={tokenRevokeConfirm}
+            editToken={openEditToken}
+            pauseToken={pauseConsoleToken}
+            resumeToken={resumeConsoleToken}
+            terminateToken={terminateConsoleToken}
+            deleteToken={deleteConsoleToken}
+            copyToken={copyConsoleToken}
+            tokenSecretAvailable={tokenSecretAvailable}
+            tokenActionBusy={tokenActionBusy}
             openCreateToken={openCreateToken}
             projects={projects}
             projectsBusy={projectsBusy}
@@ -3807,6 +3946,18 @@ export default function App() {
             usageMessage={usageMessage}
             refreshUsage={refreshConsoleUsage}
 			 consoleUsageReport={consoleUsageReport}
+            consoleUsageTokens={tokens}
+            consoleUsageGroups={consoleTokenGroups}
+            consoleUsageTokenName={consoleUsageTokenName}
+            setConsoleUsageTokenName={setConsoleUsageTokenName}
+            consoleUsageModel={consoleUsageModel}
+            setConsoleUsageModel={setConsoleUsageModel}
+            consoleUsageGroup={consoleUsageGroup}
+            setConsoleUsageGroup={setConsoleUsageGroup}
+            consoleUsageFrom={consoleUsageFrom}
+            setConsoleUsageFrom={setConsoleUsageFrom}
+            consoleUsageTo={consoleUsageTo}
+            setConsoleUsageTo={setConsoleUsageTo}
             apiEndpoints={publicAPIEndpoints}
             modelStatusEnabled={publicFeatures?.model_status_enabled !== false}
             modelStatusReport={modelStatusReport}
@@ -4081,6 +4232,7 @@ export default function App() {
         busy={tokenCreateBusy}
         message={tokenCreateMessage}
         issuedToken={issuedToken}
+        editing={Boolean(tokenEditingID)}
         onClose={closeTokenCreate}
         onSubmit={handleTokenCreate}
       />

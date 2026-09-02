@@ -774,8 +774,31 @@ func TestAnthropicMessagesStreamingAcceptsClaudeAppPayload(t *testing.T) {
 	if strings.Count(body, "event: message_delta") != 1 {
 		t.Fatalf("Anthropic SSE response must contain one message_delta, got %d: %s", strings.Count(body, "event: message_delta"), body)
 	}
+	if !strings.Contains(body, `"stop_reason":"end_turn"`) {
+		t.Fatalf("Anthropic SSE response must use end_turn, got: %s", body)
+	}
 	if service.request.Model != "claude-sonnet-5" || len(service.request.Messages) != 4 {
 		t.Fatalf("stream service received unexpected normalized request: %#v", service.request)
+	}
+}
+
+func TestAnthropicWireStopReasonUsesAnthropicValues(t *testing.T) {
+	tests := map[string]string{
+		"":               "end_turn",
+		"stop":           "end_turn",
+		"end_turn":       "end_turn",
+		"length":         "max_tokens",
+		"tool_calls":     "tool_use",
+		"function_call":  "tool_use",
+		"content_filter": "refusal",
+		"max_tokens":     "max_tokens",
+		"tool_use":       "tool_use",
+		"custom_future":  "custom_future",
+	}
+	for input, expected := range tests {
+		if actual := anthropicWireStopReason(input); actual != expected {
+			t.Errorf("anthropicWireStopReason(%q) = %q, want %q", input, actual, expected)
+		}
 	}
 }
 
@@ -2438,7 +2461,15 @@ func (s *fakeTokenConsoleService) Create(_ context.Context, request tokens.Creat
 	return tokens.IssuedToken{ID: "token-1", Plaintext: "sk-test-once", Prefix: "sk-test"}, nil
 }
 
-func (*fakeTokenConsoleService) RevokeOwned(context.Context, string, string, string) error {
+func (*fakeTokenConsoleService) UpdateOwned(context.Context, tokens.UpdateRequest) (tokens.Summary, error) {
+	return tokens.Summary{ID: "token-1", Status: "active"}, nil
+}
+
+func (*fakeTokenConsoleService) SetStatusOwned(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (*fakeTokenConsoleService) DeleteOwned(context.Context, string, string, string) error {
 	return nil
 }
 

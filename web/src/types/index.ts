@@ -446,7 +446,11 @@ export interface TokenSummary {
   network_allowlist_enabled?: boolean;
   allowed_ip_count?: number;
   allowed_domain_count?: number;
-  status: "active" | "revoked" | "expired";
+  allowed_models?: string[];
+  allowed_ips?: string[];
+  allowed_domains?: string[];
+  rate_limit?: Record<string, number>;
+  status: "active" | "disabled" | "revoked" | "expired";
   expires_at?: string;
   last_used_at?: string;
   created_at: string;

@@ -626,12 +626,48 @@ func newHandler(
 		),
 	))
 
+	mux.Handle("PUT /console/v1/tenants/{tenantID}/tokens/{tokenID}", authMiddleware.Protect(
+		auth.AudienceConsole,
+		"token:update",
+	)(
+		auth.RequireTenantPath("tenantID")(
+			tokenConsoleUpdateHandler(consoleTokenService),
+		),
+	))
+
+	mux.Handle("POST /console/v1/tenants/{tenantID}/tokens/{tokenID}/pause", authMiddleware.Protect(
+		auth.AudienceConsole,
+		"token:update",
+	)(
+		auth.RequireTenantPath("tenantID")(
+			tokenConsoleStatusHandler(consoleTokenService, "disabled"),
+		),
+	))
+
+	mux.Handle("POST /console/v1/tenants/{tenantID}/tokens/{tokenID}/resume", authMiddleware.Protect(
+		auth.AudienceConsole,
+		"token:update",
+	)(
+		auth.RequireTenantPath("tenantID")(
+			tokenConsoleStatusHandler(consoleTokenService, "active"),
+		),
+	))
+
+	mux.Handle("POST /console/v1/tenants/{tenantID}/tokens/{tokenID}/terminate", authMiddleware.Protect(
+		auth.AudienceConsole,
+		"token:revoke",
+	)(
+		auth.RequireTenantPath("tenantID")(
+			tokenConsoleStatusHandler(consoleTokenService, "revoked"),
+		),
+	))
+
 	mux.Handle("DELETE /console/v1/tenants/{tenantID}/tokens/{tokenID}", authMiddleware.Protect(
 		auth.AudienceConsole,
 		"token:revoke",
 	)(
 		auth.RequireTenantPath("tenantID")(
-			tokenConsoleRevokeHandler(consoleTokenService),
+			tokenConsoleDeleteHandler(consoleTokenService),
 		),
 	))
 
@@ -3471,7 +3507,7 @@ func tokenConsoleCreateHandler(service tokens.ConsoleService) http.Handler {
 	})
 }
 
-func tokenConsoleRevokeHandler(service tokens.ConsoleService) http.Handler {
+func tokenConsoleUpdateHandler(service tokens.ConsoleService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})
@@ -3482,11 +3518,76 @@ func tokenConsoleRevokeHandler(service tokens.ConsoleService) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
 			return
 		}
-		if err := service.RevokeOwned(r.Context(), r.PathValue("tokenID"), principal.TenantID, principal.ID); err != nil {
+		var payload tokenCreatePayload
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
+			return
+		}
+		projectID := strings.TrimSpace(payload.ProjectID)
+		if projectID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_REQUEST"})
+			return
+		}
+		if _, allowed := principal.ProjectIDs[projectID]; !allowed {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "TOKEN_RESOURCE_NOT_FOUND"})
+			return
+		}
+		item, err := service.UpdateOwned(r.Context(), tokens.UpdateRequest{
+			TokenID:        r.PathValue("tokenID"),
+			TenantID:       principal.TenantID,
+			CreatedBy:      principal.ID,
+			ProjectID:      projectID,
+			Name:           payload.Name,
+			AllowedModels:  payload.AllowedModels,
+			AllowedIPs:     payload.AllowedIPs,
+			AllowedDomains: payload.AllowedDomains,
+			RateLimit:      payload.RateLimit,
+			ExpiresAt:      payload.ExpiresAt,
+			GroupID:        payload.GroupID,
+		})
+		if err != nil {
 			writeTokenConsoleError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+		writeJSON(w, http.StatusOK, item)
+	})
+}
+
+func tokenConsoleStatusHandler(service tokens.ConsoleService, status string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		if err := service.SetStatusOwned(r.Context(), r.PathValue("tokenID"), principal.TenantID, principal.ID, status); err != nil {
+			writeTokenConsoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": status})
+	})
+}
+
+func tokenConsoleDeleteHandler(service tokens.ConsoleService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		if err := service.DeleteOwned(r.Context(), r.PathValue("tokenID"), principal.TenantID, principal.ID); err != nil {
+			writeTokenConsoleError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	})
 }
 
@@ -3769,15 +3870,16 @@ func usageReportQuery(r *http.Request) (billing.UsageQuery, error) {
 		return billing.UsageQuery{}, errors.New("invalid report identifier")
 	}
 	return billing.UsageQuery{
-		Limit:    limit,
-		Offset:   offset,
-		TenantID: tenantID,
-		Model:    r.URL.Query().Get("model"),
-		GroupID:  groupID,
-		Status:   r.URL.Query().Get("status"),
-		Search:   r.URL.Query().Get("search"),
-		From:     from,
-		To:       to,
+		Limit:     limit,
+		Offset:    offset,
+		TenantID:  tenantID,
+		TokenName: r.URL.Query().Get("token_name"),
+		Model:     r.URL.Query().Get("model"),
+		GroupID:   groupID,
+		Status:    r.URL.Query().Get("status"),
+		Search:    r.URL.Query().Get("search"),
+		From:      from,
+		To:        to,
 	}, nil
 }
 

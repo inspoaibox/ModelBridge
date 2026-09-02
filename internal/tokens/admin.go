@@ -19,21 +19,25 @@ var (
 )
 
 type Summary struct {
-	ID                      string     `json:"id"`
-	Name                    string     `json:"name"`
-	TokenPrefix             string     `json:"token_prefix"`
-	CreatedBy               string     `json:"created_by,omitempty"`
-	TenantID                string     `json:"tenant_id"`
-	ProjectID               string     `json:"project_id"`
-	GroupID                 string     `json:"group_id,omitempty"`
-	GroupCode               string     `json:"group_code,omitempty"`
-	Status                  string     `json:"status"`
-	NetworkAllowlistEnabled bool       `json:"network_allowlist_enabled"`
-	AllowedIPCount          int        `json:"allowed_ip_count"`
-	AllowedDomainCount      int        `json:"allowed_domain_count"`
-	ExpiresAt               *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt              *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt               time.Time  `json:"created_at"`
+	ID                      string           `json:"id"`
+	Name                    string           `json:"name"`
+	TokenPrefix             string           `json:"token_prefix"`
+	CreatedBy               string           `json:"created_by,omitempty"`
+	TenantID                string           `json:"tenant_id"`
+	ProjectID               string           `json:"project_id"`
+	GroupID                 string           `json:"group_id,omitempty"`
+	GroupCode               string           `json:"group_code,omitempty"`
+	Status                  string           `json:"status"`
+	NetworkAllowlistEnabled bool             `json:"network_allowlist_enabled"`
+	AllowedIPCount          int              `json:"allowed_ip_count"`
+	AllowedDomainCount      int              `json:"allowed_domain_count"`
+	AllowedModels           []string         `json:"allowed_models,omitempty"`
+	AllowedIPs              []string         `json:"allowed_ips,omitempty"`
+	AllowedDomains          []string         `json:"allowed_domains,omitempty"`
+	RateLimit               map[string]int64 `json:"rate_limit,omitempty"`
+	ExpiresAt               *time.Time       `json:"expires_at,omitempty"`
+	LastUsedAt              *time.Time       `json:"last_used_at,omitempty"`
+	CreatedAt               time.Time        `json:"created_at"`
 }
 
 type AdminService interface {
@@ -60,7 +64,7 @@ func (s *SQLAdminService) List(ctx context.Context) ([]Summary, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrAdminUnavailable
 	}
-	return listSummaries(ctx, s.db, "")
+	return listSummaries(ctx, s.db, "WHERE t.deleted_at IS NULL")
 }
 
 func (s *SQLAdminService) SetGroup(ctx context.Context, tokenID, groupID string) (Summary, error) {

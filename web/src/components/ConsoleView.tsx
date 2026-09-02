@@ -4,6 +4,8 @@ import {
   BadgeDollarSign,
   BookOpen,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   FolderKanban,
   Gauge,
@@ -11,17 +13,23 @@ import {
   LayoutDashboard,
   LogOut,
   Network,
+  Pencil,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
+  Ban,
   Trash2,
   UserRound,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, TenantMember, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
+import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
 import { ProfilePanel } from "@/components/ProfilePanel";
@@ -41,8 +49,14 @@ interface ConsoleViewProps {
   tokensBusy: boolean;
   tokensMessage: LoginMessage;
   refreshTokens: (showPending?: boolean) => Promise<void>;
-  revokeToken: (token: TokenSummary) => Promise<void>;
-  revokeConfirm: string;
+  editToken: (token: TokenSummary) => void;
+  pauseToken: (token: TokenSummary) => Promise<void>;
+  resumeToken: (token: TokenSummary) => Promise<void>;
+  terminateToken: (token: TokenSummary) => Promise<void>;
+  deleteToken: (token: TokenSummary) => Promise<void>;
+  copyToken: (token: TokenSummary) => Promise<void>;
+  tokenSecretAvailable: (token: TokenSummary) => boolean;
+  tokenActionBusy: string;
   openCreateToken: () => void;
   billingAccount: BillingAccount | null;
   billingBusy: boolean;
@@ -51,8 +65,20 @@ interface ConsoleViewProps {
   usageStatus: ConsoleUsageStatus | null;
   usageBusy: boolean;
   usageMessage: LoginMessage;
-  refreshUsage: (showPending?: boolean) => Promise<void>;
+  refreshUsage: (showPending?: boolean, offset?: number) => Promise<void>;
   consoleUsageReport: UsageReport | null;
+  consoleUsageTokens: TokenSummary[];
+  consoleUsageGroups: TokenGroupOption[];
+  consoleUsageTokenName: string;
+  setConsoleUsageTokenName: (value: string) => void;
+  consoleUsageModel: string;
+  setConsoleUsageModel: (value: string) => void;
+  consoleUsageGroup: string;
+  setConsoleUsageGroup: (value: string) => void;
+  consoleUsageFrom: string;
+  setConsoleUsageFrom: (value: string) => void;
+  consoleUsageTo: string;
+  setConsoleUsageTo: (value: string) => void;
   apiEndpoints: PublicAPIEndpoint[];
   modelStatusEnabled: boolean;
   modelStatusReport: ModelStatusReport | null;
@@ -132,8 +158,14 @@ export function ConsoleView({
   tokensBusy,
   tokensMessage,
   refreshTokens,
-  revokeToken,
-  revokeConfirm,
+  editToken,
+  pauseToken,
+  resumeToken,
+  terminateToken,
+  deleteToken,
+  copyToken,
+  tokenSecretAvailable,
+  tokenActionBusy,
   openCreateToken,
   billingAccount,
   billingBusy,
@@ -144,6 +176,18 @@ export function ConsoleView({
   usageMessage,
   refreshUsage,
   consoleUsageReport,
+  consoleUsageTokens,
+  consoleUsageGroups,
+  consoleUsageTokenName,
+  setConsoleUsageTokenName,
+  consoleUsageModel,
+  setConsoleUsageModel,
+  consoleUsageGroup,
+  setConsoleUsageGroup,
+  consoleUsageFrom,
+  setConsoleUsageFrom,
+  consoleUsageTo,
+  setConsoleUsageTo,
   apiEndpoints,
   modelStatusEnabled,
   modelStatusReport,
@@ -234,9 +278,9 @@ export function ConsoleView({
 
           {displayedSection === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
           {displayedSection === "model-status" ? <ModelStatusPanel language={language} report={modelStatusReport} busy={modelStatusBusy} message={modelStatusMessage} refresh={refreshModelStatus} /> : null}
-          {displayedSection === "usage" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} /> : null}
+          {displayedSection === "usage" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} tokens={consoleUsageTokens} groups={consoleUsageGroups} tokenName={consoleUsageTokenName} setTokenName={setConsoleUsageTokenName} model={consoleUsageModel} setModel={setConsoleUsageModel} group={consoleUsageGroup} setGroup={setConsoleUsageGroup} from={consoleUsageFrom} setFrom={setConsoleUsageFrom} to={consoleUsageTo} setTo={setConsoleUsageTo} /> : null}
           {displayedSection === "projects" ? <TenantWorkspacePanel language={language} canManageTenant={canManageTenant} canManageProjects={canManageProjects} projects={projects} projectsBusy={projectsBusy} projectsMessage={projectsMessage} refreshProjects={refreshProjects} saveProject={saveProject} deleteProject={deleteProject} projectActionBusy={projectActionBusy} projectDeleteConfirm={projectDeleteConfirm} members={members} membersBusy={membersBusy} membersMessage={membersMessage} refreshMembers={refreshMembers} addMember={addMember} updateMember={updateMember} removeMember={removeMember} memberActionBusy={memberActionBusy} projectMembers={projectMembers} projectMembersBusy={projectMembersBusy} projectMembersMessage={projectMembersMessage} selectedProjectID={selectedProjectID} selectProject={selectProject} refreshProjectMembers={refreshProjectMembers} addProjectMember={addProjectMember} updateProjectMember={updateProjectMember} removeProjectMember={removeProjectMember} projectMemberActionBusy={projectMemberActionBusy} /> : null}
-          {displayedSection === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} revokeToken={revokeToken} revokeConfirm={revokeConfirm} openCreateToken={openCreateToken} canCreateToken={canCreateToken} canRevokeToken={canRevokeToken} apiEndpoints={apiEndpoints} /> : null}
+          {displayedSection === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} editToken={editToken} pauseToken={pauseToken} resumeToken={resumeToken} terminateToken={terminateToken} deleteToken={deleteToken} copyToken={copyToken} tokenSecretAvailable={tokenSecretAvailable} tokenActionBusy={tokenActionBusy} openCreateToken={openCreateToken} canCreateToken={canCreateToken} canRevokeToken={canRevokeToken} canUpdateToken={hasPermission("token:update")} apiEndpoints={apiEndpoints} /> : null}
           {displayedSection === "billing" ? <BillingPanel language={language} t={t} billingAccount={billingAccount} billingBusy={billingBusy} billingMessage={billingMessage} refreshBilling={refreshBilling} /> : null}
           {displayedSection === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} totpEnabled={totpEnabled} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
           {displayedSection === "docs" ? <UsageDocsPanel language={language} routeTo={routeTo} apiEndpoints={apiEndpoints} /> : null}
@@ -251,9 +295,51 @@ function DashboardPanel({ t, tokens, activeTokens, projectCount, principal, usag
   return <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map((card) => <Card key={card.label} className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardDescription>{card.label}</CardDescription><div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", card.tone === "emerald" ? "bg-emerald-500/10 text-emerald-600" : card.tone === "cyan" ? "bg-cyan-500/10 text-cyan-600" : card.tone === "amber" ? "bg-amber-500/10 text-amber-600" : "bg-indigo-500/10 text-indigo-600")}><card.icon className="h-4 w-4" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-slate-950 dark:text-white">{card.value}</div></CardContent></Card>)}</div><div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]"><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleOverviewTitle")}</CardTitle><CardDescription>{t("consoleOverviewHint")}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleTenantID")}</span><code className="max-w-[65%] truncate text-xs text-slate-700 dark:text-slate-300">{principal?.tenant_id || "-"}</code></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleRoles")}</span><span className="font-medium text-slate-800 dark:text-slate-200">{principal?.roles?.join(", ") || "-"}</span></div></CardContent></Card><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Network className="h-5 w-5 text-cyan-600" />{t("consoleQuickActions")}</CardTitle></CardHeader><CardContent className="space-y-2">{canCreateToken ? <button type="button" onClick={() => onNavigate("tokens")} className="flex w-full items-center gap-3 rounded-xl bg-indigo-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-indigo-500/10 dark:text-slate-300"><KeyRound className="h-4 w-4 text-indigo-600" />{t("consoleQuickToken")}</button> : null}<button type="button" onClick={() => onNavigate("usage")} className="flex w-full items-center gap-3 rounded-xl bg-cyan-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-cyan-500/10 dark:text-slate-300"><Activity className="h-4 w-4 text-cyan-600" />{t("consoleQuickUsage")}</button></CardContent></Card></div></div>;
 }
 
-function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMessage, refreshUsage }: { language: Language; t: (key: TranslationKey) => string; usageStatus: ConsoleUsageStatus | null; usageReport: UsageReport | null; usageBusy: boolean; usageMessage: LoginMessage; refreshUsage: (showPending?: boolean) => Promise<void> }) {
+function UsagePanel({
+  language,
+  t,
+  usageStatus,
+  usageReport,
+  usageBusy,
+  usageMessage,
+  refreshUsage,
+  tokens,
+  groups,
+  tokenName,
+  setTokenName,
+  model,
+  setModel,
+  group,
+  setGroup,
+  from,
+  setFrom,
+  to,
+  setTo,
+}: {
+  language: Language;
+  t: (key: TranslationKey) => string;
+  usageStatus: ConsoleUsageStatus | null;
+  usageReport: UsageReport | null;
+  usageBusy: boolean;
+  usageMessage: LoginMessage;
+  refreshUsage: (showPending?: boolean, offset?: number) => Promise<void>;
+  tokens: TokenSummary[];
+  groups: TokenGroupOption[];
+  tokenName: string;
+  setTokenName: (value: string) => void;
+  model: string;
+  setModel: (value: string) => void;
+  group: string;
+  setGroup: (value: string) => void;
+  from: string;
+  setFrom: (value: string) => void;
+  to: string;
+  setTo: (value: string) => void;
+}) {
   const report = usageReport;
   const summary = report?.summary;
+  const hasPrevious = Boolean(report && report.offset > 0);
+  const hasNext = Boolean(report && report.offset + report.records.length < report.summary.total_records);
   return (
     <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
       <CardHeader className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 dark:border-slate-800/80 sm:flex-row sm:items-start sm:justify-between">
@@ -271,6 +357,23 @@ function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMes
       </CardHeader>
       <CardContent className="space-y-5 pt-5">
         {usageMessage.text ? <div className="rounded-xl border border-rose-500/30 bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{usageMessage.text}</div> : null}
+        <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-950/35 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="relative sm:col-span-2 lg:col-span-1">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <Input value={model} onChange={(event) => setModel(event.target.value)} placeholder={t("consoleUsageModelFilter")} className="h-9 pl-9 text-xs" />
+          </div>
+          <select value={tokenName} onChange={(event) => setTokenName(event.target.value)} className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <option value="">{t("consoleUsageAllTokens")}</option>
+            {tokens.map((token) => <option key={token.id} value={token.name}>{token.name}</option>)}
+          </select>
+          <select value={group} onChange={(event) => setGroup(event.target.value)} className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+            <option value="">{t("consoleUsageAllGroups")}</option>
+            {groups.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="h-9 text-xs" aria-label={t("consoleUsageFrom")} />
+          <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="h-9 text-xs" aria-label={t("consoleUsageTo")} />
+          <Button type="button" size="sm" onClick={() => void refreshUsage(true, 0)} disabled={usageBusy} className="h-9 gap-2"><Search className="h-3.5 w-3.5" />{t("consoleUsageApplyFilters")}</Button>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <UsageMetric label={t("consoleUsageRequests")} value={summary ? formatInteger(summary.total_records) : "-"} tone="indigo" icon={Activity} />
           <UsageMetric label={t("consoleUsageTotalTokens")} value={summary ? formatInteger(summary.total_tokens) : "-"} tone="cyan" icon={Gauge} />
@@ -286,13 +389,14 @@ function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMes
         <SummaryMeterBreakdown metrics={summary?.usage_metrics} language={language} label={t("consoleUsageOtherMetrics")} />
         <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
           <Table className="min-w-[1180px]">
-            <TableHeader><TableRow><TableHead className="w-[150px]">{t("consoleUsageTime")}</TableHead><TableHead className="w-[180px]">{t("consoleUsageTokenName")}</TableHead><TableHead className="w-[190px]">{t("consoleUsageModel")}</TableHead><TableHead className="w-[180px]">{t("consoleUsageGroup")}</TableHead><TableHead className="w-[92px]">{t("consoleUsageLatency")}</TableHead><TableHead className="w-[190px]">{t("consoleUsageTokens")}</TableHead><TableHead className="w-[125px]">{t("consoleUsageCost")}</TableHead><TableHead className="w-[130px]">{t("consoleUsageStatus")}</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead className="w-[150px]">{t("consoleUsageTime")}</TableHead><TableHead className="w-[180px]">{t("consoleUsageTokenName")}</TableHead><TableHead className="w-[190px]">{t("consoleUsageModel")}</TableHead><TableHead className="w-[180px]">{t("consoleUsageGroup")}</TableHead><TableHead className="w-[150px]">{t("consoleUsageIP")}</TableHead><TableHead className="w-[92px]">{t("consoleUsageLatency")}</TableHead><TableHead className="w-[190px]">{t("consoleUsageTokens")}</TableHead><TableHead className="w-[125px]">{t("consoleUsageCost")}</TableHead><TableHead className="w-[130px]">{t("consoleUsageStatus")}</TableHead></TableRow></TableHeader>
             <TableBody>
-              {usageBusy && !report ? <TableRow><TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-4 w-4 animate-spin" />{t("consoleUsageLoading")}</TableCell></TableRow> : !report || report.records.length === 0 ? <TableRow><TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500">{t("consoleUsageEmpty")}</TableCell></TableRow> : report.records.map((record) => <TableRow key={record.id}>
+              {usageBusy && !report ? <TableRow><TableCell colSpan={9} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-4 w-4 animate-spin" />{t("consoleUsageLoading")}</TableCell></TableRow> : !report || report.records.length === 0 ? <TableRow><TableCell colSpan={9} className="py-12 text-center text-sm text-slate-500">{t("consoleUsageEmpty")}</TableCell></TableRow> : report.records.map((record) => <TableRow key={record.id}>
                 <TableCell className="whitespace-nowrap"><div className="font-mono text-xs font-medium text-slate-700 dark:text-slate-200">{formatDate(record.created_at, language)}</div><div className="mt-1 max-w-[135px] truncate font-mono text-[10px] text-slate-400" title={record.endpoint}>{record.endpoint || "-"}</div></TableCell>
                 <TableCell><div className="max-w-[155px] truncate font-semibold text-slate-900 dark:text-white" title={record.token_name || undefined}>{record.token_name || t("consoleUsageUnnamedToken")}</div><div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{record.token_prefix ? `${record.token_prefix}...` : "-"}</div></TableCell>
                 <TableCell><div className="max-w-[170px] truncate font-semibold text-slate-900 dark:text-white" title={record.model}>{record.model || t("consoleUsageUnknownModel")}</div><div className="mt-1 text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{record.provider || "-"}</div></TableCell>
                 <TableCell><Badge variant="cyan" className="max-w-[165px] truncate" title={record.group_name || record.group_code || undefined}>{record.group_name || record.group_code || t("consoleUsageNoGroup")}</Badge><div className="mt-1 max-w-[165px] truncate font-mono text-[10px] text-slate-500 dark:text-slate-400">{record.group_code || "-"}</div></TableCell>
+                <TableCell className="font-mono text-xs text-slate-600 dark:text-slate-300">{record.client_ip || "-"}</TableCell>
                 <TableCell className="whitespace-nowrap"><div className="font-mono text-xs text-slate-700 dark:text-slate-200">{record.latency_ms > 0 ? `${(record.latency_ms / 1000).toFixed(2)}s` : "-"}</div><div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">{record.request_type || t("consoleUsageUnknownRequest")}</div></TableCell>
                 <TableCell><UsageTokenBreakdown record={record} t={t} /><MeterBreakdown metrics={record.usage_metrics} language={language} label={t("consoleUsageOtherMetrics")} /></TableCell>
                 <TableCell className="whitespace-nowrap font-mono text-xs font-semibold text-emerald-700 dark:text-emerald-300"><div>{record.currency} {record.status === "settlement_pending" ? `~${formatUsageCost(record.estimated_cost)}` : formatUsageCost(record.cost)}</div>{record.status === "settlement_pending" ? <div className="text-[10px] font-normal text-amber-600 dark:text-amber-300">{t("consoleUsageReservedCost")}</div> : null}<ChargeBreakdown lines={record.charge_breakdown} language={language} t={t} /></TableCell>
@@ -300,6 +404,13 @@ function UsagePanel({ language, t, usageStatus, usageReport, usageBusy, usageMes
               </TableRow>)}
             </TableBody>
           </Table>
+        </div>
+        <div className="flex flex-col gap-3 border-t border-slate-200/80 pt-4 text-xs text-slate-500 dark:border-slate-800/80 dark:text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+          <span>{report ? `${report.offset + 1}-${report.offset + report.records.length} / ${report.summary.total_records}` : "-"}</span>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => void refreshUsage(true, Math.max(0, (report?.offset || 0) - (report?.limit || 50)))} disabled={usageBusy || !hasPrevious} className="gap-1"><ChevronLeft className="h-3.5 w-3.5" />{t("consoleUsagePrevious")}</Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => void refreshUsage(true, (report?.offset || 0) + (report?.limit || 50))} disabled={usageBusy || !hasNext} className="gap-1">{t("consoleUsageNext")}<ChevronRight className="h-3.5 w-3.5" /></Button>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -379,7 +490,47 @@ function UsageStatusBadge({ status, failureReason, t }: { status: string; failur
 }
 function formatDate(value: string, language: Language) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "-" : new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", { dateStyle: "short", timeStyle: "medium" }).format(date); }
 
-function TokensPanel({ language, t, tokens, tokensBusy, tokensMessage, refreshTokens, revokeToken, revokeConfirm, openCreateToken, canCreateToken, canRevokeToken, apiEndpoints }: { language: Language; t: (key: TranslationKey) => string; tokens: TokenSummary[]; tokensBusy: boolean; tokensMessage: LoginMessage; refreshTokens: (showPending?: boolean) => Promise<void>; revokeToken: (token: TokenSummary) => Promise<void>; revokeConfirm: string; openCreateToken: () => void; canCreateToken: boolean; canRevokeToken: boolean; apiEndpoints: PublicAPIEndpoint[] }) {
+function TokensPanel({
+  language,
+  t,
+  tokens,
+  tokensBusy,
+  tokensMessage,
+  refreshTokens,
+  editToken,
+  pauseToken,
+  resumeToken,
+  terminateToken,
+  deleteToken,
+  copyToken,
+  tokenSecretAvailable,
+  tokenActionBusy,
+  openCreateToken,
+  canCreateToken,
+  canRevokeToken,
+  canUpdateToken,
+  apiEndpoints,
+}: {
+  language: Language;
+  t: (key: TranslationKey) => string;
+  tokens: TokenSummary[];
+  tokensBusy: boolean;
+  tokensMessage: LoginMessage;
+  refreshTokens: (showPending?: boolean) => Promise<void>;
+  editToken: (token: TokenSummary) => void;
+  pauseToken: (token: TokenSummary) => Promise<void>;
+  resumeToken: (token: TokenSummary) => Promise<void>;
+  terminateToken: (token: TokenSummary) => Promise<void>;
+  deleteToken: (token: TokenSummary) => Promise<void>;
+  copyToken: (token: TokenSummary) => Promise<void>;
+  tokenSecretAvailable: (token: TokenSummary) => boolean;
+  tokenActionBusy: string;
+  openCreateToken: () => void;
+  canCreateToken: boolean;
+  canRevokeToken: boolean;
+  canUpdateToken: boolean;
+  apiEndpoints: PublicAPIEndpoint[];
+}) {
   const formatTime = (value?: string) => value ? new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "-";
   const [copiedEndpointID, setCopiedEndpointID] = useState("");
   async function copyEndpoint(endpoint: PublicAPIEndpoint, protocol: "openai" | "anthropic") {
@@ -423,10 +574,10 @@ function TokensPanel({ language, t, tokens, tokensBusy, tokensMessage, refreshTo
         <APIEndpointAddresses t={t} apiEndpoints={apiEndpoints} copiedEndpointID={copiedEndpointID} copyEndpoint={copyEndpoint} />
         {tokensMessage.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{tokensMessage.text}</div> : null}
         <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-          <Table>
+          <Table className="min-w-[920px]">
             <TableHeader><TableRow><TableHead>{t("tokensName")}</TableHead><TableHead>{t("tokensPrefix")}</TableHead><TableHead>{t("tokensProjectID")}</TableHead><TableHead>{t("tokensGroup")}</TableHead><TableHead>{t("tokensStatus")}</TableHead><TableHead>{t("tokensCreated")}</TableHead><TableHead className="text-right">{t("tokensActions")}</TableHead></TableRow></TableHeader>
             <TableBody>
-              {tokensBusy && tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-indigo-600" />{t("tokensLoading")}</TableCell></TableRow> : tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500">{t("tokensEmpty")}</TableCell></TableRow> : tokens.map((token) => <TableRow key={token.id}><TableCell><div className="font-semibold text-slate-900 dark:text-white">{token.name}</div><div className="mt-1 font-mono text-[10px] text-slate-500">{token.id}</div></TableCell><TableCell><code className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">{token.token_prefix}...</code></TableCell><TableCell className="font-mono text-xs text-slate-600 dark:text-slate-400">{token.project_id}</TableCell><TableCell><Badge variant="muted">{token.group_code || t("tokensNoGroup")}</Badge></TableCell><TableCell><Badge variant={token.status === "active" ? "success" : token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell><TableCell className="whitespace-nowrap text-xs text-slate-500">{formatTime(token.created_at)}</TableCell><TableCell className="text-right"><Button variant={revokeConfirm === token.id ? "destructive" : "ghost"} size="sm" onClick={() => void revokeToken(token)} disabled={!canRevokeToken || token.status !== "active"} className="gap-1.5 text-xs"><Trash2 className="h-3.5 w-3.5" />{revokeConfirm === token.id ? t("tokensRevokeConfirm") : t("tokensRevoke")}</Button></TableCell></TableRow>)}
+              {tokensBusy && tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500"><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-indigo-600" />{t("tokensLoading")}</TableCell></TableRow> : tokens.length === 0 ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-slate-500">{t("tokensEmpty")}</TableCell></TableRow> : tokens.map((token) => <TableRow key={token.id}><TableCell><div className="font-semibold text-slate-900 dark:text-white">{token.name}</div><div className="mt-1 font-mono text-[10px] text-slate-500">{token.id}</div></TableCell><TableCell><code className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">{token.token_prefix}...</code></TableCell><TableCell className="font-mono text-xs text-slate-600 dark:text-slate-400">{token.project_id}</TableCell><TableCell><Badge variant="muted">{token.group_code || t("tokensNoGroup")}</Badge></TableCell><TableCell><Badge variant={token.status === "active" ? "success" : token.status === "disabled" ? "warning" : token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "disabled" ? t("tokensStatusPaused") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell><TableCell className="whitespace-nowrap text-xs text-slate-500">{formatTime(token.created_at)}</TableCell><TableCell><div className="flex justify-end gap-1"><Button type="button" variant="ghost" size="icon" onClick={() => editToken(token)} disabled={!canUpdateToken || token.status === "revoked" || token.status === "expired" || tokenActionBusy === token.id} title={t("tokensEdit")} aria-label={t("tokensEdit")}><Pencil className="h-4 w-4" /></Button>{token.status === "active" && canUpdateToken ? <Button type="button" variant="ghost" size="icon" onClick={() => void pauseToken(token)} disabled={tokenActionBusy === token.id} title={t("tokensPause")} aria-label={t("tokensPause")}><Pause className="h-4 w-4" /></Button> : token.status === "disabled" && canUpdateToken ? <Button type="button" variant="ghost" size="icon" onClick={() => void resumeToken(token)} disabled={tokenActionBusy === token.id} title={t("tokensResume")} aria-label={t("tokensResume")}><Play className="h-4 w-4" /></Button> : null}<Button type="button" variant="ghost" size="icon" onClick={() => void copyToken(token)} disabled={!tokenSecretAvailable(token) || tokenActionBusy === token.id} title={tokenSecretAvailable(token) ? t("tokensCopySecret") : t("tokensSecretUnavailable")} aria-label={t("tokensCopySecret")}><Copy className="h-4 w-4" /></Button>{canRevokeToken && token.status !== "revoked" && token.status !== "expired" ? <Button type="button" variant="ghost" size="icon" onClick={() => void terminateToken(token)} disabled={tokenActionBusy === token.id} title={t("tokensTerminate")} aria-label={t("tokensTerminate")}><Ban className="h-4 w-4 text-amber-600" /></Button> : null}<Button type="button" variant="ghost" size="icon" onClick={() => void deleteToken(token)} disabled={tokenActionBusy === token.id} title={t("tokensDelete")} aria-label={t("tokensDelete")}><Trash2 className="h-4 w-4 text-rose-600" /></Button></div></TableCell></TableRow>)}
             </TableBody>
           </Table>
         </div>

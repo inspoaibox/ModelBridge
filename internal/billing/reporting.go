@@ -57,6 +57,7 @@ type UsageQuery struct {
 	Offset     int
 	TenantID   string
 	ProjectIDs []string
+	TokenName  string
 	Model      string
 	GroupID    string
 	Status     string
@@ -571,6 +572,7 @@ func normalizeUsageQuery(query UsageQuery) UsageQuery {
 		}
 	}
 	query.ProjectIDs = projectIDs
+	query.TokenName = strings.TrimSpace(query.TokenName)
 	query.Model = strings.TrimSpace(query.Model)
 	query.GroupID = strings.TrimSpace(query.GroupID)
 	query.Status = strings.ToLower(strings.TrimSpace(query.Status))
@@ -614,7 +616,10 @@ func usageWhere(query UsageQuery) (string, []any) {
 		clauses = append(clauses, "("+strings.Join(projectClauses, " OR ")+")")
 	}
 	if query.Model != "" {
-		add("mod.model_name = $%d", query.Model)
+		add("mod.model_name ILIKE $%d", "%"+query.Model+"%")
+	}
+	if query.TokenName != "" {
+		add("tok.name ILIKE $%d", "%"+query.TokenName+"%")
 	}
 	if query.GroupID != "" {
 		add("mr.group_id = $%d::uuid", query.GroupID)

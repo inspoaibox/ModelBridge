@@ -19,6 +19,7 @@ interface TokenCreateModalProps {
   busy: boolean;
   message: LoginMessage;
   issuedToken: IssuedTokenResponse | null;
+  editing?: boolean;
   onClose: () => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
 }
@@ -35,6 +36,7 @@ export function TokenCreateModal({
   busy,
   message,
   issuedToken,
+  editing = false,
   onClose,
   onSubmit,
 }: TokenCreateModalProps) {
@@ -58,10 +60,10 @@ export function TokenCreateModal({
           <div>
             <CardTitle className="flex items-center gap-2 text-xl text-slate-900 dark:text-white">
               <KeyRound className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-              {t("tokensCreateTitle")}
+              {editing ? t("tokensEditTitle") : t("tokensCreateTitle")}
             </CardTitle>
             <CardDescription className="mt-1">
-              {mode === "admin" ? t("tokensCreateAdminHint") : t("tokensCreateConsoleHint")}
+              {editing ? t("tokensEditHint") : mode === "admin" ? t("tokensCreateAdminHint") : t("tokensCreateConsoleHint")}
             </CardDescription>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} disabled={busy} aria-label={t("close")}>
@@ -70,7 +72,7 @@ export function TokenCreateModal({
         </CardHeader>
 
         <CardContent className="space-y-5 pt-5">
-          {issuedToken ? (
+          {issuedToken && !editing ? (
             <div className="space-y-4">
               <div className="rounded-xl border border-emerald-500/30 bg-emerald-50 p-4 text-sm text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200">
                 <div className="font-semibold">{t("tokensCreateSuccess")}</div>
@@ -173,7 +175,7 @@ export function TokenCreateModal({
                 <Button type="button" variant="outline" onClick={onClose} disabled={busy}>{t("cancel")}</Button>
                 <Button type="submit" disabled={busy || groupsBusy || groups.length === 0 || (mode === "console" && projectIDs.length === 0)} className="gap-2">
                   {busy ? <span className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                  {t("tokensCreateAction")}
+                  {editing ? t("tokensSaveAction") : t("tokensCreateAction")}
                 </Button>
               </div>
             </form>
