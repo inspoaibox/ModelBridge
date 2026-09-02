@@ -32,7 +32,7 @@
 
 ## 价格
 
-`official_model_price_versions` 保存 LiteLLM 同步的官方参考价；`price_versions` 保存平台手动发布的当前价格版本。模型广场只展示已存在有效渠道映射的模型，分组调用价只展示实际关联该模型渠道的 active 分组，并以：
+`official_model_price_versions` 保存 LiteLLM 同步的官方参考价；`price_versions` 保存平台手动发布的当前价格版本。运行时计费优先匹配 Token、项目、租户和平台手动价格；没有手动价格时，已同步的 LiteLLM 官方价格会直接作为计费基准，并记录 `official_price_version_id` 与完整价格快照。模型广场只展示已存在有效渠道映射的模型，分组调用价只展示实际关联该模型渠道的 active 分组，并以：
 
 ```text
 平台调用价 = 官方参考价 × 分组倍率
