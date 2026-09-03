@@ -289,6 +289,7 @@ function MonitorConfigRow({
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
             <span>{t("adminModelMonitorGroup")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.group_name}</strong> <code className="font-mono">({monitor.group_code})</code></span>
             <span>{t("adminModelMonitorModels")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.selection_mode === "all" ? t("adminModelMonitorAllModels") : `${monitor.model_names.length} ${t("adminModelMonitorSelectedUnit")}`}</strong></span>
+            <span>{t("adminModelMonitorRecentRequests")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.recent_request_limit || 60}</strong></span>
             {monitor.mode === "active" ? <span>{t("adminModelMonitorInterval")}: <strong className="text-slate-700 dark:text-slate-300">{Math.max(1, Math.round(monitor.probe_interval_seconds / 60))} {t("adminModelMonitorMinutes")}</strong></span> : null}
           </div>
           <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 dark:text-slate-500">
@@ -336,7 +337,7 @@ function MonitorConfigModal({
   onSubmit: () => void;
 }) {
   const selectedGroup = groups.find((group) => group.id === form.group_id);
-  const availableModels = selectedGroup?.models ?? [];
+  const availableModels = Array.from(new Set([...(selectedGroup?.models ?? []), ...form.model_names])).sort();
 
   function setGroup(groupID: string) {
     const group = groups.find((item) => item.id === groupID);
@@ -432,6 +433,15 @@ function MonitorConfigModal({
                   <p className="text-xs text-slate-500 dark:text-slate-400">{t("adminModelMonitorActiveHint")}</p>
                 </div>
               ) : null}
+              <div className="space-y-2">
+                <Label htmlFor="model-monitor-recent-request-limit">{t("adminModelMonitorRecentRequests")}</Label>
+                <select id="model-monitor-recent-request-limit" value={String(form.recent_request_limit || 60)} onChange={(event) => setForm((current) => ({ ...current, recent_request_limit: Number(event.target.value) || 60 }))} disabled={busy} className={cn(selectClass, "w-full")}>
+                  <option value="30">30</option>
+                  <option value="60">60</option>
+                  <option value="120">120</option>
+                </select>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{t("adminModelMonitorRecentRequestsHint")}</p>
+              </div>
             </div>
             <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
               <input type="checkbox" checked={form.enabled} onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))} disabled={busy} className="h-4 w-4 accent-indigo-600" />
@@ -466,6 +476,7 @@ function GroupStatusCard({ group, language, t }: { group: ModelStatusReport["gro
           <span>{group.selection_mode === "all" ? t("adminModelMonitorAllModels") : t("adminModelMonitorSelectedModels")}</span>
           <span>{t("adminModelStatusMultiplier")} x{group.multiplier}</span>
           <span>{t("adminModelStatusGroupModels")} {group.models.length}</span>
+          <span>{t("adminModelMonitorRecentRequests")} {group.recent_request_limit || 60}</span>
           <span>{group.rpm_limit ? `RPM ${group.rpm_limit}` : "RPM -"}</span>
         </div>
         {group.monitor_mode === "active" ? <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">{t("adminModelMonitorLastRun")}: {isProbeRunning(group) ? t("adminModelMonitorRunning") : formatTime(group.last_probe_finished_at, language)} · {isProbeRunning(group) ? t("adminModelMonitorRunning") : probeStatusLabel(group.last_probe_status, t)}</div> : null}

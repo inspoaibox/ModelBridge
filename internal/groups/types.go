@@ -85,6 +85,7 @@ type ModelMonitor struct {
 	SelectionMode        string     `json:"selection_mode"`
 	Mode                 string     `json:"mode"`
 	ProbeIntervalSeconds int        `json:"probe_interval_seconds"`
+	RecentRequestLimit   int        `json:"recent_request_limit"`
 	Enabled              bool       `json:"enabled"`
 	ModelNames           []string   `json:"model_names"`
 	AvailableModels      []string   `json:"available_models"`
@@ -103,6 +104,7 @@ type ModelMonitorMutation struct {
 	ModelNames           []string `json:"model_names"`
 	Mode                 string   `json:"mode"`
 	ProbeIntervalSeconds int      `json:"probe_interval_seconds"`
+	RecentRequestLimit   int      `json:"recent_request_limit"`
 	Enabled              bool     `json:"enabled"`
 }
 
@@ -256,6 +258,9 @@ func (m ModelMonitorMutation) validate() (ModelMonitorMutation, error) {
 	if m.ProbeIntervalSeconds == 0 {
 		m.ProbeIntervalSeconds = 300
 	}
+	if m.RecentRequestLimit == 0 {
+		m.RecentRequestLimit = 60
+	}
 	if m.GroupID == "" || !ids.Valid(m.GroupID) || m.Name == "" || len(m.Name) > 128 {
 		return ModelMonitorMutation{}, ErrInvalidRequest
 	}
@@ -266,6 +271,9 @@ func (m ModelMonitorMutation) validate() (ModelMonitorMutation, error) {
 		return ModelMonitorMutation{}, ErrInvalidRequest
 	}
 	if m.ProbeIntervalSeconds < 60 || m.ProbeIntervalSeconds > 86400 {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if m.RecentRequestLimit != 30 && m.RecentRequestLimit != 60 && m.RecentRequestLimit != 120 {
 		return ModelMonitorMutation{}, ErrInvalidRequest
 	}
 	if m.SelectionMode == MonitorSelectionSelected && len(m.ModelNames) == 0 {

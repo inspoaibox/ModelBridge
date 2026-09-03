@@ -17,6 +17,7 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT mmc.id::text, mmc.group_id::text, rg.code, rg.name, mmc.name,
 		       mmc.selection_mode, mmc.mode, mmc.probe_interval_seconds,
+		       mmc.recent_request_limit,
 		       mmc.enabled, mmc.last_probe_started_at, mmc.last_probe_finished_at,
 		       mmc.last_probe_status, mmc.last_probe_error,
 		       mmc.created_at, mmc.updated_at,
@@ -55,6 +56,7 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		if err := rows.Scan(
 			&item.ID, &item.GroupID, &item.GroupCode, &item.GroupName, &item.Name,
 			&item.SelectionMode, &item.Mode, &item.ProbeIntervalSeconds,
+			&item.RecentRequestLimit,
 			&item.Enabled, &lastStarted, &lastFinished, &item.LastProbeStatus,
 			&item.LastProbeError, &item.CreatedAt, &item.UpdatedAt,
 			&modelNamesRaw, &availableRaw,
@@ -113,6 +115,7 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 			return ModelMonitor{}, err
 		}
 	}
+	sameGroup := false
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ModelMonitor{}, err
@@ -150,13 +153,13 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO model_monitor_configs (
 				id, group_id, name, selection_mode, mode, probe_interval_seconds,
-				enabled, created_by, updated_by
+				recent_request_limit, enabled, created_by, updated_by
 			) VALUES (
-				$1::uuid, $2::uuid, $3, $4, $5, $6, $7,
-				NULLIF($8, '')::uuid, NULLIF($8, '')::uuid
+				$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8,
+				NULLIF($9, '')::uuid, NULLIF($9, '')::uuid
 			)
 		`, monitorIDValue, request.GroupID, request.Name, request.SelectionMode,
-			request.Mode, request.ProbeIntervalSeconds, request.Enabled, actorID); err != nil {
+			request.Mode, request.ProbeIntervalSeconds, request.RecentRequestLimit, request.Enabled, actorID); err != nil {
 			return ModelMonitor{}, err
 		}
 	} else {
@@ -171,6 +174,7 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 		} else if err != nil {
 			return ModelMonitor{}, err
 		}
+		sameGroup = currentGroupID == request.GroupID
 		if currentGroupID != request.GroupID {
 			var exists bool
 			if err := tx.QueryRowContext(ctx, `
@@ -192,49 +196,69 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 			    selection_mode = $4,
 			    mode = $5,
 			    probe_interval_seconds = $6,
-			    enabled = $7,
+			    recent_request_limit = $7,
+			    enabled = $8,
 			    probe_started_at = NULL,
 			    last_probe_started_at = NULL,
 			    last_probe_finished_at = NULL,
 			    last_probe_status = '',
 			    last_probe_error = '',
-			    updated_by = NULLIF($8, '')::uuid,
+			    updated_by = NULLIF($9, '')::uuid,
 			    updated_at = now()
 			WHERE id = $1::uuid
 		`, monitorID, request.GroupID, request.Name, request.SelectionMode,
-			request.Mode, request.ProbeIntervalSeconds, request.Enabled, actorID); err != nil {
-			return ModelMonitor{}, err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM model_monitor_config_models WHERE config_id = $1::uuid
-		`, monitorID); err != nil {
+			request.Mode, request.ProbeIntervalSeconds, request.RecentRequestLimit, request.Enabled, actorID); err != nil {
 			return ModelMonitor{}, err
 		}
 	}
 
 	if request.SelectionMode == MonitorSelectionSelected {
 		for _, modelName := range request.ModelNames {
-			result, err := tx.ExecContext(ctx, `
-				INSERT INTO model_monitor_config_models (config_id, model_id)
-				SELECT $1::uuid, m.id
-				FROM routing_group_channels rgc
-				JOIN channels c ON c.id = rgc.channel_id AND c.deleted_at IS NULL
-				JOIN channel_models cm ON cm.channel_id = c.id AND cm.enabled = true
-				JOIN models m ON m.id = cm.model_id AND m.status = 'active'
-				WHERE rgc.group_id = $2::uuid AND m.model_name = $3
-				ON CONFLICT DO NOTHING
-			`, monitorIDValue, request.GroupID, modelName)
+			var found bool
+			err := tx.QueryRowContext(ctx, `
+				WITH candidates AS (
+					SELECT DISTINCT cm.model_id
+					FROM routing_group_channels rgc
+					JOIN channels c ON c.id = rgc.channel_id AND c.deleted_at IS NULL
+					JOIN channel_models cm ON cm.channel_id = c.id
+					JOIN models m ON m.id = cm.model_id AND m.status = 'active'
+					WHERE rgc.group_id = $2::uuid AND m.model_name = $3
+
+					UNION
+
+					SELECT cmm.model_id
+					FROM model_monitor_config_models cmm
+					JOIN models m ON m.id = cmm.model_id AND m.status = 'active'
+					WHERE cmm.config_id = $1::uuid
+					  AND $4::boolean
+					  AND m.model_name = $3
+				), inserted AS (
+					INSERT INTO model_monitor_config_models (config_id, model_id)
+					SELECT $1::uuid, model_id FROM candidates
+					ON CONFLICT DO NOTHING
+				)
+				SELECT EXISTS (SELECT 1 FROM candidates)
+			`, monitorIDValue, request.GroupID, modelName, sameGroup).Scan(&found)
 			if err != nil {
 				return ModelMonitor{}, err
 			}
-			affected, err := result.RowsAffected()
-			if err != nil {
-				return ModelMonitor{}, err
-			}
-			if affected == 0 {
+			if !found {
 				return ModelMonitor{}, ErrInvalidRequest
 			}
 		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM model_monitor_config_models cmm
+			USING models m
+			WHERE cmm.config_id = $1::uuid
+			  AND cmm.model_id = m.id
+			  AND NOT (m.model_name = ANY($2::text[]))
+		`, monitorIDValue, request.ModelNames); err != nil {
+			return ModelMonitor{}, err
+		}
+	} else if _, err := tx.ExecContext(ctx, `
+		DELETE FROM model_monitor_config_models WHERE config_id = $1::uuid
+	`, monitorIDValue); err != nil {
+		return ModelMonitor{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return ModelMonitor{}, err

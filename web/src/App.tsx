@@ -356,6 +356,7 @@ function defaultModelMonitorForm(): ModelMonitorFormState {
     model_names: [],
     mode: "passive",
     probe_interval_seconds: 300,
+    recent_request_limit: 60,
     enabled: true,
   };
 }
@@ -369,6 +370,7 @@ function modelMonitorFormFromItem(item: ModelMonitor): ModelMonitorFormState {
     model_names: item.selection_mode === "all" ? [] : [...item.model_names],
     mode: item.mode,
     probe_interval_seconds: item.probe_interval_seconds,
+    recent_request_limit: item.recent_request_limit || 60,
     enabled: item.enabled,
   };
 }
@@ -2928,6 +2930,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             model_names: form.selection_mode === "all" ? [] : form.model_names,
             mode: form.mode,
             probe_interval_seconds: Math.max(60, Number(form.probe_interval_seconds) || 300),
+            recent_request_limit: [30, 60, 120].includes(Number(form.recent_request_limit)) ? Number(form.recent_request_limit) : 60,
             enabled: form.enabled,
           }),
         },

@@ -4,6 +4,8 @@ import {
   CircleAlert,
   CircleOff,
   Clock3,
+  Gauge,
+  HeartPulse,
   Layers3,
   RefreshCw,
   Server,
@@ -12,10 +14,10 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { translations } from "@/locales/translations";
-import { Language, LoginMessage, ModelRouteStatus, ModelStatusGroup, ModelStatusReport, TranslationKey } from "@/types";
+import { Language, LoginMessage, ModelRouteStatus, ModelStatus, ModelStatusGroup, ModelStatusReport, TranslationKey } from "@/types";
 
 interface ModelStatusPanelProps {
   language: Language;
@@ -56,7 +58,7 @@ export function ModelStatusPanel({ language, report, busy, message, refresh }: M
 
       {busy && !report ? <EmptyState icon={RefreshCw} label={t("consoleModelStatusLoading")} spinning /> : null}
       {!busy && groups.length === 0 ? <EmptyState icon={CircleOff} label={t("consoleModelStatusEmpty")} /> : null}
-      {groups.map((group) => <GroupCard key={group.group_id} group={group} language={language} t={t} />)}
+      {groups.map((group) => <GroupStatusSection key={group.group_id} group={group} language={language} t={t} />)}
     </div>
   );
 }
@@ -70,16 +72,129 @@ function EmptyState({ icon: Icon, label, spinning = false }: { icon: typeof Acti
   return <div className="rounded-2xl border border-dashed border-slate-300 py-20 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400"><Icon className={cn("mx-auto mb-3 h-6 w-6", spinning ? "animate-spin text-indigo-600" : "")} />{label}</div>;
 }
 
-function GroupCard({ group, language, t }: { group: ModelStatusGroup; language: Language; t: (key: TranslationKey) => string }) {
-  return <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
-    <CardHeader className="flex flex-col gap-4 pb-4 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><CardTitle className="text-lg text-slate-950 dark:text-white">{group.group_name}</CardTitle><code className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">{group.group_code}</code></div><CardDescription className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs"><span>{t("consoleModelStatusMultiplier")} x{group.multiplier}</span><span>{t("consoleModelStatusRPM")} {group.rpm_limit || "-"}</span><span>{group.billing_type === "free" ? t("groupsBillingFree") : t("groupsBillingPrepaid")}</span></CardDescription></div>
-      <StatusBadge status={group.status} t={t} />
-    </CardHeader>
-    <CardContent className="pt-0">
-      {group.models.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">{t("consoleModelStatusNoModels")}</div> : <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"><table className="w-full min-w-[760px] text-sm"><thead className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-400"><tr><th className="px-4 py-3">{t("consoleModelStatusModel")}</th><th className="px-4 py-3">{t("consoleModelStatusState")}</th><th className="px-4 py-3">{t("consoleModelStatusRoutes")}</th><th className="px-4 py-3">{t("consoleModelStatusFailures")}</th><th className="px-4 py-3">{t("consoleModelStatusLastSuccess")}</th><th className="px-4 py-3">{t("consoleModelStatusLastFailure")}</th></tr></thead><tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">{group.models.map((model) => <tr key={`${model.provider}:${model.model}`}><td className="px-4 py-3"><div className="font-semibold text-slate-900 dark:text-white">{model.model}</div><div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{model.provider}</div></td><td className="px-4 py-3"><StatusBadge status={model.status} t={t} /></td><td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{model.available_routes} / {model.total_routes}</td><td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{model.consecutive_failures}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{formatTime(model.last_success_at, language)}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{formatTime(model.last_failure_at, language)}</td></tr>)}</tbody></table></div>}
-    </CardContent>
-  </Card>;
+function GroupStatusSection({ group, language, t }: { group: ModelStatusGroup; language: Language; t: (key: TranslationKey) => string }) {
+  const recentRequestLimit = group.recent_request_limit || 60;
+  return (
+    <section className="border-t border-slate-200/80 pt-6 first:border-t-0 first:pt-0 dark:border-slate-800">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-bold text-slate-950 dark:text-white">{group.group_name}</h3>
+            <code className="rounded-md bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">{group.group_code}</code>
+            <StatusBadge status={group.status} t={t} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+            <span>{t("consoleModelStatusMultiplier")} x{group.multiplier}</span>
+            <span>{t("consoleModelStatusRPM")} {group.rpm_limit || "-"}</span>
+            <span>{group.billing_type === "free" ? t("groupsBillingFree") : t("groupsBillingPrepaid")}</span>
+            <span>{t("consoleModelStatusRecentRequests")} {recentRequestLimit}</span>
+          </div>
+        </div>
+        <span className="text-xs text-slate-500 dark:text-slate-400">{t("consoleModelStatusModels")} {group.models.length}</span>
+      </div>
+      {group.models.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">{t("consoleModelStatusNoModels")}</div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+          {group.models.map((model) => (
+            <ModelHealthCard key={`${group.group_id}:${model.provider}:${model.model}`} model={model} recentRequestLimit={recentRequestLimit} language={language} t={t} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ModelHealthCard({
+  model,
+  recentRequestLimit,
+  language,
+  t,
+}: {
+  model: ModelStatus;
+  recentRequestLimit: number;
+  language: Language;
+  t: (key: TranslationKey) => string;
+}) {
+  const availability = model.request_count_7d > 0 ? model.availability_7d : null;
+  const healthTone = availability === null ? "text-slate-500 dark:text-slate-400" : availability >= 99 ? "text-emerald-600 dark:text-emerald-400" : availability >= 95 ? "text-amber-600 dark:text-amber-400" : "text-rose-600 dark:text-rose-400";
+  const provider = providerLabel(model.provider);
+  return (
+    <Card className="overflow-hidden border-slate-200/90 bg-white shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900/70">
+      <CardContent className="p-0">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-4 dark:border-slate-800/80">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold uppercase", provider.tone)}>{provider.initials}</div>
+            <div className="min-w-0">
+              <div className="truncate font-semibold text-slate-950 dark:text-white" title={model.model}>{model.model}</div>
+              <div className="mt-1 truncate font-mono text-[10px] text-slate-500 dark:text-slate-400">{model.provider}</div>
+            </div>
+          </div>
+          <StatusBadge status={model.status} t={t} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-px bg-slate-100 dark:bg-slate-800">
+          <MetricCell icon={Gauge} label={t("consoleModelStatusLatency")} value={model.last_latency_ms > 0 ? formatLatency(model.last_latency_ms) : "-"} />
+          <MetricCell icon={Server} label={t("consoleModelStatusRoutes")} value={`${model.available_routes} / ${model.total_routes}`} />
+        </div>
+
+        <div className="px-4 pt-4">
+          <div className="flex items-end justify-between gap-3">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><HeartPulse className="h-3.5 w-3.5" />{t("consoleModelStatusHealth")}<span className="hidden sm:inline">{t("consoleModelStatusLast7Days")}</span></div>
+            <div className={cn("text-2xl font-extrabold tabular-nums", healthTone)}>{availability === null ? "-" : `${formatPercent(availability)}%`}</div>
+          </div>
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+            <div className={cn("h-full rounded-full", availability === null ? "w-0" : availability >= 99 ? "bg-emerald-500" : availability >= 95 ? "bg-amber-500" : "bg-rose-500")} style={{ width: `${availability ?? 0}%` }} />
+          </div>
+        </div>
+
+        <div className="px-4 pb-4 pt-5">
+          <div className="flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
+            <span>{t("consoleModelStatusRecentRequests")} {recentRequestLimit}</span>
+            <span>{model.recent_statuses?.length ? `${model.recent_statuses.length} ${t("consoleModelStatusRecorded")}` : t("consoleModelStatusNoData")}</span>
+          </div>
+          <RequestHistory statuses={model.recent_statuses || []} t={t} />
+          <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500"><span>{t("consoleModelStatusEarlier")}</span><span>{model.last_request_at ? formatTime(model.last_request_at, language) : t("consoleModelStatusNow")}</span></div>
+          {model.last_failure_reason ? <p className="mt-3 truncate text-xs text-rose-600 dark:text-rose-300" title={model.last_failure_reason}>{model.last_failure_reason}</p> : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MetricCell({ icon: Icon, label, value }: { icon: typeof Gauge; label: string; value: string }) {
+  return (
+    <div className="min-w-0 bg-white px-4 py-3 dark:bg-slate-900/70">
+      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400"><Icon className="h-3.5 w-3.5" />{label}</div>
+      <div className="mt-1 truncate font-mono text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{value}</div>
+    </div>
+  );
+}
+
+function RequestHistory({ statuses, t }: { statuses: string[]; t: (key: TranslationKey) => string }) {
+  if (statuses.length === 0) return <div className="mt-3 flex h-10 items-center justify-center rounded-md border border-dashed border-slate-200 text-xs text-slate-400 dark:border-slate-800 dark:text-slate-500">{t("consoleModelStatusNoData")}</div>;
+  return <div className="mt-3 grid h-10 grid-flow-col auto-cols-fr items-end gap-0.5" title={t("consoleModelStatusRecentRequestsHint")}>{statuses.map((status, index) => <span key={`${status}:${index}`} className={cn("min-w-0 rounded-sm", requestStatusTone(status), requestStatusHeight(status, index))} title={status} />)}</div>;
+}
+
+function requestStatusTone(status: string) {
+  if (status === "settled") return "bg-emerald-500";
+  if (status === "started" || status === "pending" || status === "settlement_pending") return "bg-amber-400";
+  return "bg-rose-500";
+}
+
+function requestStatusHeight(status: string, index: number) {
+  if (status === "failed") return index % 3 === 0 ? "h-4" : "h-3";
+  if (status === "started" || status === "pending" || status === "settlement_pending") return "h-5";
+  return index % 5 === 0 ? "h-8" : index % 3 === 0 ? "h-7" : "h-6";
+}
+
+function providerLabel(provider: string) {
+  const normalized = provider.toLowerCase().trim();
+  if (normalized === "openai") return { initials: "O", tone: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" };
+  if (normalized === "anthropic") return { initials: "A", tone: "bg-orange-500/10 text-orange-700 dark:text-orange-300" };
+  if (normalized === "gemini" || normalized === "google") return { initials: "G", tone: "bg-blue-500/10 text-blue-700 dark:text-blue-300" };
+  if (normalized === "grok" || normalized === "xai") return { initials: "X", tone: "bg-slate-500/10 text-slate-700 dark:text-slate-300" };
+  return { initials: normalized.slice(0, 1) || "AI", tone: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300" };
 }
 
 function StatusBadge({ status, t }: { status: ModelRouteStatus; t: (key: TranslationKey) => string }) {
@@ -100,4 +215,13 @@ function formatTime(value: string | undefined, language: Language) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", { dateStyle: "short", timeStyle: "medium" }).format(date);
+}
+
+function formatLatency(value: number) {
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 2)} s`;
+  return `${value} ms`;
+}
+
+function formatPercent(value: number) {
+  return value.toFixed(value >= 99.95 ? 2 : value >= 99 ? 1 : 2).replace(/\.?0+$/, "");
 }

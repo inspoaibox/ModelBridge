@@ -24,7 +24,7 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 				if got.SelectionMode != MonitorSelectionAll || got.Mode != MonitorModePassive {
 					t.Fatalf("unexpected defaults: %#v", got)
 				}
-				if got.ProbeIntervalSeconds != 300 || len(got.ModelNames) != 0 {
+				if got.ProbeIntervalSeconds != 300 || got.RecentRequestLimit != 60 || len(got.ModelNames) != 0 {
 					t.Fatalf("unexpected normalized all-model monitor: %#v", got)
 				}
 			},
@@ -38,10 +38,14 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 				Mode:                 MonitorModeActive,
 				ModelNames:           []string{" gpt-5 ", "gpt-5", "claude-sonnet"},
 				ProbeIntervalSeconds: 60,
+				RecentRequestLimit:   120,
 			},
 			assert: func(t *testing.T, got ModelMonitorMutation) {
 				if len(got.ModelNames) != 2 || got.ModelNames[0] != "gpt-5" || got.ModelNames[1] != "claude-sonnet" {
 					t.Fatalf("model names = %#v", got.ModelNames)
+				}
+				if got.RecentRequestLimit != 120 {
+					t.Fatalf("recent request limit = %d", got.RecentRequestLimit)
 				}
 			},
 		},
@@ -61,6 +65,15 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 				Name:                 "Too fast",
 				Mode:                 MonitorModeActive,
 				ProbeIntervalSeconds: 59,
+			},
+			wantErr: true,
+		},
+		{
+			name: "recent request limit must be supported",
+			request: ModelMonitorMutation{
+				GroupID:            testMonitorGroupID,
+				Name:               "Unsupported history",
+				RecentRequestLimit: 90,
 			},
 			wantErr: true,
 		},

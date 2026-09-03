@@ -41,3 +41,20 @@ func TestGroupRouteStatus(t *testing.T) {
 		t.Fatalf("degraded group status = %q, want degraded", got)
 	}
 }
+
+func TestModelMonitorRecentRequestLimits(t *testing.T) {
+	for _, limit := range []int{30, 60, 120} {
+		request := ModelMonitorMutation{
+			GroupID:            testMonitorGroupID,
+			Name:               "Request history",
+			RecentRequestLimit: limit,
+		}
+		got, err := request.validate()
+		if err != nil {
+			t.Fatalf("limit %d returned error: %v", limit, err)
+		}
+		if got.RecentRequestLimit != limit {
+			t.Fatalf("limit %d normalized to %d", limit, got.RecentRequestLimit)
+		}
+	}
+}
