@@ -854,6 +854,47 @@ func TestRetryableStreamErrorOnlyIncludesTransientFailures(t *testing.T) {
 	}
 }
 
+func TestStreamFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "http status",
+			err:  &UpstreamError{StatusCode: http.StatusBadGateway, Err: ErrUpstream},
+			want: "upstream_stream_failed_http_502",
+		},
+		{
+			name: "transport",
+			err:  &UpstreamError{Err: ErrUpstream},
+			want: "upstream_stream_failed_transport",
+		},
+		{
+			name: "timeout",
+			err:  context.DeadlineExceeded,
+			want: "upstream_stream_failed_timeout",
+		},
+		{
+			name: "canceled",
+			err:  context.Canceled,
+			want: "upstream_stream_failed_canceled",
+		},
+		{
+			name: "other",
+			err:  ErrStreamingUnsupported,
+			want: "upstream_stream_failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := streamFailureReason(test.err); got != test.want {
+				t.Fatalf("streamFailureReason() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestChannelWideFailureClassification(t *testing.T) {
 	tests := []struct {
 		name string

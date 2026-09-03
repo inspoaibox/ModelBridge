@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -318,8 +319,27 @@ func (s *Service) StreamChatCompletions(
 	if lastErr == nil {
 		lastErr = ErrStreamingUnsupported
 	}
-	s.failRelayBilling(ctx, reservation, freeRequestID, "upstream_stream_failed")
+	s.failRelayBilling(ctx, reservation, freeRequestID, streamFailureReason(lastErr))
 	return lastErr
+}
+
+// streamFailureReason keeps the billing/audit record useful without copying
+// arbitrary upstream response bodies into customer-visible data.
+func streamFailureReason(err error) string {
+	var upstreamErr *UpstreamError
+	if errors.As(err, &upstreamErr) {
+		if upstreamErr.StatusCode > 0 {
+			return fmt.Sprintf("upstream_stream_failed_http_%d", upstreamErr.StatusCode)
+		}
+		return "upstream_stream_failed_transport"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "upstream_stream_failed_timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "upstream_stream_failed_canceled"
+	}
+	return "upstream_stream_failed"
 }
 
 func mergeChatUsage(current, next ChatUsage) ChatUsage {

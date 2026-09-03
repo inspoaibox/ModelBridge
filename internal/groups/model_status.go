@@ -457,7 +457,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		       mm.probe_interval_seconds, mm.recent_request_limit, mm.last_probe_started_at,
 		       mm.last_probe_finished_at, mm.last_probe_status, mm.last_probe_error,
 		       mm.group_id::text, mm.code, mm.name, mm.status,
-		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.updated_at,
+		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.metering_mode, mm.updated_at,
 		       mm.primary_model, mm.model_name, mm.provider,
 		       COUNT(cm.model_id)::int,
 		       COUNT(cm.model_id) FILTER (WHERE mm.model_status = 'active'
