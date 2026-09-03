@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Language, IssuedTokenResponse, LoginMessage, TokenCreateFormState, TokenGroupOption, TranslationKey } from "@/types";
 import { translations } from "@/locales/translations";
+import { formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 
 interface TokenCreateModalProps {
   open: boolean;
@@ -120,7 +121,7 @@ export function TokenCreateModal({
                 <Label htmlFor="token-group-select">{t("tokensGroup")}</Label>
                 <select id="token-group-select" value={form.group_id} onChange={(event) => setForm((current) => ({ ...current, group_id: event.target.value }))} className="flex h-10 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" required disabled={groupsBusy}>
                   <option value="">{groupsBusy ? t("tokensGroupsLoading") : groups.length > 0 ? t("tokensGroupPlaceholder") : t("tokensNoGroups")}</option>
-                  {groups.map((group) => <option key={group.id} value={group.id}>{group.name} · x{group.multiplier}{group.billing_type === "free" ? ` · ${t("groupsBillingFree")}` : ""}</option>)}
+                  {groups.map((group) => <option key={group.id} value={group.id}>{group.name} · x{formatDecimalWithoutTrailingZeros(group.multiplier)}{group.billing_type === "free" ? ` · ${t("groupsBillingFree")}` : ""}</option>)}
                 </select>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">{t("tokensGroupBindingHint")}</p>
               </div>

@@ -4,8 +4,8 @@ export type Theme = "light" | "dark";
 export type Language = "zh" | "en";
 export type Audience = "admin" | "console";
 export type TranslationKey = keyof (typeof translations)["zh"];
-export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "settings";
-export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "profile" | "docs";
+export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "enterprise" | "settings";
+export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "enterprise" | "profile" | "docs";
 export type View = "home" | "models" | "login" | "admin-login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
 
 export interface Principal {
@@ -585,6 +585,62 @@ export interface BillingAccount {
   currency: string;
   balance: string;
   status: string;
+}
+
+export interface EnterpriseVerification {
+  id: string;
+  tenant_id: string;
+  submitted_by: string;
+  enterprise_name: string;
+  unified_credit_code: string;
+  license_filename: string;
+  license_content_type: string;
+  license_size: number;
+  license_sha256: string;
+  bank_account_name: string;
+  bank_name: string;
+  bank_account?: string;
+  bank_account_masked?: string;
+  status: "pending" | "approved" | "rejected" | "not_submitted";
+  rejection_reason?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  submitted_at?: string;
+  created_at?: string;
+}
+
+export interface PaymentProviderConfig {
+  provider: "wechat" | "alipay" | "stripe" | "paypal";
+  enabled: boolean;
+  configured: boolean;
+  values: Record<string, string>;
+  secret_fields: string[];
+  updated_at?: string;
+  updated_by?: string;
+}
+
+export interface PublicPaymentProvider {
+  provider: PaymentProviderConfig["provider"];
+  enabled: boolean;
+}
+
+export interface PaymentOrder {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  provider: "wechat" | "alipay" | "stripe" | "paypal";
+  merchant_order_no: string;
+  provider_order_id?: string;
+  amount: string;
+  currency: string;
+  status: "pending" | "paid" | "failed" | "cancelled" | "expired";
+  checkout_url?: string;
+  qr_code?: string;
+  failure_reason?: string;
+  paid_at?: string;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface OperationsSnapshot {

@@ -28,6 +28,8 @@
 | 管理 MFA | 管理员全局 MFA 可在系统设置开关；开启前要求所有有效管理员已绑定 TOTP；高风险管理写操作要求 `X-MFA-Code` | 后台高风险操作 |
 | 用户 MFA | 基于 `github.com/pquerna/otp` 的 TOTP 绑定、确认、登录校验和安全关闭 | 账户安全 |
 | 注册邮件 | 生产公开注册可进入 `pending`，SMTP STARTTLS 发送一次性验证链接，支持验证和安全重发 | 防止未验证账号登录 |
+| 企业认证 | 用户按租户提交企业资料，营业执照与银行账号加密保存；管理员可按状态查看、下载和审核，拒绝后可重新提交 | 企业资质和敏感资料保护 |
+| 在线支付 | 微信 Native、支付宝当面付、Stripe Checkout、PayPal Orders/Capture；配置独立启停，订单幂等，回调/官方验证后入账 | 余额充值和支付回调安全 |
 | 部署 | Caddy HTTPS、PM2、systemd 恢复、回环监听、PostgreSQL 最小权限、备份/回滚流程已有文档和模板 | 生产运维 |
 | 前端体验 | 修复 `#home` 首页路由、无权限页面、只读 Token 操作入口和移动端 Hero 横向溢出；认证/API 响应禁止缓存；首页、用户台和管理员台按路由懒加载 | 页面可用性与首屏性能 |
 
@@ -63,8 +65,9 @@
 1. 本机 `.env.local` 当前含开发数据库密码、Token Pepper、Session Pepper 和 MFA 加密密钥。它虽然未被 Git 跟踪，但所有这些值必须在生产重新生成；发布包、备份、截图、日志和 shell history 都不得包含它。
 2. 生产必须使用非超级用户 PostgreSQL 账号、`COOKIE_SECURE=true`、HTTPS、明确 `CORS_ALLOWED_ORIGINS`、回环 `HTTP_ADDR` 和明确 `TRUSTED_PROXY_CIDRS`。
 3. 开启公开注册前，在“系统设置 → 功能开关”打开“开放用户注册”；如需邮箱验证，同时打开邮件总开关和“邮箱验证码”，并在“系统设置 → 邮件设置”配置 HTTPS 公开地址和可用的 SMTP STARTTLS；同时在边缘配置 Captcha/WAF。
-4. 迁移必须执行到 `044_upstream_price_snapshot.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
-5. 生产应启用外部依赖漏洞扫描；本次使用官方 npm registry 检查生产依赖为 0 个已知漏洞，但仍不能替代发布镜像和运行环境扫描。
+4. 迁移必须执行到 `048_payment_idempotency_scope.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
+5. 配置支付平台 HTTPS 回调地址；分别完成微信 Native、支付宝当面付、Stripe Checkout、PayPal Capture 的沙箱或小额真实支付测试，并确认重复回调只入账一次、金额/币种不匹配不会入账。若 Stripe 配置了 `payment_method_types`，还要分别验收 `card`、`alipay`、`wechat_pay` 在实际账户、地区和币种下是否可用。
+6. 生产应启用外部依赖漏洞扫描；本次使用官方 npm registry 检查生产依赖为 0 个已知漏洞，但仍不能替代发布镜像和运行环境扫描。
 
 ## 5. 验证记录
 
@@ -82,7 +85,7 @@ cd web && npm audit --omit=dev --registry=https://registry.npmjs.org
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
-结果：后端 `go test ./... -count=1`、`go vet ./...` 通过；加载本机开发数据库配置后，PostgreSQL 使用记录、财务和计费结算集成测试通过，测试会先执行 `db.Migrate` 并核对到 `044_upstream_price_snapshot.sql`。`govulncheck` 报告可达调用路径为 0 个漏洞（另有未被当前调用路径触及的依赖漏洞，需要持续升级依赖），前端 lint/typecheck/build/浏览器烟测通过，生产构建已按路由拆分且无 chunk 体积警告，官方 npm registry 的生产依赖审计显示 `found 0 vulnerabilities`，`git diff --check` 通过。
+结果：后端 `go test ./... -count=1`、`go vet ./...` 通过；加载本机开发数据库配置后，PostgreSQL 使用记录、财务和计费结算集成测试通过，测试会先执行 `db.Migrate` 并核对到 `048_payment_idempotency_scope.sql`。`govulncheck` 报告可达调用路径为 0 个漏洞（另有未被当前调用路径触及的依赖漏洞，需要持续升级依赖），前端 lint/typecheck/build/浏览器烟测通过，生产构建已按路由拆分且无 chunk 体积警告，官方 npm registry 的生产依赖审计显示 `found 0 vulnerabilities`，`git diff --check` 通过。
 
 本机页面检查还覆盖了首页、模型目录、暗色模式、登录、注册、404 和 390px 移动视口；重启后的干净 Vite 页面没有浏览器错误日志。Vite 热更新错误只出现在被替换的旧开发进程记录中，不属于生产构建。
 
@@ -98,8 +101,10 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 2. 数据库迁移完成并有可恢复备份，恢复演练成功。
 3. 所有有效平台管理员已绑定 TOTP，并验证角色变更会使旧后台 Session 失效。
 4. SMTP 验证、重发、密码重置和账号状态流程在真实域名下通过。
-5. Caddy、PM2、PostgreSQL、磁盘、证书和外部 WAF/监控均有负责人和告警渠道。
-6. 客户文档只承诺当前真实可用的接口；厂商高级能力按模型和账号权限逐项开放。
-7. 发布版本已提交到 Git，发布包不含 `.env*`、`node_modules`、本地缓存、日志、数据库转储和完整密钥，并完成 SHA-256 校验。
+5. 企业认证提交、拒绝重提、管理员审核、营业执照下载和敏感字段脱敏通过验收。
+6. 四类支付完成沙箱/小额真实支付、回调验签、订单轮询、PayPal Capture 和重复回调幂等验收。
+7. Caddy、PM2、PostgreSQL、磁盘、证书和外部 WAF/监控均有负责人和告警渠道。
+8. 客户文档只承诺当前真实可用的接口；厂商高级能力按模型和账号权限逐项开放。
+9. 发布版本已提交到 Git，发布包不含 `.env*`、`node_modules`、本地缓存、日志、数据库转储和完整密钥，并完成 SHA-256 校验。
 
 在这些条件满足前，推荐关闭公开注册，仅用 `bootstrap-admin` 建立平台所有者，再从受控测试账号验证租户和 Token 闭环。

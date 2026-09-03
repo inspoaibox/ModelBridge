@@ -19,6 +19,8 @@
 - 租户成员管理、项目 CRUD、项目成员授权和项目级角色边界
 - 平台角色与权限管理：平台所有者可创建、编辑、停用角色，分配系统权限并绑定已注册管理员
 - 生产公开注册的邮箱验证、一次性验证链接和验证邮件重发（SMTP）
+- 企业认证提交、营业执照加密存储、管理员状态审核和拒绝后重新提交
+- 微信支付 Native、支付宝当面付、Stripe Checkout 和 PayPal Orders/Capture；支付方式可在系统设置中独立启停，余额只在官方回调或官方验证成功后入账
 - 基于 `github.com/pquerna/otp` 的标准 TOTP 绑定、二维码确认、启用登录校验和安全关闭
 - 管理员系统设置：管理员资料、邮箱/密码、个人 TOTP、全站管理员 TOTP 策略与网站品牌配置
 - 管理员全局 TOTP 强制策略开启时，高风险操作使用实时 Step-up：改价、充值、渠道写入、用户状态和关键配置变更
@@ -116,6 +118,8 @@ PUT  /admin/v1/settings/email/templates/{templateID}
 DELETE /admin/v1/settings/email/templates/{templateID}
 GET  /admin/v1/settings/features
 PUT  /admin/v1/settings/features
+GET  /admin/v1/settings/payments
+PUT  /admin/v1/settings/payments/{provider}
 GET  /public/v1/settings
 GET  /public/v1/features
 GET  /admin/v1/channels
@@ -143,9 +147,22 @@ PUT  /admin/v1/roles/{roleID}
 POST /admin/v1/roles/{roleID}/disable
 GET  /admin/v1/users/{userID}/roles
 PUT  /admin/v1/users/{userID}/roles
+GET  /admin/v1/enterprise-verifications
+GET  /admin/v1/enterprise-verifications/{verificationID}
+GET  /admin/v1/enterprise-verifications/{verificationID}/license
+POST /admin/v1/enterprise-verifications/{verificationID}/review
+POST /payments/webhooks/wechat
+POST /payments/webhooks/alipay
+POST /payments/webhooks/stripe
+POST /payments/webhooks/paypal
 GET  /console/v1/tenants/{tenantID}/usage
 GET  /console/v1/tenants/{tenantID}/model-status
 GET  /console/v1/tenants/{tenantID}/billing/account
+GET  /console/v1/tenants/{tenantID}/enterprise-verification
+POST /console/v1/tenants/{tenantID}/enterprise-verification
+POST /console/v1/tenants/{tenantID}/billing/recharge
+GET  /console/v1/tenants/{tenantID}/billing/recharge/{orderID}
+POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture
 POST /v1/chat/completions
 POST /v1/embeddings
 GET  /v1/models
@@ -166,6 +183,14 @@ GET  /v1/videos/{videoID}/content
 对外 API 终端由管理员在系统设置中配置为网关根地址。客户可使用 `<gateway-root>/v1` 对接 OpenAI 兼容客户端，或使用 `<gateway-root>` 对接 Anthropic / Claude 客户端。服务端同时兼容根路径、标准 `/v1` 和客户端误拼接的 `/v1/v1`，但推荐始终从控制台 API 令牌页面复制地址。
 
 管理员“系统设置”中的邮件设置、模板和功能开关独立于网站基础设置。邮件总开关默认关闭；关闭时注册、密码重置和通知流程不会强制依赖 SMTP，开启后再按事件开关和模板配置发送。
+
+用户控制台的“企业认证”用于提交企业名称、统一社会信用代码、营业执照和对公账户资料。营业执照与银行账号在服务端加密保存；用户端只返回银行账号脱敏值，管理员审核详情才可查看完整账号。申请状态为待审核、已通过或未通过；未通过后允许重新提交，已通过后不能重复提交。管理员在“企业认证”页面按状态筛选并通过或拒绝申请，拒绝必须填写原因。
+
+用户控制台的“账单与额度”包含余额充值入口。管理员在“系统设置 -> 支付设置”分别配置并启用微信支付、支付宝、Stripe 或 PayPal。微信支付使用 Native 二维码，支付宝使用当面付预创建二维码，Stripe 使用 Checkout，PayPal 使用 Orders 创建和 Capture；充值订单必须携带 `Idempotency-Key`，余额只由经过官方签名/官方 API 验证的支付结果入账。Stripe 的信用卡、微信和支付宝可用性还取决于 Stripe 账户、地区、币种及 Stripe Dashboard 中已启用的 Payment Methods，平台不会绕过 Stripe 的资格限制。
+
+Stripe 支付方式可在支付配置中按需填写逗号分隔的 `card`、`alipay`、`wechat_pay`；留空时使用 Stripe Dashboard 动态支付方式。实际可用性仍以 Stripe 账户、地区、币种和已启用的 Payment Methods 为准。
+
+支付配置中的密钥、私钥、证书和 Webhook Secret 使用应用 SecretBox 加密保存；读取接口只返回非敏感字段和“已配置”标记。微信回调必须校验平台证书序列号、时间戳、签名、AES-256-GCM、AppID 和商户号；支付宝回调必须校验 RSA2、AppID 和可选商户身份；Stripe 校验签名时间窗；PayPal 通过官方 `verify-webhook-signature` 验证并只接受 `PAYMENT.CAPTURE.COMPLETED`。上线前必须在各支付平台配置 HTTPS 回调地址并完成沙箱/小额真实支付验收。
 
 租户控制台的“模型状态”页面通过 `GET /console/v1/tenants/{tenantID}/model-status` 按分组展示模型的可用路由数、自动熔断状态、连续失败次数以及最近成功/失败时间。活动分组可见，租户已有令牌绑定的停用分组也会显示；该接口只读取分组映射和渠道运行状态，不主动请求上游；前端进入页面后每 15 秒刷新一次。新建但尚未产生真实请求的路由显示为“待观测”，不能误认为已经完成上游探针验证。
 
@@ -210,7 +235,7 @@ migrations/
 - 生产在 Nginx 等反向代理后运行时，必须配置 `TRUSTED_PROXY_CIDRS`，仅信任这些代理追加的 `X-Forwarded-For`；这决定 Token IP 白名单和使用记录中的客户端 IP。
 - 生产应用进程必须监听回环地址（例如 `127.0.0.1:8080`），并按流式与媒体请求配置 `HTTP_READ_TIMEOUT`、`HTTP_WRITE_TIMEOUT`、`HTTP_IDLE_TIMEOUT`；默认写超时为 15 分钟。
 - 审计日志只追加不提供业务删除接口；IP 和 User-Agent 在审计中保存哈希，使用记录中的客户端 IP 用于管理员排障与账务追踪。
-- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `044_upstream_price_snapshot.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。渠道的上游成本折扣、客户扣费快照和上游参考价快照由 `042`、`043`、`044` 迁移创建。
+- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `048_payment_idempotency_scope.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。渠道的上游成本折扣、客户扣费快照和上游参考价快照由 `042`、`043`、`044` 迁移创建，企业认证和支付订单由 `046`、`047` 创建，充值幂等键租户隔离由 `048` 创建。
 
 ## 重要限制
 

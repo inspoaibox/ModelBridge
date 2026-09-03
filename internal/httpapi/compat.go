@@ -548,23 +548,30 @@ func anthropicWireUsage(usage relay.ChatUsage) map[string]any {
 	return result
 }
 
-// The relay service uses the internal OpenAI-compatible finish-reason names
-// for all providers. Anthropic clients require Anthropic's wire values.
+// The relay service uses mostly OpenAI-compatible finish-reason names for
+// providers. Anthropic clients require Anthropic's wire values, including
+// preserving stop_sequence instead of collapsing it into end_turn.
 func anthropicWireStopReason(reason string) string {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
 	case "", "end_turn":
 		return "end_turn"
-	case "stop", "stop_sequence":
+	case "stop":
 		return "end_turn"
+	case "stop_sequence":
+		return "stop_sequence"
 	case "length", "max_tokens":
 		return "max_tokens"
 	case "tool_calls", "function_call", "tool_use":
 		return "tool_use"
 	case "content_filter", "refusal":
 		return "refusal"
+	case "pause_turn":
+		return "pause_turn"
+	case "model_context_window_exceeded", "context_window_exceeded", "context_length_exceeded":
+		return "model_context_window_exceeded"
 	default:
-		// Preserve future Anthropic-native values rather than returning an
-		// internal value that Anthropic clients cannot understand.
-		return reason
+		// Never emit an internal or unknown finish reason on an Anthropic
+		// response. Anthropic clients expect a finite wire-level enum.
+		return "end_turn"
 	}
 }

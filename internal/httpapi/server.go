@@ -26,11 +26,13 @@ import (
 	"ai-token/internal/audit"
 	"ai-token/internal/auth"
 	"ai-token/internal/billing"
+	"ai-token/internal/enterprise"
 	"ai-token/internal/groups"
 	"ai-token/internal/ids"
 	"ai-token/internal/mfa"
 	"ai-token/internal/modelprices"
 	"ai-token/internal/models"
+	"ai-token/internal/payments"
 	"ai-token/internal/relay"
 	"ai-token/internal/tokens"
 	"ai-token/internal/users"
@@ -162,7 +164,7 @@ func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPri
 	priceSyncService modelprices.SyncService,
 	billers ...billing.AdminService,
 ) http.Handler {
-	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, nil, billers...)
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, nil, nil, nil, billers...)
 }
 
 func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAudit(
@@ -180,7 +182,30 @@ func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPri
 	auditReader audit.Reader,
 	billers ...billing.AdminService,
 ) http.Handler {
-	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, billers...)
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, nil, nil, billers...)
+}
+
+// NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercial
+// extends the stable constructor with enterprise verification and payments.
+// The older constructor remains available for embedders and tests.
+func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercial(
+	authMiddleware *auth.Middleware,
+	services *auth.Services,
+	relayService relay.ChatCompletionService,
+	secureCookies bool,
+	webDir string,
+	tokenService tokens.AdminService,
+	groupService groups.Service,
+	consoleTokenService tokens.ConsoleService,
+	modelCatalog models.Catalog,
+	userService users.AdminService,
+	priceSyncService modelprices.SyncService,
+	auditReader audit.Reader,
+	enterpriseService enterprise.AdminService,
+	paymentService payments.Service,
+	billers ...billing.AdminService,
+) http.Handler {
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, enterpriseService, paymentService, billers...)
 }
 
 func newHandler(
@@ -196,6 +221,8 @@ func newHandler(
 	userService users.AdminService,
 	priceSyncService modelprices.SyncService,
 	auditReader audit.Reader,
+	enterpriseService enterprise.AdminService,
+	paymentService payments.Service,
 	billers ...billing.AdminService,
 ) http.Handler {
 	if authMiddleware == nil {
@@ -227,6 +254,9 @@ func newHandler(
 	mux.Handle("GET /public/v1/models", modelListHandler(modelCatalog))
 	mux.HandleFunc("GET /public/v1/settings", publicSystemSettingsHandler(services.SecuritySettings))
 	mux.HandleFunc("GET /public/v1/features", publicFeatureSettingsHandler(services.SecuritySettings))
+	if paymentService != nil {
+		mux.Handle("GET /public/v1/payments/providers", paymentPublicProvidersHandler(paymentService))
+	}
 
 	mux.HandleFunc("POST /admin/v1/auth/login", adminLoginHandler(services.Login, secureCookies, adminEntryPath))
 	mux.HandleFunc("POST /console/v1/auth/login", loginHandler(services.Login, auth.AudienceConsole, secureCookies))
@@ -379,6 +409,17 @@ func newHandler(
 		"security:read",
 	)(featureSettingsReadHandler(services.SecuritySettings)))
 	mux.Handle("PUT /admin/v1/settings/features", protectStepUp(adminsettings.StepUpOperationSystem, featureSettingsUpdateHandler(services.SecuritySettings), "security:update"))
+
+	if paymentService != nil {
+		mux.Handle("GET /admin/v1/settings/payments", authMiddleware.Protect(
+			auth.AudienceAdmin, "payment:read",
+		)(paymentAdminListHandler(paymentService)))
+		mux.Handle("PUT /admin/v1/settings/payments/{provider}", protectStepUp(
+			adminsettings.StepUpOperationSystem,
+			paymentAdminUpdateHandler(paymentService),
+			"payment:update",
+		))
+	}
 
 	mux.Handle("GET /admin/v1/channels", authMiddleware.Protect(
 		auth.AudienceAdmin,
@@ -572,6 +613,47 @@ func newHandler(
 
 	mux.Handle("POST /admin/v1/usage/{requestID}/settle", protectStepUp(adminsettings.StepUpOperationBilling, billingSettlementHandler(billingService), "billing:update"))
 
+	if enterpriseService != nil {
+		if consoleEnterprise, ok := enterpriseService.(enterprise.ConsoleService); ok {
+			mux.Handle("GET /console/v1/tenants/{tenantID}/enterprise-verification", authMiddleware.Protect(
+				auth.AudienceConsole, "enterprise:read",
+			)(auth.RequireTenantPath("tenantID")(enterpriseCurrentHandler(consoleEnterprise))))
+			mux.Handle("POST /console/v1/tenants/{tenantID}/enterprise-verification", authMiddleware.Protect(
+				auth.AudienceConsole, "enterprise:update",
+			)(auth.RequireTenantPath("tenantID")(enterpriseSubmitHandler(consoleEnterprise))))
+		}
+		mux.Handle("GET /admin/v1/enterprise-verifications", authMiddleware.Protect(
+			auth.AudienceAdmin, "enterprise:read",
+		)(enterpriseAdminListHandler(enterpriseService)))
+		mux.Handle("GET /admin/v1/enterprise-verifications/{verificationID}", authMiddleware.Protect(
+			auth.AudienceAdmin, "enterprise:read",
+		)(enterpriseAdminGetHandler(enterpriseService)))
+		mux.Handle("GET /admin/v1/enterprise-verifications/{verificationID}/license", authMiddleware.Protect(
+			auth.AudienceAdmin, "enterprise:read",
+		)(enterpriseAdminLicenseHandler(enterpriseService)))
+		mux.Handle("POST /admin/v1/enterprise-verifications/{verificationID}/review", protectStepUp(
+			adminsettings.StepUpOperationSystem,
+			enterpriseAdminReviewHandler(enterpriseService),
+			"enterprise:update",
+		))
+	}
+
+	if paymentService != nil {
+		mux.Handle("POST /console/v1/tenants/{tenantID}/billing/recharge", authMiddleware.Protect(
+			auth.AudienceConsole, "billing:read",
+		)(auth.RequireTenantPath("tenantID")(paymentCreateOrderHandler(paymentService))))
+		mux.Handle("GET /console/v1/tenants/{tenantID}/billing/recharge/{orderID}", authMiddleware.Protect(
+			auth.AudienceConsole, "billing:read",
+		)(auth.RequireTenantPath("tenantID")(paymentGetOrderHandler(paymentService))))
+		mux.Handle("POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture", authMiddleware.Protect(
+			auth.AudienceConsole, "billing:read",
+		)(auth.RequireTenantPath("tenantID")(paymentPayPalCaptureHandler(paymentService))))
+		mux.HandleFunc("POST /payments/webhooks/wechat", paymentWebhookHandler(paymentService, payments.ProviderWechat).ServeHTTP)
+		mux.HandleFunc("POST /payments/webhooks/alipay", paymentWebhookHandler(paymentService, payments.ProviderAlipay).ServeHTTP)
+		mux.HandleFunc("POST /payments/webhooks/stripe", paymentWebhookHandler(paymentService, payments.ProviderStripe).ServeHTTP)
+		mux.HandleFunc("POST /payments/webhooks/paypal", paymentWebhookHandler(paymentService, payments.ProviderPayPal).ServeHTTP)
+	}
+
 	mux.Handle("GET /console/v1/tenants/{tenantID}/usage", authMiddleware.Protect(
 		auth.AudienceConsole,
 		"usage:read",
@@ -750,7 +832,7 @@ func newHandler(
 }
 
 func isAPIPath(path string) bool {
-	if path == "/healthz" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/console/") || strings.HasPrefix(path, "/public/") || strings.HasPrefix(path, "/v1/") {
+	if path == "/healthz" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/console/") || strings.HasPrefix(path, "/public/") || strings.HasPrefix(path, "/payments/") || strings.HasPrefix(path, "/v1/") {
 		return true
 	}
 	for _, prefix := range []string{
@@ -2154,8 +2236,27 @@ func relayChatCompletionsHandler(service relay.ChatCompletionService) http.Handl
 			writeRelayError(w, err)
 			return
 		}
+		response = openAIWireResponse(response)
 		writeJSON(w, http.StatusOK, response)
 	})
+}
+
+func openAIWireResponse(response relay.ChatCompletionResponse) relay.ChatCompletionResponse {
+	for index := range response.Choices {
+		response.Choices[index].FinishReason = openAIWireFinishReason(response.Choices[index].FinishReason)
+	}
+	return response
+}
+
+func openAIWireFinishReason(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "stop_sequence", "pause_turn":
+		return "stop"
+	case "refusal", "model_context_window_exceeded", "context_window_exceeded", "context_length_exceeded":
+		return "content_filter"
+	default:
+		return reason
+	}
 }
 
 func openAIStreamChunk(event relay.ChatCompletionStreamEvent, requestedModel string) map[string]any {
@@ -2195,7 +2296,7 @@ func openAIStreamChunk(event relay.ChatCompletionStreamEvent, requestedModel str
 		}
 		finishReason := any(nil)
 		if event.FinishReason != "" {
-			finishReason = event.FinishReason
+			finishReason = openAIWireFinishReason(event.FinishReason)
 		}
 		chunk["choices"] = []any{map[string]any{"index": event.Index, "delta": delta, "finish_reason": finishReason}}
 	}

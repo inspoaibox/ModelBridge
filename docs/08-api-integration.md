@@ -78,6 +78,79 @@ PUT    /admin/v1/settings/features
 
 模板支持 `zh` 和 `en`，HTML 内容可使用 `{{site_name}}`、`{{user_email}}`、`{{verification_url}}`、`{{reset_url}}`、`{{recharge_url}}`、`{{balance}}`、`{{amount}}`、`{{event_time}}` 等变量。SMTP 密码只在服务端加密保存，任何读取接口只返回是否已配置。
 
+## 企业认证
+
+用户必须以当前租户的 active member 身份提交企业认证。表单使用 `multipart/form-data`：
+
+```text
+GET  /console/v1/tenants/{tenantID}/enterprise-verification
+POST /console/v1/tenants/{tenantID}/enterprise-verification
+```
+
+提交字段为 `enterprise_name`、`unified_credit_code`、`license`、`bank_account_name`、`bank_name` 和 `bank_account`。营业执照支持 JPG、PNG、PDF，单文件最大 10 MB；服务端按文件内容校验类型并加密保存。用户查询只返回 `bank_account_masked`，不会返回完整银行账号。状态为 `not_submitted`、`pending`、`approved` 或 `rejected`；待审核不可重复提交，拒绝后可重新提交，已通过后不能重复提交。
+
+管理员接口如下，写操作需要 `enterprise:update` 权限，审核还需要系统设置中为该操作启用的 Step-up MFA：
+
+```text
+GET  /admin/v1/enterprise-verifications?status=pending
+GET  /admin/v1/enterprise-verifications/{verificationID}
+GET  /admin/v1/enterprise-verifications/{verificationID}/license
+POST /admin/v1/enterprise-verifications/{verificationID}/review
+```
+
+审核请求示例：
+
+```json
+{"status":"rejected","reason":"营业执照信息无法核验"}
+```
+
+列表接口仅返回银行账号脱敏值；管理员详情接口才返回完整账号，营业执照下载接口返回原始文件和 SHA-256 响应头。生产环境应限制管理员权限、记录访问审计并按企业资料保存期限执行数据治理。
+
+## 在线充值与支付
+
+用户充值接口使用当前租户的预付账户币种，金额按该币种的最小精度校验，必须带唯一 `Idempotency-Key`：
+
+```text
+POST /console/v1/tenants/{tenantID}/billing/recharge
+GET  /console/v1/tenants/{tenantID}/billing/recharge/{orderID}
+POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture
+```
+
+创建请求：
+
+```json
+{"provider":"stripe","amount":"10.00","currency":"USD","return_url":"https://gateway.example.com/console/billing"}
+```
+
+当前支付方式和配置字段：
+
+| 支付方式 | 创建方式 | 必要的官方回调/验证 |
+| --- | --- | --- |
+| 微信支付 | Native 二维码 | 微信支付 API v3 平台证书验签、AES-256-GCM 解密、AppID/商户号校验 |
+| 支付宝 | `alipay.trade.precreate` 当面付二维码 | RSA2、AppID、可选 seller ID、订单号和金额校验 |
+| Stripe | Checkout Session | `Stripe-Signature` HMAC 验签和时间窗校验 |
+| PayPal | Orders 创建，客户返回后 Capture | PayPal `verify-webhook-signature`，只接受 `PAYMENT.CAPTURE.COMPLETED` |
+
+管理员在“系统设置 -> 支付设置”中分别维护并启用支付方式：
+
+```text
+GET /admin/v1/settings/payments
+PUT /admin/v1/settings/payments/{provider}
+```
+
+支付配置的私钥、证书、API Key 和 Webhook Secret 使用 SecretBox 加密；读取接口仅返回非敏感字段及是否已配置。禁用方式不会删除已保存配置；开启前必须满足该方式的完整字段校验。回调地址必须是无凭据、无 query、无 fragment 的 HTTPS 地址，并且只能使用平台公开来源。微信支付和支付宝当面付只接受 CNY 租户账户；Stripe 和 PayPal 使用租户预付账户币种，平台不会在未配置汇率的情况下自动换算。Stripe 可选配置 `payment_method_types`，填入逗号分隔的 `card`、`alipay`、`wechat_pay`；留空时由 Stripe Dashboard 的动态支付方式决定，实际可用性仍受 Stripe 账户、地区、币种和风控资格限制。
+
+支付回调由平台接收：
+
+```text
+POST /payments/webhooks/wechat
+POST /payments/webhooks/alipay
+POST /payments/webhooks/stripe
+POST /payments/webhooks/paypal
+```
+
+支付回调不是前端传入成功状态的依据。服务端会校验平台签名、订单号、金额、币种、支付方式和订单有效期，验证成功后使用 `payment:credit:<order_id>` 写入不可变账务流水；重复回调不会重复增加余额。Stripe 的信用卡、微信和支付宝是否可用，取决于 Stripe 账户地区、币种、风控资格和 Dashboard 中启用的 Payment Methods，不能仅通过本平台配置强行开启。
+
 ## 注册与邮箱验证
 
 公开注册是否要求邮箱验证由管理员“邮件总开关”和“邮箱验证码”开关共同决定。邮件关闭时注册直接创建 active 账号，不使用邮件系统；两项开关开启且 SMTP 可用时，注册创建 `pending` 账号并向注册邮箱发送一次性链接。邮箱验证链接会打开 `/#verify-email?token=...`，前端随后调用：
@@ -151,7 +224,19 @@ OpenAI/Grok 使用 OpenAI-compatible Embeddings；Gemini 使用官方 `EmbedCont
 
 ## Token 生命周期
 
-API Token 只能由当前登录用户在租户控制台创建，创建响应返回一次完整密钥；管理员不能代发用户 Token。创建表单需要选择项目和路由分组，可选设置模型/网络白名单、过期时间和速率限制。Token 列表按 `tenant_id + created_by` 返回，其他成员和管理员都不能看到完整密钥。用户可以撤销自己创建的 Token；账号、租户成员或项目权限失效后，解析器会拒绝该 Token，相关项目权限降级也会撤销已有 Token。
+API Token 只能由当前登录用户在租户控制台创建，创建响应返回一次完整密钥；管理员不能代发用户 Token。创建和编辑表单需要选择项目和路由分组，可选设置模型/网络白名单、过期时间和速率限制。Token 列表按 `tenant_id + created_by` 返回，其他成员和管理员都不能看到完整密钥。
+
+用户可以对自己创建的 Token 执行以下操作：
+
+| 操作 | 行为 |
+| --- | --- |
+| 编辑 | 修改名称、项目、分组、模型/网络白名单、过期时间和速率限制；不改变密钥本身 |
+| 暂停 / 启用 | 在 `disabled` 与 `active` 之间切换；已过期或已终止的 Token 不能恢复 |
+| 终止 | 将状态改为 `revoked`，永久失效且不能恢复 |
+| 删除 | 软删除并终止 Token，只从用户列表隐藏，不破坏历史用量和财务记录 |
+| 复制密钥 | 只有当前页面会话中刚创建的明文密钥可复制；历史 Token 只能看到脱敏前缀 |
+
+对应接口为 `PUT /console/v1/tenants/{tenantID}/tokens/{tokenID}`、`POST .../pause`、`POST .../resume`、`POST .../terminate` 和 `DELETE /console/v1/tenants/{tenantID}/tokens/{tokenID}`。所有接口都由服务端同时校验当前会话的租户、创建者和项目权限，客户端不能通过请求体修改 `tenant_id`、`created_by` 或 Token 状态。账号、租户成员或项目权限失效后，解析器会拒绝该 Token，相关项目权限降级也会撤销已有 Token。
 
 ## 图片、音频与视频
 

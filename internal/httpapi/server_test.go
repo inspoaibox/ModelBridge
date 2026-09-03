@@ -132,6 +132,31 @@ func TestSecurityHeadersAllowConfiguredHTTPSBrandAssets(t *testing.T) {
 	}
 }
 
+func TestPaymentReturnURLIsRestrictedToKnownOrigin(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://gateway.example.com")
+	request := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant/billing/recharge", nil)
+	request.Host = "gateway.example.com"
+	request.Header.Set("Origin", "https://gateway.example.com")
+
+	for _, test := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "same origin", value: "https://gateway.example.com/console/billing", want: true},
+		{name: "configured origin", value: "https://gateway.example.com", want: true},
+		{name: "external origin", value: "https://attacker.example/collect", want: false},
+		{name: "credentials", value: "https://user:password@gateway.example.com", want: false},
+		{name: "query", value: "https://gateway.example.com/?next=https://attacker.example", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := safeReturnURL(test.value, request); got != test.want {
+				t.Fatalf("safeReturnURL(%q) = %t, want %t", test.value, got, test.want)
+			}
+		})
+	}
+}
+
 func TestUnknownPathsDoNotExposeFrontendSources(t *testing.T) {
 	handler := New(auth.NewMiddleware(testResolver{}), nil, false, "../../web")
 	for _, target := range []string{"/admin/v1/unknown", "/src/App.tsx", "/.env.local"} {
@@ -723,6 +748,9 @@ func TestAnthropicMessagesAcceptsClaudeContentBlockRequests(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Claude-style Anthropic request should be accepted, got %d: %s", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"stop_reason":"end_turn"`) {
+		t.Fatalf("non-stream Anthropic response must use end_turn, got: %s", rec.Body.String())
+	}
 	if len(service.request.Messages) != 2 || service.request.Messages[0].Role != "system" || service.request.Messages[1].Role != "user" {
 		t.Fatalf("unexpected normalized Anthropic messages: %#v", service.request.Messages)
 	}
@@ -784,16 +812,19 @@ func TestAnthropicMessagesStreamingAcceptsClaudeAppPayload(t *testing.T) {
 
 func TestAnthropicWireStopReasonUsesAnthropicValues(t *testing.T) {
 	tests := map[string]string{
-		"":               "end_turn",
-		"stop":           "end_turn",
-		"end_turn":       "end_turn",
-		"length":         "max_tokens",
-		"tool_calls":     "tool_use",
-		"function_call":  "tool_use",
-		"content_filter": "refusal",
-		"max_tokens":     "max_tokens",
-		"tool_use":       "tool_use",
-		"custom_future":  "custom_future",
+		"":                              "end_turn",
+		"stop":                          "end_turn",
+		"end_turn":                      "end_turn",
+		"stop_sequence":                 "stop_sequence",
+		"length":                        "max_tokens",
+		"tool_calls":                    "tool_use",
+		"function_call":                 "tool_use",
+		"content_filter":                "refusal",
+		"max_tokens":                    "max_tokens",
+		"tool_use":                      "tool_use",
+		"pause_turn":                    "pause_turn",
+		"model_context_window_exceeded": "model_context_window_exceeded",
+		"custom_future":                 "end_turn",
 	}
 	for input, expected := range tests {
 		if actual := anthropicWireStopReason(input); actual != expected {
@@ -1306,7 +1337,21 @@ func TestConsoleTokenRoutesAreTenantAndOwnerScoped(t *testing.T) {
 			Permissions: map[string]struct{}{
 				"token:read":   {},
 				"token:create": {},
+				"token:update": {},
 				"token:revoke": {},
+			},
+		},
+		"console-editor": {
+			ID:       "user-2",
+			Type:     auth.PrincipalTenantUser,
+			Audience: auth.AudienceConsole,
+			TenantID: "tenant-1",
+			ProjectIDs: map[string]struct{}{
+				"project-1": {},
+			},
+			Permissions: map[string]struct{}{
+				"token:read":   {},
+				"token:update": {},
 			},
 		},
 		"admin-user": {
@@ -1344,6 +1389,54 @@ func TestConsoleTokenRoutesAreTenantAndOwnerScoped(t *testing.T) {
 	}
 	if !strings.Contains(createRec.Body.String(), `"token":"sk-test-once"`) {
 		t.Fatalf("expected one-time token in create response: %s", createRec.Body.String())
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/console/v1/tenants/tenant-1/tokens/token-1", strings.NewReader(`{"project_id":"project-1","name":"edited-token","group_id":"group-2","allowed_ips":["198.51.100.10"],"allowed_domains":["client.example.com"],"expires_at":"2030-01-01T00:00:00Z"}`))
+	updateReq.Header.Set("Authorization", "Bearer console-user")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK || service.updated.TokenID != "token-1" || service.updated.TenantID != "tenant-1" || service.updated.CreatedBy != "user-1" || service.updated.Name != "edited-token" || service.updated.GroupID != "group-2" || len(service.updated.AllowedIPs) != 1 || service.updated.AllowedIPs[0] != "198.51.100.10" {
+		t.Fatalf("expected owner-scoped token update 200, got %d: %s (%#v)", updateRec.Code, updateRec.Body.String(), service.updated)
+	}
+
+	pauseReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens/token-1/pause", nil)
+	pauseReq.Header.Set("Authorization", "Bearer console-user")
+	pauseRec := httptest.NewRecorder()
+	handler.ServeHTTP(pauseRec, pauseReq)
+	if pauseRec.Code != http.StatusOK || service.status != "disabled" || service.statusTokenID != "token-1" || service.statusTenantID != "tenant-1" || service.statusOwnerID != "user-1" {
+		t.Fatalf("expected owner-scoped token pause 200, got %d: %s", pauseRec.Code, pauseRec.Body.String())
+	}
+
+	resumeReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens/token-1/resume", nil)
+	resumeReq.Header.Set("Authorization", "Bearer console-user")
+	resumeRec := httptest.NewRecorder()
+	handler.ServeHTTP(resumeRec, resumeReq)
+	if resumeRec.Code != http.StatusOK || service.status != "active" {
+		t.Fatalf("expected owner-scoped token resume 200, got %d: %s", resumeRec.Code, resumeRec.Body.String())
+	}
+
+	editorDeleteReq := httptest.NewRequest(http.MethodDelete, "/console/v1/tenants/tenant-1/tokens/token-1", nil)
+	editorDeleteReq.Header.Set("Authorization", "Bearer console-editor")
+	editorDeleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(editorDeleteRec, editorDeleteReq)
+	if editorDeleteRec.Code != http.StatusForbidden || service.deleted {
+		t.Fatalf("token delete must require token:revoke, got %d: %s", editorDeleteRec.Code, editorDeleteRec.Body.String())
+	}
+
+	terminateReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens/token-1/terminate", nil)
+	terminateReq.Header.Set("Authorization", "Bearer console-user")
+	terminateRec := httptest.NewRecorder()
+	handler.ServeHTTP(terminateRec, terminateReq)
+	if terminateRec.Code != http.StatusOK || service.status != "revoked" {
+		t.Fatalf("expected owner-scoped token terminate 200, got %d: %s", terminateRec.Code, terminateRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/console/v1/tenants/tenant-1/tokens/token-1", nil)
+	deleteReq.Header.Set("Authorization", "Bearer console-user")
+	deleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK || !service.deleted || service.deletedTokenID != "token-1" || service.deletedTenantID != "tenant-1" || service.deletedOwnerID != "user-1" {
+		t.Fatalf("expected owner-scoped token delete 200, got %d: %s", deleteRec.Code, deleteRec.Body.String())
 	}
 
 	foreignProjectReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens", strings.NewReader(`{"project_id":"project-2","name":"not-allowed"}`))
@@ -2412,13 +2505,22 @@ type fakeTokenAdminService struct {
 }
 
 type fakeTokenConsoleService struct {
-	listTenant     string
-	listOwner      string
-	createdBy      string
-	createdProject string
-	createdGroup   string
-	createdIPs     []string
-	createdDomains []string
+	listTenant      string
+	listOwner       string
+	createdBy       string
+	createdProject  string
+	createdGroup    string
+	createdIPs      []string
+	createdDomains  []string
+	updated         tokens.UpdateRequest
+	status          string
+	statusTokenID   string
+	statusTenantID  string
+	statusOwnerID   string
+	deleted         bool
+	deletedTokenID  string
+	deletedTenantID string
+	deletedOwnerID  string
 }
 
 type fakeModelCatalog struct{}
@@ -2461,15 +2563,24 @@ func (s *fakeTokenConsoleService) Create(_ context.Context, request tokens.Creat
 	return tokens.IssuedToken{ID: "token-1", Plaintext: "sk-test-once", Prefix: "sk-test"}, nil
 }
 
-func (*fakeTokenConsoleService) UpdateOwned(context.Context, tokens.UpdateRequest) (tokens.Summary, error) {
+func (s *fakeTokenConsoleService) UpdateOwned(_ context.Context, request tokens.UpdateRequest) (tokens.Summary, error) {
+	s.updated = request
 	return tokens.Summary{ID: "token-1", Status: "active"}, nil
 }
 
-func (*fakeTokenConsoleService) SetStatusOwned(context.Context, string, string, string, string) error {
+func (s *fakeTokenConsoleService) SetStatusOwned(_ context.Context, tokenID, tenantID, ownerID, status string) error {
+	s.status = status
+	s.statusTokenID = tokenID
+	s.statusTenantID = tenantID
+	s.statusOwnerID = ownerID
 	return nil
 }
 
-func (*fakeTokenConsoleService) DeleteOwned(context.Context, string, string, string) error {
+func (s *fakeTokenConsoleService) DeleteOwned(_ context.Context, tokenID, tenantID, ownerID string) error {
+	s.deleted = true
+	s.deletedTokenID = tokenID
+	s.deletedTenantID = tenantID
+	s.deletedOwnerID = ownerID
 	return nil
 }
 

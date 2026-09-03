@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Copy,
+  CreditCard,
   Globe2,
   KeyRound,
   Mail,
@@ -44,10 +45,12 @@ import {
   SecuritySettings,
   SiteSettings,
   SMTPSettingsForm,
+  PaymentProviderConfig,
   TranslationKey,
 } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
+import { PaymentSettingsPanel } from "@/components/admin/PaymentSettingsPanel";
 
 interface AdminSettingsPanelProps {
   language: Language;
@@ -116,12 +119,17 @@ interface AdminSettingsPanelProps {
   emailTemplatesMessage: LoginMessage;
   saveEmailTemplate: (form: EmailTemplateFormState) => Promise<boolean>;
   deleteEmailTemplate: (template: EmailTemplate) => Promise<void>;
+  paymentConfigs: PaymentProviderConfig[];
+  paymentSettingsBusy: boolean;
+  paymentSettingsMessage: LoginMessage;
+  savePaymentConfig: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
+  canUpdatePaymentSettings: boolean;
 }
 
 export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
   const { language } = props;
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
-  const [tab, setTab] = useState<"admin" | "base" | "email" | "features">("admin");
+  const [tab, setTab] = useState<"admin" | "base" | "email" | "features" | "payments">("admin");
 
   return (
     <div className="space-y-6">
@@ -130,11 +138,13 @@ export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
         <TabButton active={tab === "base"} icon={Settings2} label={t("systemSettingsBaseTab")} onClick={() => setTab("base")} />
         <TabButton active={tab === "email"} icon={Mail} label={t("systemSettingsEmailTab")} onClick={() => setTab("email")} />
         <TabButton active={tab === "features"} icon={ToggleRight} label={t("systemSettingsFeaturesTab")} onClick={() => setTab("features")} />
+        <TabButton active={tab === "payments"} icon={CreditCard} label={t("systemSettingsPaymentsTab")} onClick={() => setTab("payments")} />
       </div>
       {tab === "admin" ? <AdminTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "base" ? <BaseTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "email" ? <EmailTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "features" ? <FeatureTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
+      {tab === "payments" ? <PaymentSettingsPanel language={language} configs={props.paymentConfigs} busy={props.paymentSettingsBusy} message={props.paymentSettingsMessage} save={props.savePaymentConfig} canUpdate={props.canUpdatePaymentSettings} /> : null}
       {props.apiEndpointFormOpen ? <APIEndpointModal {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
     </div>
   );

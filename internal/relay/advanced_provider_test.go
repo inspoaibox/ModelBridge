@@ -121,6 +121,49 @@ func TestAnthropicCacheCreationAndReadAreDisjoint(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderPreservesStopSequenceAndDoesNotOverwriteItOnMessageStop(t *testing.T) {
+	response, err := decodeAnthropicCompletion([]byte(`{
+		"id":"msg-stop-sequence","model":"claude-test",
+		"content":[{"type":"text","text":"ok"}],"stop_reason":"stop_sequence",
+		"usage":{"input_tokens":2,"output_tokens":1}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Choices) != 1 || response.Choices[0].FinishReason != "stop_sequence" {
+		t.Fatalf("Anthropic stop_sequence was not preserved: %#v", response)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-stream-stop-sequence\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":2}}}\n\n"))
+		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"stop_sequence\"},\"usage\":{\"output_tokens\":1}}\n\n"))
+		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer server.Close()
+
+	stream, err := (AnthropicProvider{}).NewChatCompletionStream(context.Background(), UpstreamChatCompletionRequest{
+		Channel: Channel{BaseURL: server.URL}, APIKey: "sk-ant-test",
+		Request: ChatCompletionRequest{Model: "claude-test", Messages: []ChatMessage{{Role: "user", Content: "hello"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	for index := 0; index < 2; index++ {
+		if _, err := stream.Recv(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stopEvent, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopEvent.FinishReason != "stop_sequence" {
+		t.Fatalf("message_stop overwrote Anthropic stop_sequence: %#v", stopEvent)
+	}
+}
+
 func TestOpenAIProviderCreatesEmbeddings(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/embeddings" {

@@ -59,3 +59,23 @@ func TestUsageWhereScopesToAuthorizedProjects(t *testing.T) {
 		t.Fatalf("invalid project scope must fail closed: %s", where)
 	}
 }
+
+func TestUsageWhereSupportsConsoleFilters(t *testing.T) {
+	query := normalizeUsageQuery(UsageQuery{
+		TokenName: "  production  ",
+		Model:     " claude ",
+		GroupID:   "11111111-1111-4111-8111-111111111111",
+	})
+	where, args := usageWhere(query)
+	if query.TokenName != "production" || query.Model != "claude" {
+		t.Fatalf("console filter values were not normalized: %#v", query)
+	}
+	if !strings.Contains(where, "mod.model_name ILIKE $1") ||
+		!strings.Contains(where, "tok.name ILIKE $2") ||
+		!strings.Contains(where, "mr.group_id = $3::uuid") {
+		t.Fatalf("console filter predicates are incomplete: %s", where)
+	}
+	if len(args) != 3 || args[0] != "%claude%" || args[1] != "%production%" || args[2] != query.GroupID {
+		t.Fatalf("unexpected console filter arguments: %#v", args)
+	}
+}

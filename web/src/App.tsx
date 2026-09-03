@@ -18,6 +18,7 @@ import {
   AuditReport,
   Audience,
   BillingAccount,
+  EnterpriseVerification,
   ChannelFormModel,
   ChannelFormState,
   ChannelSummary,
@@ -43,6 +44,9 @@ import {
   PasswordFormState,
   ProfileFormState,
   PriceMatrixSummary,
+  PaymentOrder,
+  PaymentProviderConfig,
+  PublicPaymentProvider,
   ModelPriceFormState,
   ModelMonitor,
   ModelMonitorFormState,
@@ -127,7 +131,7 @@ function parseRoute(hash: string): SectionRoute {
 
 function normalizeConsoleSection(value: string): ConsoleSection {
   if (value === "security") return "profile";
-  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "profile" || value === "docs"
+  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "enterprise" || value === "profile" || value === "docs"
     ? value
     : "dashboard";
 }
@@ -145,6 +149,7 @@ function normalizeSection(value: string): AdminSection {
     value === "finance" ||
     value === "usage" ||
     value === "audit" ||
+    value === "enterprise" ||
     value === "settings"
     ? value
     : "dashboard";
@@ -519,6 +524,28 @@ function resolveFeatureSettingsError(
   }
 }
 
+function resolveEnterpriseError(status: number, error: string | undefined, t: (key: TranslationKey) => string) {
+  switch (error) {
+    case "ENTERPRISE_PENDING": return t("enterpriseAlreadyPending");
+    case "ENTERPRISE_APPROVED": return t("enterpriseAlreadyApproved");
+    case "LICENSE_TOO_LARGE": return t("enterpriseLicenseTooLarge");
+    case "LICENSE_INVALID": return t("enterpriseLicenseInvalid");
+    case "INVALID_ENTERPRISE_REQUEST": return t("enterpriseFormInvalid");
+    default: return status === 503 ? t("enterpriseUnavailable") : t("enterpriseSubmitFailed");
+  }
+}
+
+function resolvePaymentError(status: number, error: string | undefined, t: (key: TranslationKey) => string) {
+  switch (error) {
+    case "PAYMENT_PROVIDER_DISABLED": return t("rechargeProviderDisabled");
+    case "PAYMENT_PROVIDER_UNCONFIGURED": return t("rechargeProviderUnconfigured");
+    case "PAYMENT_ORDER_NOT_FOUND": return t("rechargeOrderNotFound");
+    case "PAYMENT_ORDER_CLOSED": return t("rechargeOrderClosed");
+    case "INVALID_PAYMENT_REQUEST": return t("rechargeInvalid");
+    default: return status === 503 ? t("rechargeUnavailable") : t("rechargeFailed");
+  }
+}
+
 function featureSettingsUpdatePayload(settings: FeatureSettings) {
   return {
     email_enabled: settings.email_enabled,
@@ -651,9 +678,13 @@ export default function App() {
 	  const [featureSettings, setFeatureSettings] = useState<FeatureSettings>(() => defaultFeatureSettings());
 	  const [featureBusy, setFeatureBusy] = useState(false);
 	  const [featureMessage, setFeatureMessage] = useState<LoginMessage>({ kind: "", text: "" });
-	  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
-	  const [emailTemplatesBusy, setEmailTemplatesBusy] = useState(false);
-	  const [emailTemplatesMessage, setEmailTemplatesMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
+  const [emailTemplatesBusy, setEmailTemplatesBusy] = useState(false);
+  const [emailTemplatesMessage, setEmailTemplatesMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [adminEnterpriseItems, setAdminEnterpriseItems] = useState<EnterpriseVerification[]>([]);
+  const [adminEnterpriseStatus, setAdminEnterpriseStatus] = useState("");
+  const [adminEnterpriseBusy, setAdminEnterpriseBusy] = useState(false);
+  const [adminEnterpriseMessage, setAdminEnterpriseMessage] = useState<LoginMessage>({ kind: "", text: "" });
 	  const [stepUpOpen, setStepUpOpen] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpError, setStepUpError] = useState("");
@@ -713,6 +744,16 @@ export default function App() {
   const [billingAccount, setBillingAccount] = useState<BillingAccount | null>(null);
   const [billingMessage, setBillingMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [billingBusy, setBillingBusy] = useState(false);
+  const [enterpriseVerification, setEnterpriseVerification] = useState<EnterpriseVerification | null>(null);
+  const [enterpriseBusy, setEnterpriseBusy] = useState(false);
+  const [enterpriseMessage, setEnterpriseMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [paymentProviders, setPaymentProviders] = useState<PublicPaymentProvider[]>([]);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentMessage, setPaymentMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [paymentOrder, setPaymentOrder] = useState<PaymentOrder | null>(null);
+  const [paymentConfigs, setPaymentConfigs] = useState<PaymentProviderConfig[]>([]);
+  const [paymentSettingsBusy, setPaymentSettingsBusy] = useState(false);
+  const [paymentSettingsMessage, setPaymentSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [officialPriceSyncBusy, setOfficialPriceSyncBusy] = useState(false);
   const [modelPriceForm, setModelPriceForm] = useState<ModelPriceFormState>(() => defaultModelPriceForm());
   const [modelPriceFormOpen, setModelPriceFormOpen] = useState(false);
@@ -1038,7 +1079,19 @@ export default function App() {
   useEffect(() => {
     if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing") return;
     refreshConsoleBilling();
+    refreshPaymentProviders();
   }, [signedIn, audience, route.view, consoleSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "enterprise") return;
+    refreshEnterpriseVerification(true);
+  }, [signedIn, audience, route.view, consoleSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing" || paymentOrder?.status !== "pending") return;
+    const interval = window.setInterval(() => void refreshPaymentOrder(), 5_000);
+    return () => window.clearInterval(interval);
+  }, [signedIn, audience, route.view, consoleSection, paymentOrder?.id, paymentOrder?.status]);
 
   useEffect(() => {
     if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "usage")) return;
@@ -1114,6 +1167,11 @@ export default function App() {
     }
     refreshAdminSettings(true);
   }, [signedIn, audience, route.view, adminSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "enterprise") return;
+    refreshAdminEnterprise(true);
+  }, [signedIn, audience, route.view, adminSection, adminEnterpriseStatus, language]);
 
   useEffect(() => {
     if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "usage") return;
@@ -1448,7 +1506,7 @@ export default function App() {
     setAdminProfileBusy(true);
     if (showPending) setAdminProfileMessage({ kind: "pending", text: t("systemSettingsLoading") });
     try {
-	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse] = await Promise.all([
+	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse, paymentResponse] = await Promise.all([
 	        fetch("/admin/v1/profile", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/auth/mfa/status", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
@@ -1456,6 +1514,7 @@ export default function App() {
 	        fetch("/admin/v1/settings/email", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/features", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/email/templates", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/payments", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	      ]);
       const profileResult = (await profileResponse.json().catch(() => ({}))) as ConsoleProfile & { error?: string };
 	      const mfaResult = (await mfaResponse.json().catch(() => ({}))) as MFAStatus & { error?: string };
@@ -1464,6 +1523,7 @@ export default function App() {
 	      const emailResult = (await emailResponse.json().catch(() => ({}))) as EmailSettings & { error?: string };
 	      const featureResult = (await featureResponse.json().catch(() => ({}))) as FeatureSettings & { error?: string };
 	      const templateResult = (await templateResponse.json().catch(() => ({}))) as { templates?: EmailTemplate[]; error?: string };
+	      const paymentResult = (await paymentResponse.json().catch(() => ({}))) as { providers?: PaymentProviderConfig[]; error?: string };
 	      if (!profileResponse.ok) throw new Error(resolveProfileError(profileResponse.status, profileResult.error, t));
 	      if (!mfaResponse.ok) throw new Error(resolveProfileError(mfaResponse.status, mfaResult.error, t));
 	      if (!settingsResponse.ok) throw new Error(resolveSystemSettingsError(settingsResponse.status, settingsResult.error, t));
@@ -1501,6 +1561,8 @@ export default function App() {
 	      });
 	      setFeatureSettings({ ...defaultFeatureSettings(), ...featureResult });
       setEmailTemplates(templateResult.templates || []);
+      setPaymentConfigs(paymentResponse.ok ? paymentResult.providers || [] : []);
+      setPaymentSettingsMessage(paymentResponse.ok ? { kind: "", text: "" } : { kind: "error", text: t("paymentSettingsUnavailable") });
       setSiteSettings({
         site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
         site_logo_url: settingsResult.site_logo_url?.trim() || "",
@@ -2015,6 +2077,32 @@ export default function App() {
 		}
 	}
 
+  async function savePaymentConfig(provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) {
+    setPaymentSettingsBusy(true);
+    setPaymentSettingsMessage({ kind: "pending", text: t("paymentSaving") });
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/settings/payments/${encodeURIComponent(provider)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ enabled, values, clear }),
+      });
+      const result = (await response.json().catch(() => ({}))) as PaymentProviderConfig & { error?: string };
+      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+      setPaymentConfigs((current) => current.map((item) => item.provider === result.provider ? result : item));
+      if (!paymentConfigs.some((item) => item.provider === result.provider)) setPaymentConfigs((current) => [...current, result]);
+      setPaymentSettingsMessage({ kind: "success", text: t("paymentSaved") });
+      setPaymentProviders((current) => {
+        const next = current.filter((item) => item.provider !== result.provider);
+        return result.enabled ? [...next, { provider: result.provider, enabled: true }] : next;
+      });
+    } catch (error) {
+      setPaymentSettingsMessage({ kind: "error", text: error instanceof Error ? error.message : t("paymentSaveFailed") });
+    } finally {
+      setPaymentSettingsBusy(false);
+    }
+  }
+
 	async function saveEmailTemplate(form: EmailTemplateFormState): Promise<boolean> {
 		setEmailTemplatesBusy(true);
 		setEmailTemplatesMessage({ kind: "pending", text: t("emailTemplateSaving") });
@@ -2480,6 +2568,147 @@ export default function App() {
     }
   }
 
+  async function refreshPaymentProviders() {
+    try {
+      const response = await fetch("/public/v1/payments/providers", { headers: { Accept: "application/json" } });
+      const result = (await response.json().catch(() => ({}))) as { providers?: PublicPaymentProvider[] };
+      if (!response.ok) throw new Error("payment providers unavailable");
+      setPaymentProviders(result.providers || []);
+    } catch {
+      setPaymentProviders([]);
+    }
+  }
+
+  async function createPaymentOrder(provider: PaymentOrder["provider"], amount: string, currency: string) {
+    if (!principal?.tenant_id) return;
+    setPaymentBusy(true);
+    setPaymentMessage({ kind: "pending", text: t("rechargeCreating") });
+    try {
+      const idempotencyKey = `recharge-${crypto.randomUUID()}`;
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", "Idempotency-Key": idempotencyKey },
+        credentials: "same-origin",
+        body: JSON.stringify({ provider, amount, currency, return_url: window.location.origin }),
+      });
+      const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
+      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+      setPaymentOrder(result);
+      setPaymentMessage({ kind: "success", text: t("rechargeCreated") });
+    } catch (error) {
+      setPaymentMessage({ kind: "error", text: error instanceof Error ? error.message : t("rechargeFailed") });
+    } finally {
+      setPaymentBusy(false);
+    }
+  }
+
+  async function refreshPaymentOrder() {
+    if (!principal?.tenant_id || !paymentOrder?.id) return;
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(paymentOrder.id)}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
+      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+      setPaymentOrder(result);
+      if (result.status === "paid") {
+        await refreshConsoleBilling();
+        setPaymentMessage({ kind: "success", text: t("rechargePaid") });
+      }
+    } catch (error) {
+      setPaymentMessage({ kind: "error", text: error instanceof Error ? error.message : t("rechargeFailed") });
+    }
+  }
+
+  async function capturePayPal() {
+    if (!principal?.tenant_id || !paymentOrder?.id) return;
+    setPaymentBusy(true);
+    setPaymentMessage({ kind: "pending", text: t("rechargeConfirming") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(paymentOrder.id)}/capture`, { method: "POST", headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
+      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+      setPaymentOrder(result);
+      await refreshConsoleBilling();
+      setPaymentMessage({ kind: "success", text: t("rechargePaid") });
+    } catch (error) {
+      setPaymentMessage({ kind: "error", text: error instanceof Error ? error.message : t("rechargeFailed") });
+    } finally {
+      setPaymentBusy(false);
+    }
+  }
+
+  async function refreshEnterpriseVerification(showPending = false) {
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("enterprise:read")) return;
+    setEnterpriseBusy(true);
+    if (showPending) setEnterpriseMessage({ kind: "pending", text: t("enterpriseLoading") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/enterprise-verification`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as EnterpriseVerification & { error?: string };
+      if (!response.ok) throw new Error(result.error || "enterprise unavailable");
+      setEnterpriseVerification(result.status ? result : null);
+      setEnterpriseMessage({ kind: "", text: "" });
+    } catch {
+      setEnterpriseMessage({ kind: "error", text: t("enterpriseUnavailable") });
+    } finally {
+      setEnterpriseBusy(false);
+    }
+  }
+
+  async function submitEnterpriseVerification(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!principal?.tenant_id) return;
+    const form = new FormData(event.currentTarget);
+    setEnterpriseBusy(true);
+    setEnterpriseMessage({ kind: "pending", text: t("enterpriseSubmitting") });
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/enterprise-verification`, { method: "POST", body: form, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as EnterpriseVerification & { error?: string };
+      if (!response.ok) throw new Error(resolveEnterpriseError(response.status, result.error, t));
+      setEnterpriseVerification(result);
+      setEnterpriseMessage({ kind: "success", text: t("enterpriseSubmitted") });
+      event.currentTarget.reset();
+    } catch (error) {
+      setEnterpriseMessage({ kind: "error", text: error instanceof Error ? error.message : t("enterpriseUnavailable") });
+    } finally {
+      setEnterpriseBusy(false);
+    }
+  }
+
+  async function refreshAdminEnterprise(showPending = false) {
+    if (!signedIn || audience !== "admin" || !principal?.id || !principal.permissions?.includes("enterprise:read")) return;
+    setAdminEnterpriseBusy(true);
+    if (showPending) setAdminEnterpriseMessage({ kind: "pending", text: t("enterpriseLoading") });
+    try {
+      const query = adminEnterpriseStatus ? `?status=${encodeURIComponent(adminEnterpriseStatus)}` : "";
+      const response = await fetch(`/admin/v1/enterprise-verifications${query}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { submissions?: EnterpriseVerification[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "enterprise unavailable");
+      setAdminEnterpriseItems(result.submissions || []);
+      setAdminEnterpriseMessage({ kind: "", text: "" });
+    } catch {
+      setAdminEnterpriseMessage({ kind: "error", text: t("enterpriseUnavailable") });
+    } finally {
+      setAdminEnterpriseBusy(false);
+    }
+  }
+
+  async function loadAdminEnterpriseDetails(item: EnterpriseVerification): Promise<EnterpriseVerification> {
+    const response = await fetch(`/admin/v1/enterprise-verifications/${encodeURIComponent(item.id)}`, {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    });
+    const result = (await response.json().catch(() => ({}))) as EnterpriseVerification & { error?: string };
+    if (!response.ok) throw new Error(result.error || "enterprise unavailable");
+    return result;
+  }
+
+  async function reviewEnterprise(item: EnterpriseVerification, status: "approved" | "rejected", reason: string) {
+    const response = await fetchAdminSensitive(`/admin/v1/enterprise-verifications/${encodeURIComponent(item.id)}/review`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, credentials: "same-origin", body: JSON.stringify({ status, reason }) });
+    const result = (await response.json().catch(() => ({}))) as EnterpriseVerification & { error?: string };
+    if (!response.ok) throw new Error(resolveEnterpriseError(response.status, result.error, t));
+    setAdminEnterpriseItems((current) => current.map((entry) => entry.id === result.id ? result : entry));
+    setAdminEnterpriseMessage({ kind: "success", text: t("enterpriseReviewed") });
+  }
+
 	async function refreshConsoleUsage(showPending = false, offset = consoleUsageOffset) {
     if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("usage:read")) return;
     setUsageBusy(true);
@@ -2489,8 +2718,10 @@ export default function App() {
       if (consoleUsageTokenName.trim()) params.set("token_name", consoleUsageTokenName.trim());
       if (consoleUsageModel.trim()) params.set("model", consoleUsageModel.trim());
       if (consoleUsageGroup) params.set("group_id", consoleUsageGroup);
-      if (consoleUsageFrom) params.set("from", new Date(`${consoleUsageFrom}T00:00:00Z`).toISOString());
-      if (consoleUsageTo) params.set("to", new Date(`${consoleUsageTo}T23:59:59.999Z`).toISOString());
+      const fromBoundary = usageDateBoundary(consoleUsageFrom, false);
+      const toBoundary = usageDateBoundary(consoleUsageTo, true);
+      if (fromBoundary) params.set("from", fromBoundary);
+      if (toBoundary) params.set("to", toBoundary);
 		const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/usage?${params.toString()}`, {
         headers: { Accept: "application/json" },
         credentials: "same-origin",
@@ -2509,6 +2740,22 @@ export default function App() {
       setUsageBusy(false);
 	}
   }
+
+function usageDateBoundary(value: string, endOfDay: boolean) {
+  const parts = value.split("-").map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return "";
+  const [year, month, day] = parts;
+  const date = new Date(
+    year,
+    month - 1,
+    day,
+    endOfDay ? 23 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 999 : 0,
+  );
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
 
   async function refreshConsoleModelStatus(showPending = false) {
     if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("model:status:read")) return;
@@ -3941,6 +4188,18 @@ export default function App() {
             billingBusy={billingBusy}
             billingMessage={billingMessage}
             refreshBilling={refreshConsoleBilling}
+            enterpriseVerification={enterpriseVerification}
+            enterpriseBusy={enterpriseBusy}
+            enterpriseMessage={enterpriseMessage}
+            refreshEnterprise={() => refreshEnterpriseVerification(true)}
+            submitEnterprise={submitEnterpriseVerification}
+            paymentProviders={paymentProviders}
+            paymentBusy={paymentBusy}
+            paymentMessage={paymentMessage}
+            paymentOrder={paymentOrder}
+            createPaymentOrder={createPaymentOrder}
+            refreshPaymentOrder={refreshPaymentOrder}
+            capturePayPal={capturePayPal}
             usageStatus={usageStatus}
             usageBusy={usageBusy}
             usageMessage={usageMessage}
@@ -4116,6 +4375,11 @@ export default function App() {
 	            emailTemplatesMessage={emailTemplatesMessage}
 	            saveEmailTemplate={saveEmailTemplate}
 	            deleteEmailTemplate={deleteEmailTemplate}
+            paymentConfigs={paymentConfigs}
+            paymentSettingsBusy={paymentSettingsBusy}
+            paymentSettingsMessage={paymentSettingsMessage}
+            savePaymentConfig={savePaymentConfig}
+            canUpdatePaymentSettings={principal?.permissions?.includes("payment:update") === true}
             usageReport={usageReport}
             usageReportBusy={usageReportBusy}
             usageReportMessage={usageReportMessage}
@@ -4171,6 +4435,14 @@ export default function App() {
 			 auditBusy={auditBusy}
 			 auditMessage={auditMessage}
 			 refreshAudit={refreshAudit}
+            enterpriseItems={adminEnterpriseItems}
+            enterpriseBusy={adminEnterpriseBusy}
+            enterpriseMessage={adminEnterpriseMessage}
+            enterpriseStatus={adminEnterpriseStatus}
+            setEnterpriseStatus={setAdminEnterpriseStatus}
+            refreshEnterprise={() => refreshAdminEnterprise(true)}
+            loadEnterprise={loadAdminEnterpriseDetails}
+            reviewEnterprise={reviewEnterprise}
             />
           )}
         </Suspense>

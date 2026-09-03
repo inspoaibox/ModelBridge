@@ -310,18 +310,18 @@ var tenantRolePermissions = map[string][]string{
 	"tenant_owner": {
 		"tenant:read", "tenant:update", "member:invite", "member:remove",
 		"project:read", "project:update", "token:read", "token:create", "token:update", "token:revoke",
-		"usage:read", "billing:read", "model:use", "model:status:read",
+		"usage:read", "billing:read", "enterprise:read", "enterprise:update", "model:use", "model:status:read",
 	},
 	"tenant_admin": {
 		"tenant:read", "member:invite", "member:remove",
 		"project:read", "project:update", "token:read", "token:create", "token:update", "token:revoke",
-		"usage:read", "billing:read", "model:use", "model:status:read",
+		"usage:read", "billing:read", "enterprise:read", "enterprise:update", "model:use", "model:status:read",
 	},
 	"developer": {
-		"project:read", "token:read", "token:create", "token:update", "token:revoke", "usage:read", "model:use", "model:status:read",
+		"project:read", "token:read", "token:create", "token:update", "token:revoke", "usage:read", "billing:read", "enterprise:read", "model:use", "model:status:read",
 	},
 	"viewer": {
-		"project:read", "usage:read", "billing:read", "model:status:read",
+		"project:read", "usage:read", "billing:read", "enterprise:read", "model:status:read",
 	},
 }
 

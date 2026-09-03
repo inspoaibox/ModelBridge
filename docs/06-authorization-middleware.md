@@ -91,7 +91,12 @@ audience 是否匹配
 | `POST /admin/billing/refunds` | 管理 Session | `billing:refund` | Step-up、幂等键 |
 | `GET /console/usage` | 用户 Session | `usage:read` | 当前租户和项目范围 |
 | `GET /console/v1/tenants/{tenantID}/model-status` | 用户 Session | `model:status:read` | 当前租户路径；只返回分组、模型和脱敏健康摘要 |
-| `POST /console/tokens` | 用户 Session | `token:create` | 只能创建当前项目 Token |
+| `POST /console/v1/tenants/{tenantID}/tokens` | 用户 Session | `token:create` | 只能创建当前用户在授权项目中的 Token |
+| `PUT /console/v1/tenants/{tenantID}/tokens/{tokenID}` | 用户 Session | `token:update` | 只能编辑本人创建的 Token |
+| `POST /console/v1/tenants/{tenantID}/tokens/{tokenID}/pause` | 用户 Session | `token:update` | 暂停本人创建的 active Token |
+| `POST /console/v1/tenants/{tenantID}/tokens/{tokenID}/resume` | 用户 Session | `token:update` | 启用本人创建的 disabled Token |
+| `POST /console/v1/tenants/{tenantID}/tokens/{tokenID}/terminate` | 用户 Session | `token:revoke` | 永久终止本人创建的 Token |
+| `DELETE /console/v1/tenants/{tenantID}/tokens/{tokenID}` | 用户 Session | `token:revoke` | 软删除并终止本人创建的 Token |
 | `POST /v1/chat/completions` | API Token | `model:use` | 模型白名单、余额、限流 |
 | `POST /internal/usage-events` | Service Identity | `usage.write` | 只接受可信服务调用 |
 

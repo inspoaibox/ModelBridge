@@ -18,11 +18,13 @@ import (
 	"ai-token/internal/billing"
 	"ai-token/internal/config"
 	"ai-token/internal/db"
+	"ai-token/internal/enterprise"
 	"ai-token/internal/groups"
 	"ai-token/internal/httpapi"
 	"ai-token/internal/mfa"
 	"ai-token/internal/modelprices"
 	"ai-token/internal/models"
+	"ai-token/internal/payments"
 	"ai-token/internal/relay"
 	"ai-token/internal/tokens"
 	"ai-token/internal/users"
@@ -52,6 +54,8 @@ func main() {
 		priceSyncService    modelprices.SyncService
 		auditReader         audit.Reader
 		auditWriter         audit.Writer
+		enterpriseService   enterprise.AdminService
+		paymentService      payments.Service
 	)
 	if cfg.DatabaseURL != "" {
 		if len(cfg.MFAEncryptionKey) == 0 {
@@ -182,6 +186,16 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		enterpriseSQLService, err := enterprise.NewSQLService(dbConn, mfaBox)
+		if err != nil {
+			log.Fatal(err)
+		}
+		enterpriseService = enterpriseSQLService
+		paymentSQLService, err := payments.NewSQLService(dbConn, mfaBox, billingService)
+		if err != nil {
+			log.Fatal(err)
+		}
+		paymentService = paymentSQLService
 		// Registration is initialized regardless of its current availability.
 		// The database-backed feature switch is checked for each request, so
 		// administrators can open or close registration without a restart.
@@ -230,7 +244,7 @@ func main() {
 		}
 	}
 
-	handler := httpapi.NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAudit(
+	handler := httpapi.NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercial(
 		auth.NewCredentialMiddleware(tokenResolver, sessionResolver),
 		&services,
 		relayService,
@@ -243,6 +257,8 @@ func main() {
 		userAdminService,
 		priceSyncService,
 		auditReader,
+		enterpriseService,
+		paymentService,
 		billingService,
 	)
 	if auditWriter != nil {

@@ -46,8 +46,9 @@ import {
   EmailFormState,
 	EmailSettings,
 	FeatureSettings,
-	EmailTemplate,
-	EmailTemplateFormState,
+  EmailTemplate,
+  EmailTemplateFormState,
+  EnterpriseVerification,
   FinanceReport,
   GroupSummary,
   Language,
@@ -57,6 +58,7 @@ import {
   PasswordFormState,
   PriceMatrixCostEstimate,
   PriceMatrixSummary,
+  PaymentProviderConfig,
   OperationsSnapshot,
   ModelStatusReport,
   ModelMonitor,
@@ -76,13 +78,14 @@ import {
   UserSummary,
 } from "@/types";
 import { translations } from "@/locales/translations";
-import { cn } from "@/lib/utils";
+import { cn, formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import { AdminSettingsPanel } from "@/components/admin/AdminSettingsPanel";
 import { AdminFinancePanel } from "@/components/admin/AdminFinancePanel";
 import { AdminUsagePanel } from "@/components/admin/AdminUsagePanel";
 import { AdminAuditPanel } from "@/components/admin/AdminAuditPanel";
 import { AdminRoleManagementPanel } from "@/components/admin/AdminRoleManagementPanel";
 import { AdminModelStatusPanel } from "@/components/admin/AdminModelStatusPanel";
+import { AdminEnterprisePanel } from "@/components/admin/AdminEnterprisePanel";
 
 interface AdminConsoleProps {
   language: Language;
@@ -210,7 +213,12 @@ interface AdminConsoleProps {
 	emailTemplatesBusy: boolean;
 	emailTemplatesMessage: LoginMessage;
 	saveEmailTemplate: (form: EmailTemplateFormState) => Promise<boolean>;
-	deleteEmailTemplate: (template: EmailTemplate) => Promise<void>;
+  deleteEmailTemplate: (template: EmailTemplate) => Promise<void>;
+  paymentConfigs: PaymentProviderConfig[];
+  paymentSettingsBusy: boolean;
+  paymentSettingsMessage: LoginMessage;
+  savePaymentConfig: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
+  canUpdatePaymentSettings: boolean;
   usageReport: UsageReport | null;
   usageReportBusy: boolean;
   usageReportMessage: LoginMessage;
@@ -266,6 +274,14 @@ interface AdminConsoleProps {
   auditBusy: boolean;
   auditMessage: LoginMessage;
   refreshAudit: (showPending?: boolean, offset?: number) => Promise<void>;
+  enterpriseItems: EnterpriseVerification[];
+  enterpriseBusy: boolean;
+  enterpriseMessage: LoginMessage;
+  enterpriseStatus: string;
+  setEnterpriseStatus: (value: string) => void;
+  refreshEnterprise: () => Promise<void>;
+  loadEnterprise: (item: EnterpriseVerification) => Promise<EnterpriseVerification>;
+  reviewEnterprise: (item: EnterpriseVerification, status: "approved" | "rejected", reason: string) => Promise<void>;
 }
 
 export function AdminConsole({
@@ -395,6 +411,11 @@ export function AdminConsole({
 	emailTemplatesMessage,
 	saveEmailTemplate,
 	deleteEmailTemplate,
+  paymentConfigs,
+  paymentSettingsBusy,
+  paymentSettingsMessage,
+  savePaymentConfig,
+  canUpdatePaymentSettings,
   usageReport,
   usageReportBusy,
   usageReportMessage,
@@ -450,6 +471,14 @@ export function AdminConsole({
   auditBusy,
   auditMessage,
   refreshAudit,
+  enterpriseItems,
+  enterpriseBusy,
+  enterpriseMessage,
+  enterpriseStatus,
+  setEnterpriseStatus,
+  refreshEnterprise,
+  loadEnterprise,
+  reviewEnterprise,
 }: AdminConsoleProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [channelSearch, setChannelSearch] = useState("");
@@ -530,6 +559,7 @@ export function AdminConsole({
         { id: "users" as const, label: t("adminNavUsers"), icon: Users, permission: "user:read" },
         { id: "roles" as const, label: t("adminNavRoles"), icon: ShieldCheck, permission: "role:read" },
         { id: "settings" as const, label: t("adminNavSettings"), icon: Settings2, permission: "security:read" },
+        { id: "enterprise" as const, label: t("adminNavEnterprise"), icon: Building2, permission: "enterprise:read" },
       ],
     },
   ];
@@ -636,6 +666,8 @@ export function AdminConsole({
                   ? t("adminNavUsage")
                 : adminSection === "audit"
                   ? t("adminNavAudit")
+                : adminSection === "enterprise"
+                  ? t("adminNavEnterprise")
                 : adminSection === "settings"
                   ? t("adminNavSettings")
                   : t("adminNavDashboard")}
@@ -664,6 +696,8 @@ export function AdminConsole({
                   ? t("usageRecordsTitle")
                 : adminSection === "audit"
                   ? t("auditTitle")
+                : adminSection === "enterprise"
+                  ? t("adminNavEnterprise")
                 : adminSection === "settings"
                   ? t("systemSettingsTitle")
                 : t("dashboardTitle")}
@@ -891,6 +925,20 @@ export function AdminConsole({
             save={saveAdminModelMonitor}
             remove={deleteAdminModelMonitor}
             probe={probeAdminModelMonitor}
+          />
+        )}
+
+        {adminSection === "enterprise" && (
+          <AdminEnterprisePanel
+            language={language}
+            items={enterpriseItems}
+            busy={enterpriseBusy}
+            message={enterpriseMessage}
+            status={enterpriseStatus}
+            setStatus={setEnterpriseStatus}
+            refresh={refreshEnterprise}
+            loadDetails={loadEnterprise}
+            review={reviewEnterprise}
           />
         )}
 
@@ -1292,7 +1340,7 @@ export function AdminConsole({
                           {/* Upstream cost factor */}
                           <TableCell className="whitespace-nowrap">
                             <div className="font-mono text-xs font-semibold text-cyan-700 dark:text-cyan-300">
-                              x{channel.upstream_cost_discount || "1.000000"}
+                              x{formatMultiplier(channel.upstream_cost_discount || "1.000000")}
                             </div>
                             <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
                               {t("channelsCostDiscountHint")}
@@ -1649,10 +1697,15 @@ export function AdminConsole({
 	            saveFeatureSettings={saveFeatureSettings}
 	            emailTemplates={emailTemplates}
 	            emailTemplatesBusy={emailTemplatesBusy}
-	            emailTemplatesMessage={emailTemplatesMessage}
-	            saveEmailTemplate={saveEmailTemplate}
-	            deleteEmailTemplate={deleteEmailTemplate}
-	          />
+            emailTemplatesMessage={emailTemplatesMessage}
+            saveEmailTemplate={saveEmailTemplate}
+            deleteEmailTemplate={deleteEmailTemplate}
+            paymentConfigs={paymentConfigs}
+            paymentSettingsBusy={paymentSettingsBusy}
+            paymentSettingsMessage={paymentSettingsMessage}
+            savePaymentConfig={savePaymentConfig}
+            canUpdatePaymentSettings={canUpdatePaymentSettings}
+          />
         )}
         {adminSection === "usage" && (
           <AdminUsagePanel
@@ -1779,9 +1832,7 @@ function formatMoney(value?: string) {
 }
 
 function formatMultiplier(value: string) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return value || "-";
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 }).format(parsed);
+  return formatDecimalWithoutTrailingZeros(value, value || "-");
 }
 
 type PriceEstimateField = "customer_price_per_unit" | "estimated_cost_per_unit" | "profit_per_unit";

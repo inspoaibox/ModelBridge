@@ -371,12 +371,13 @@ func newAnthropicRequest(ctx context.Context, baseURL, apiKey string, body []byt
 }
 
 type anthropicWireStream struct {
-	body    io.ReadCloser
-	scanner *bufio.Scanner
-	usage   ChatUsage
-	id      string
-	model   string
-	closed  bool
+	body         io.ReadCloser
+	scanner      *bufio.Scanner
+	usage        ChatUsage
+	id           string
+	model        string
+	finishReason string
+	closed       bool
 }
 
 func (s *anthropicWireStream) Recv() (ChatCompletionStreamEvent, error) {
@@ -474,7 +475,10 @@ func (s *anthropicWireStream) Recv() (ChatCompletionStreamEvent, error) {
 				event.FunctionCall, _ = json.Marshal(map[string]any{"arguments": value.Delta.PartialJSON})
 			}
 		case "message_delta":
-			event.FinishReason = anthropicFinishReason(value.Delta.StopReason)
+			if strings.TrimSpace(value.Delta.StopReason) != "" {
+				event.FinishReason = anthropicFinishReason(value.Delta.StopReason)
+				s.finishReason = event.FinishReason
+			}
 			if value.Usage.CacheCreationInputTokens > s.usage.CacheCreationInputTokens {
 				s.usage.CacheCreationInputTokens = value.Usage.CacheCreationInputTokens
 			}
@@ -491,7 +495,11 @@ func (s *anthropicWireStream) Recv() (ChatCompletionStreamEvent, error) {
 			s.usage.TotalTokens = s.usage.PromptTokens + s.usage.CompletionTokens
 			event.Usage, event.HasUsage = s.usage, true
 		case "message_stop":
-			event.FinishReason = "stop"
+			event.FinishReason = s.finishReason
+			if event.FinishReason == "" {
+				event.FinishReason = "stop"
+				s.finishReason = event.FinishReason
+			}
 		default:
 			continue
 		}
@@ -583,9 +591,10 @@ func newAnthropicClient(ctx context.Context, baseURL, apiKey string) (*anthropic
 }
 
 type anthropicCompletionStream struct {
-	stream *ssestream.Stream[anthropic.MessageStreamEventUnion]
-	usage  ChatUsage
-	closed bool
+	stream       *ssestream.Stream[anthropic.MessageStreamEventUnion]
+	usage        ChatUsage
+	finishReason string
+	closed       bool
 }
 
 func (s *anthropicCompletionStream) Recv() (ChatCompletionStreamEvent, error) {
@@ -618,7 +627,10 @@ func (s *anthropicCompletionStream) Recv() (ChatCompletionStreamEvent, error) {
 			event.Delta = delta.Delta.Text
 		case "message_delta":
 			delta := current.AsMessageDelta()
-			event.FinishReason = anthropicFinishReason(string(delta.Delta.StopReason))
+			if strings.TrimSpace(string(delta.Delta.StopReason)) != "" {
+				event.FinishReason = anthropicFinishReason(string(delta.Delta.StopReason))
+				s.finishReason = event.FinishReason
+			}
 			if delta.Usage.CacheCreationInputTokens > s.usage.CacheCreationInputTokens {
 				s.usage.CacheCreationInputTokens = delta.Usage.CacheCreationInputTokens
 			}
@@ -633,7 +645,11 @@ func (s *anthropicCompletionStream) Recv() (ChatCompletionStreamEvent, error) {
 			s.usage.TotalTokens = s.usage.PromptTokens + delta.Usage.OutputTokens
 			event.Usage, event.HasUsage = s.usage, true
 		case "message_stop":
-			event.FinishReason = "stop"
+			event.FinishReason = s.finishReason
+			if event.FinishReason == "" {
+				event.FinishReason = "stop"
+				s.finishReason = event.FinishReason
+			}
 		default:
 			continue
 		}
@@ -754,17 +770,25 @@ func anthropicText(blocks []anthropic.ContentBlockUnion) string {
 }
 
 func anthropicFinishReason(reason string) string {
-	switch reason {
-	case "end_turn", "stop_sequence":
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "", "end_turn":
+		return "stop"
+	case "stop_sequence":
+		return "stop_sequence"
+	case "stop":
 		return "stop"
 	case "max_tokens":
 		return "length"
 	case "tool_use":
 		return "tool_calls"
-	case "refusal", "model_context_window_exceeded":
-		return "content_filter"
+	case "refusal":
+		return "refusal"
+	case "model_context_window_exceeded", "context_window_exceeded", "context_length_exceeded":
+		return "model_context_window_exceeded"
+	case "pause_turn":
+		return "pause_turn"
 	default:
-		return reason
+		return strings.ToLower(strings.TrimSpace(reason))
 	}
 }
 

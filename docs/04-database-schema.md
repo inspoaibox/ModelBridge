@@ -156,16 +156,18 @@ allowed_domains_json
 rate_limit_json
 expires_at
 last_used_at
-status                  active | revoked | expired
+status                  active | disabled | revoked | expired
 created_at
 revoked_at
+deleted_at
 ```
 
 约束：
 
 - `token_hash` 唯一。
 - 完整 Token 只在创建响应中返回一次。
-- 撤销只改变状态，不复用原 Token。
+- `disabled` 表示用户主动暂停，`revoked` 表示永久终止，`deleted_at` 表示用户列表软删除。
+- 删除和终止只会让 Token 失效，不复用原 Token，也不删除历史用量记录。
 - Token 只允许访问其所属租户和项目；解析时还要求创建者账号、租户成员状态和项目角色仍然有效。
 - 创建者被锁定/停用、租户成员被暂停/移除、项目成员被降为只读或移除时，相关 Token 会失效或被撤销。
 
@@ -457,11 +459,19 @@ published_at
 - 余额缓存可以重建，不能成为唯一事实来源。
 - 数据库账号按服务拆分，Relay 不拥有用户和价格表写权限。
 - 跨租户查询在测试中默认失败。
-- 最新迁移版本为 `044_upstream_price_snapshot.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
+- 最新迁移版本为 `048_payment_idempotency_scope.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
 
 ### `email_templates` 与邮件功能设置
 
 `platform_settings` 保存邮件总开关、模型状态开关、事件开关、SMTP 主机/端口/TLS、发件人信息、余额提醒阈值和充值地址；SMTP 密码只保存应用加密后的密文。`email_templates` 按 `event_code + language` 保存可启用的主题和 HTML 内容，035 迁移预置邮箱验证、密码重置、订阅、余额、限额、内容审计和运维等中英文模板，036 迁移初始化模型状态开关。
+
+### `enterprise_verifications`
+
+企业认证按租户保存企业名称、统一社会信用代码、营业执照元数据与密文、对公账户名称、开户行、银行账号密文、审核状态和审核人。服务端校验统一社会信用代码的允许字符、18 位长度和校验位；营业执照内容和银行账号不以明文返回用户端；用户端只返回银行账号脱敏值，管理员详情接口才返回完整银行账号。`046_enterprise_verification.sql` 创建该表和 `enterprise:read`、`enterprise:update` 权限。用户必须是当前租户的 active member；待审核申请不可重复提交，拒绝后可重新提交，已通过后不能再次提交。
+
+### `payment_provider_configs` 与 `payment_orders`
+
+`payment_provider_configs` 保存 `wechat`、`alipay`、`stripe`、`paypal` 四类支付方式的启用状态和加密配置 JSON。Stripe 的 `payment_method_types` 是可选的非敏感字段，只允许 `card`、`alipay`、`wechat_pay`，留空表示使用 Stripe Dashboard 动态支付方式。私钥、证书、API v3 Key、Secret Key、Webhook Secret 和 PayPal Client Secret 不会明文落库或通过读取接口返回。`payment_orders` 保存租户、用户、支付方式、平台商户订单号、上游订单号、币种、金额、订单状态、回调/支付页面信息和幂等键；官方回调或 PayPal Capture 验证成功后才调用账务服务入账，入账使用 `payment:credit:<order_id>` 幂等键。`047_payments.sql` 创建表、索引和 `payment:read`、`payment:update` 权限；`048_payment_idempotency_scope.sql` 将充值幂等键唯一性限定为 `(tenant_id, idempotency_key)`。
 
 ### `api_endpoints`
 

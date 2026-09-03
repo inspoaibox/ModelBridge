@@ -55,7 +55,7 @@ api.example.com      下游模型 API
 |---|---|---|
 | `tenant_owner` | 当前租户 | 成员、项目、Token、套餐、账单、租户设置 |
 | `tenant_admin` | 当前租户 | 成员、项目、Token、模型权限、限流 |
-| `developer` | 被授权项目 | 创建和撤销自己的 Token，查看项目用量 |
+| `developer` | 被授权项目 | 创建、编辑、暂停、启用、终止和删除自己的 Token，查看项目用量 |
 | `viewer` | 被授权项目 | 只读查看模型、用量和账单 |
 
 租户角色永远不能访问：
@@ -87,6 +87,10 @@ channel:read
 channel:update
 channel:read_secret
 price:publish
+enterprise:read
+enterprise:update
+payment:read
+payment:update
 security:read
 security:update
 role:read
@@ -139,7 +143,7 @@ status
 - Token 使用高熵随机值生成。
 - 数据库只保存不可逆摘要或带服务端 pepper 的摘要。
 - 完整 Token 只在创建成功时显示一次。
-- 支持撤销、过期、轮换和批量冻结。
+- 支持编辑、暂停、启用、终止、软删除、过期、轮换和批量冻结。
 - 日志只记录 Token 前缀和内部 ID。
 - `token:read_secret` 不授予任何普通后台角色。
 - 创建者账号停用、锁定、租户成员暂停/移除、项目降为只读或移除项目授权后，相关 Token 不能继续解析；项目权限变更会撤销项目内由该用户创建的 Token。
