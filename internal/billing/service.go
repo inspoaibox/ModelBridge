@@ -16,6 +16,13 @@ import (
 
 const defaultReservationTTL = 10 * time.Minute
 
+const (
+	MeteringToken        = "token"
+	MeteringImageCount   = "image_count"
+	MeteringVideoSeconds = "video_seconds"
+	MeteringVideoRequest = "video_request"
+)
+
 var (
 	ErrUnavailable            = errors.New("billing service is unavailable")
 	ErrInvalidRequest         = errors.New("invalid billing request")
@@ -82,6 +89,7 @@ type Request struct {
 	ChannelID             string
 	GroupID               string
 	GroupMultiplier       string
+	MeteringMode          string
 	UpstreamCostDiscount  string
 	EstimatedInputTokens  int64
 	EstimatedOutputTokens int64
@@ -1318,6 +1326,11 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		return Reservation{}, err
 	}
 	request.UpstreamCostDiscount = upstreamCostDiscount
+	meteringMode, err := normalizeMeteringMode(request.MeteringMode)
+	if err != nil {
+		return Reservation{}, err
+	}
+	request.MeteringMode = meteringMode
 	if err := validateRequest(request); err != nil {
 		return Reservation{}, err
 	}
@@ -1374,7 +1387,11 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	if err != nil {
 		return Reservation{}, err
 	}
-	estimatedMetrics := addImplicitRequestMetric(priceComponentsFor(price), requestMetricsFor(request), request.PricingTier)
+	estimatedMetrics, err := customerMeteringUsage(requestMetricsFor(request), request.MeteringMode)
+	if err != nil {
+		return Reservation{}, err
+	}
+	estimatedMetrics = addImplicitRequestMetric(priceComponentsFor(price), estimatedMetrics, request.PricingTier)
 	estimatedMetrics, err = prepareReservationMetrics(priceComponentsFor(price), estimatedMetrics, request.PricingTier)
 	if err != nil {
 		return Reservation{}, err
@@ -1438,6 +1455,7 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	estimatedMetricsJSON := marshalJSON(estimatedMetrics, []byte(`{}`))
 	priceSnapshotValue := priceSnapshot(price)
 	priceSnapshotValue["pricing_tier"] = request.PricingTier
+	priceSnapshotValue["group_metering_mode"] = request.MeteringMode
 	priceSnapshotValue["upstream_cost_discount"] = request.UpstreamCostDiscount
 	priceSnapshotJSON := marshalJSON(priceSnapshotValue, []byte(`{}`))
 	upstreamPriceSnapshotJSON := marshalJSON(
@@ -1491,13 +1509,13 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 			upstream_cost_discount, estimated_upstream_cost, upstream_cost,
 			status, estimated_amount, currency, endpoint, client_ip,
 			request_type, reasoning_effort, price_snapshot_json,
-			upstream_price_snapshot_json, usage_metrics_json
+			upstream_price_snapshot_json, usage_metrics_json, group_metering_mode
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid,
 			NULLIF($9, '')::uuid, NULLIF($10, '')::uuid, NULLIF($11, '')::uuid,
 			$12::numeric, $13::numeric, $14::numeric,
 			$15::numeric, 'started', $16, $17, $18, $19, $20, $21,
-			$22::jsonb, $23::jsonb, $24::jsonb
+			$22::jsonb, $23::jsonb, $24::jsonb, $25
 		)
 	`, modelRequestID, request.RequestID, request.IdempotencyKey,
 		request.TenantID, request.ProjectID, request.TokenID, modelID,
@@ -1505,7 +1523,7 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		request.UpstreamCostDiscount, estimatedUpstreamCost, "0",
 		reservedAmount, currency, request.Endpoint, request.ClientIP,
 		request.RequestType, request.ReasoningEffort, priceSnapshotJSON,
-		upstreamPriceSnapshotJSON, []byte(`{}`))
+		upstreamPriceSnapshotJSON, []byte(`{}`), request.MeteringMode)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Reservation{}, ErrDuplicateRequest
@@ -1520,10 +1538,11 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO billing_reservations (
 			id, request_id, tenant_id, account_id, reserved_amount,
-			currency, status, expires_at, estimated_metrics_json
-		) VALUES ($1, $2, $3, $4, $5, $6, 'held', $7, $8::jsonb)
+			currency, status, expires_at, estimated_metrics_json, estimated_upstream_metrics_json
+		) VALUES ($1, $2, $3, $4, $5, $6, 'held', $7, $8::jsonb, $9::jsonb)
 	`, reservationID, modelRequestID, request.TenantID, accountID,
-		reservedAmount, currency, s.now().Add(defaultReservationTTL), estimatedMetricsJSON)
+		reservedAmount, currency, s.now().Add(defaultReservationTTL), estimatedMetricsJSON,
+		marshalJSON(upstreamEstimatedMetrics, []byte(`{}`)))
 	if err != nil {
 		return Reservation{}, err
 	}
@@ -1584,6 +1603,11 @@ func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (str
 		return "", err
 	}
 	request.UpstreamCostDiscount = upstreamCostDiscount
+	meteringMode, err := normalizeMeteringMode(request.MeteringMode)
+	if err != nil {
+		return "", err
+	}
+	request.MeteringMode = meteringMode
 	if strings.TrimSpace(request.RequestType) == "" {
 		request.RequestType = "sync"
 	}
@@ -1662,6 +1686,7 @@ func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (str
 		}
 		snapshot := priceSnapshot(price)
 		snapshot["pricing_tier"] = request.PricingTier
+		snapshot["group_metering_mode"] = request.MeteringMode
 		snapshot["upstream_cost_discount"] = request.UpstreamCostDiscount
 		priceSnapshotJSON = marshalJSON(snapshot, []byte(`{}`))
 		upstreamPriceSnapshotJSON = marshalJSON(
@@ -1682,19 +1707,19 @@ func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (str
 			group_id, group_multiplier, upstream_cost_discount,
 			estimated_upstream_cost, upstream_cost, status, estimated_amount,
 			currency, endpoint, client_ip, request_type, reasoning_effort,
-			price_snapshot_json, upstream_price_snapshot_json
+			price_snapshot_json, upstream_price_snapshot_json, group_metering_mode
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid,
 			NULLIF($9, '')::uuid, $10::numeric, $11::numeric,
 			$12::numeric, $13::numeric, 'started', 0, $14,
-			$15, $16, $17, $18, $19::jsonb, $20::jsonb
+			$15, $16, $17, $18, $19::jsonb, $20::jsonb, $21
 		)
 	`, modelRequestID, request.RequestID, request.IdempotencyKey,
 		request.TenantID, request.ProjectID, request.TokenID, modelID,
 		request.ChannelID, request.GroupID, request.GroupMultiplier,
 		request.UpstreamCostDiscount, estimatedUpstreamCost, "0", currency,
 		request.Endpoint, request.ClientIP, request.RequestType,
-		request.ReasoningEffort, priceSnapshotJSON, upstreamPriceSnapshotJSON)
+		request.ReasoningEffort, priceSnapshotJSON, upstreamPriceSnapshotJSON, request.MeteringMode)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return "", ErrDuplicateRequest
@@ -2014,7 +2039,11 @@ func usageHasPositiveQuantity(usage Usage) bool {
 	if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.CachedInputTokens > 0 || usage.ReasoningTokens > 0 {
 		return true
 	}
-	for _, value := range usage.Metrics {
+	return meteredUsageHasPositiveQuantity(usage.Metrics)
+}
+
+func meteredUsageHasPositiveQuantity(metrics MeteredUsage) bool {
+	for _, value := range metrics {
 		quantity, ok := new(big.Rat).SetString(strings.TrimSpace(value))
 		if ok && quantity.Sign() > 0 {
 			return true
@@ -2023,7 +2052,21 @@ func usageHasPositiveQuantity(usage Usage) bool {
 	return false
 }
 
-func priceAllowsZeroUsage(price Price, pricingTier string) bool {
+func priceAllowsZeroUsage(price Price, pricingTier string, meteringModes ...string) bool {
+	meteringMode := MeteringToken
+	if len(meteringModes) > 0 {
+		meteringMode = meteringModes[0]
+	}
+	normalizedMode, err := normalizeMeteringMode(meteringMode)
+	if err != nil {
+		return false
+	}
+	// Image and duration billing require an actual provider result (or the
+	// media estimate captured before dispatch). A minimum charge must not turn
+	// an unknown image count or video duration into a customer charge.
+	if normalizedMode != MeteringToken {
+		return false
+	}
 	if !isZeroAmount(price.MinimumCharge) {
 		return true
 	}
@@ -2301,8 +2344,11 @@ func (s *SQLService) Settle(
 		priceID                  sql.NullString
 		officialPriceID          sql.NullString
 		groupMultiplier          string
+		meteringMode             string
 		upstreamCostDiscount     string
 		estimatedUpstreamCost    string
+		estimatedMetricsRaw      []byte
+		estimatedUpstreamRaw     []byte
 		priceSnapshotRaw         []byte
 		upstreamPriceSnapshotRaw []byte
 	)
@@ -2310,8 +2356,10 @@ func (s *SQLService) Settle(
 		SELECT br.request_id::text, mr.token_id::text, br.account_id::text, br.reserved_amount::text,
 		       br.currency, br.status, mr.price_version_id::text,
 		       mr.official_price_version_id::text,
-		       mr.group_multiplier::text, mr.upstream_cost_discount::text,
-		       mr.estimated_upstream_cost::text, mr.price_snapshot_json,
+		       mr.group_multiplier::text, mr.group_metering_mode,
+		       mr.upstream_cost_discount::text,
+		       mr.estimated_upstream_cost::text, br.estimated_metrics_json,
+		       br.estimated_upstream_metrics_json, mr.price_snapshot_json,
 		       mr.upstream_price_snapshot_json
 		FROM billing_reservations br
 		JOIN model_requests mr ON mr.id = br.request_id
@@ -2319,8 +2367,9 @@ func (s *SQLService) Settle(
 		FOR UPDATE
 	`, reservationID).Scan(
 		&modelRequestID, &tokenID, &accountID, &reservedAmount, &currency, &status, &priceID,
-		&officialPriceID, &groupMultiplier, &upstreamCostDiscount,
-		&estimatedUpstreamCost, &priceSnapshotRaw, &upstreamPriceSnapshotRaw,
+		&officialPriceID, &groupMultiplier, &meteringMode, &upstreamCostDiscount,
+		&estimatedUpstreamCost, &estimatedMetricsRaw, &estimatedUpstreamRaw,
+		&priceSnapshotRaw, &upstreamPriceSnapshotRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrReservationNotFound
@@ -2420,11 +2469,21 @@ func (s *SQLService) Settle(
 			return err
 		}
 	}
-	if !usageHasPositiveQuantity(usage) && !priceAllowsZeroUsage(price, usage.PricingTier) {
+	var estimatedCustomerMetrics MeteredUsage
+	if len(estimatedMetricsRaw) > 0 && string(estimatedMetricsRaw) != "null" {
+		if err := json.Unmarshal(estimatedMetricsRaw, &estimatedCustomerMetrics); err != nil {
+			return ErrInvalidRequest
+		}
+	}
+	customerMetrics, err := customerMeteringUsageWithEstimate(usage.Metrics, estimatedCustomerMetrics, meteringMode)
+	if err != nil {
+		return err
+	}
+	if !meteredUsageHasPositiveQuantity(customerMetrics) && !priceAllowsZeroUsage(price, usage.PricingTier, meteringMode) {
 		return ErrUsageUnavailable
 	}
-	usage.Metrics = addImplicitRequestMetric(priceComponentsFor(price), usage.Metrics, usage.PricingTier)
-	charge, err := calculateMeteredChargeForTier(priceComponentsFor(price), usage.Metrics, price.MinimumCharge, usage.PricingTier)
+	customerMetrics = addImplicitRequestMetric(priceComponentsFor(price), customerMetrics, usage.PricingTier)
+	charge, err := calculateMeteredChargeForTier(priceComponentsFor(price), customerMetrics, price.MinimumCharge, usage.PricingTier)
 	if err != nil {
 		return err
 	}
@@ -2442,9 +2501,15 @@ func (s *SQLService) Settle(
 		upstreamPrice = snapshotPrice
 		upstreamPriceSnapshotJSON = upstreamPriceSnapshotRaw
 	}
+	upstreamMetrics := usage.Metrics
+	if len(upstreamMetrics) == 0 && len(estimatedUpstreamRaw) > 0 && string(estimatedUpstreamRaw) != "null" {
+		if err := json.Unmarshal(estimatedUpstreamRaw, &upstreamMetrics); err != nil {
+			return ErrInvalidRequest
+		}
+	}
 	upstreamCost, err := calculateUpstreamCost(
 		priceComponentsFor(upstreamPrice),
-		usage.Metrics,
+		upstreamMetrics,
 		upstreamPrice.MinimumCharge,
 		upstreamCostDiscount,
 		usage.PricingTier,
@@ -2460,7 +2525,7 @@ func (s *SQLService) Settle(
 		)
 		upstreamCost, err = calculateUpstreamCost(
 			priceComponentsFor(upstreamPrice),
-			usage.Metrics,
+			upstreamMetrics,
 			upstreamPrice.MinimumCharge,
 			upstreamCostDiscount,
 			usage.PricingTier,
@@ -2481,6 +2546,7 @@ func (s *SQLService) Settle(
 	priceSnapshotValue := priceSnapshot(price)
 	priceSnapshotValue["pricing_tier"] = usage.PricingTier
 	priceSnapshotValue["group_multiplier"] = groupMultiplier
+	priceSnapshotValue["group_metering_mode"] = meteringMode
 	priceSnapshotValue["upstream_cost_discount"] = upstreamCostDiscount
 	priceSnapshotJSON := marshalJSON(priceSnapshotValue, []byte(`{}`))
 
@@ -2619,14 +2685,15 @@ func (s *SQLService) CanSettleWithoutUsage(ctx context.Context, reservationID st
 	if !ids.Valid(reservationID) {
 		return false, ErrInvalidRequest
 	}
-	var status, currency string
-	var snapshotRaw []byte
+	var status, currency, meteringMode string
+	var snapshotRaw, estimatedMetricsRaw []byte
 	err := s.db.QueryRowContext(ctx, `
-		SELECT br.status, br.currency, mr.price_snapshot_json
+		SELECT br.status, br.currency, mr.price_snapshot_json, mr.group_metering_mode,
+		       br.estimated_metrics_json
 		FROM billing_reservations br
 		JOIN model_requests mr ON mr.id = br.request_id
 		WHERE br.id = $1
-	`, reservationID).Scan(&status, &currency, &snapshotRaw)
+	`, reservationID).Scan(&status, &currency, &snapshotRaw, &meteringMode, &estimatedMetricsRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrReservationNotFound
 	}
@@ -2649,7 +2716,20 @@ func (s *SQLService) CanSettleWithoutUsage(ctx context.Context, reservationID st
 	if len(snapshotRaw) > 0 && string(snapshotRaw) != "null" {
 		_ = json.Unmarshal(snapshotRaw, &snapshot)
 	}
-	return priceAllowsZeroUsage(price, snapshot.PricingTier), nil
+	var estimatedMetrics MeteredUsage
+	if len(estimatedMetricsRaw) > 0 && string(estimatedMetricsRaw) != "null" {
+		if err := json.Unmarshal(estimatedMetricsRaw, &estimatedMetrics); err != nil {
+			return false, ErrInvalidRequest
+		}
+	}
+	customerMetrics, err := customerMeteringUsageWithEstimate(nil, estimatedMetrics, meteringMode)
+	if err != nil {
+		return false, err
+	}
+	if meteredUsageHasPositiveQuantity(customerMetrics) {
+		return true, nil
+	}
+	return priceAllowsZeroUsage(price, snapshot.PricingTier, meteringMode), nil
 }
 
 func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID, channelID string) error {
@@ -2671,7 +2751,8 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		tenantID, projectID, tokenID, currentModel, currentModelID string
 		groupMultiplier                                            string
 		startedAt                                                  time.Time
-		estimatedMetricsRaw, priceSnapshotRaw                      []byte
+		estimatedMetricsRaw, estimatedUpstreamMetricsRaw           []byte
+		priceSnapshotRaw                                           []byte
 		upstreamPriceSnapshotRaw                                   []byte
 		provider, targetModelID, targetCostDiscount                string
 	)
@@ -2679,7 +2760,8 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 		SELECT br.request_id::text, br.account_id::text, br.reserved_amount::text,
 		       br.currency, br.status, mr.tenant_id::text, mr.project_id::text,
 		       mr.token_id::text, mr.model_id::text, current_model.model_name,
-		       mr.group_multiplier::text, br.estimated_metrics_json, mr.price_snapshot_json,
+		       mr.group_multiplier::text, br.estimated_metrics_json,
+		       br.estimated_upstream_metrics_json, mr.price_snapshot_json,
 		       mr.upstream_price_snapshot_json, mr.started_at,
 		       c.provider, target_cm.model_id::text, c.upstream_cost_discount::text
 		FROM billing_reservations br
@@ -2696,7 +2778,8 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	`, reservationID, channelID).Scan(
 		&modelRequestID, &accountID, &oldReserved, &currency, &status,
 		&tenantID, &projectID, &tokenID, &currentModelID, &currentModel,
-		&groupMultiplier, &estimatedMetricsRaw, &priceSnapshotRaw, &upstreamPriceSnapshotRaw,
+		&groupMultiplier, &estimatedMetricsRaw, &estimatedUpstreamMetricsRaw,
+		&priceSnapshotRaw, &upstreamPriceSnapshotRaw,
 		&startedAt, &provider, &targetModelID,
 		&targetCostDiscount,
 	)
@@ -2723,6 +2806,13 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 			if len(estimatedMetricsRaw) > 0 && string(estimatedMetricsRaw) != "null" {
 				_ = json.Unmarshal(estimatedMetricsRaw, &estimatedMetrics)
 			}
+			var upstreamEstimatedMetrics MeteredUsage
+			if len(estimatedUpstreamMetricsRaw) > 0 && string(estimatedUpstreamMetricsRaw) != "null" {
+				_ = json.Unmarshal(estimatedUpstreamMetricsRaw, &upstreamEstimatedMetrics)
+			}
+			if len(upstreamEstimatedMetrics) == 0 {
+				upstreamEstimatedMetrics = estimatedMetrics
+			}
 			upstreamPrice, upstreamPriceBasis, upstreamPriceErr := resolveUpstreamPrice(
 				ctx, tx, targetModelID, currency, s.now(), customerPrice,
 			)
@@ -2735,7 +2825,7 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 			}
 			estimatedUpstreamCost, priceErr = calculateUpstreamCost(
 				priceComponentsFor(upstreamPrice),
-				estimatedMetrics,
+				upstreamEstimatedMetrics,
 				upstreamPrice.MinimumCharge,
 				targetCostDiscount,
 				pricingTier,
@@ -2788,6 +2878,15 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 			return ErrInvalidRequest
 		}
 	}
+	var upstreamEstimatedMetrics MeteredUsage
+	if len(estimatedUpstreamMetricsRaw) > 0 && string(estimatedUpstreamMetricsRaw) != "null" {
+		if err := json.Unmarshal(estimatedUpstreamMetricsRaw, &upstreamEstimatedMetrics); err != nil {
+			return ErrInvalidRequest
+		}
+	}
+	if len(upstreamEstimatedMetrics) == 0 {
+		upstreamEstimatedMetrics = estimatedMetrics
+	}
 	estimatedMetrics = addImplicitRequestMetric(priceComponentsFor(price), estimatedMetrics, snapshot.PricingTier)
 	estimatedMetrics, err = prepareReservationMetrics(priceComponentsFor(price), estimatedMetrics, snapshot.PricingTier)
 	if err != nil {
@@ -2807,8 +2906,8 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	if err != nil {
 		return err
 	}
-	upstreamEstimatedMetrics := addImplicitRequestMetric(
-		priceComponentsFor(upstreamPrice), estimatedMetrics, snapshot.PricingTier,
+	upstreamEstimatedMetrics = addImplicitRequestMetric(
+		priceComponentsFor(upstreamPrice), upstreamEstimatedMetrics, snapshot.PricingTier,
 	)
 	upstreamEstimatedMetrics, err = prepareReservationMetrics(
 		priceComponentsFor(upstreamPrice), upstreamEstimatedMetrics, snapshot.PricingTier,
@@ -2826,7 +2925,6 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	if err != nil && strings.EqualFold(strings.TrimSpace(upstreamPrice.Source), "litellm") {
 		upstreamPrice = price
 		upstreamPriceBasis = "customer_price_fallback"
-		upstreamEstimatedMetrics = estimatedMetrics
 		estimatedUpstreamCost, err = calculateUpstreamCost(
 			priceComponentsFor(upstreamPrice),
 			upstreamEstimatedMetrics,
@@ -2863,9 +2961,13 @@ func (s *SQLService) RebindReservationChannel(ctx context.Context, reservationID
 	)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE billing_reservations
-		SET reserved_amount = $2::numeric, estimated_metrics_json = $3::jsonb, updated_at = now()
+		SET reserved_amount = $2::numeric,
+		    estimated_metrics_json = $3::jsonb,
+		    estimated_upstream_metrics_json = $4::jsonb,
+		    updated_at = now()
 		WHERE id = $1 AND status IN ('held', 'pending')
-	`, reservationID, newReserved, marshalJSON(estimatedMetrics, []byte(`{}`))); err != nil {
+	`, reservationID, newReserved, marshalJSON(estimatedMetrics, []byte(`{}`)),
+		marshalJSON(upstreamEstimatedMetrics, []byte(`{}`))); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -3066,6 +3168,7 @@ func validateRequest(request Request) error {
 		len(request.RequestType) > 64 ||
 		len(request.ReasoningEffort) > 64 ||
 		len(request.BillingType) > 32 ||
+		len(request.MeteringMode) > 32 ||
 		request.EstimatedInputTokens < 0 ||
 		request.EstimatedOutputTokens < 0 {
 		return ErrInvalidRequest

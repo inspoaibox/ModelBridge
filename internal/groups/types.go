@@ -30,6 +30,11 @@ const (
 
 	BillingPrepaid = "prepaid"
 	BillingFree    = "free"
+
+	MeteringToken        = "token"
+	MeteringImageCount   = "image_count"
+	MeteringVideoSeconds = "video_seconds"
+	MeteringVideoRequest = "video_request"
 )
 
 type ChannelSummary struct {
@@ -40,29 +45,31 @@ type ChannelSummary struct {
 }
 
 type Summary struct {
-	ID          string           `json:"id"`
-	Code        string           `json:"code"`
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Status      string           `json:"status"`
-	Multiplier  string           `json:"multiplier"`
-	RPMLimit    int              `json:"rpm_limit"`
-	BillingType string           `json:"billing_type"`
-	Priority    int              `json:"priority"`
-	Channels    []ChannelSummary `json:"channels"`
-	Models      []string         `json:"models"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	ID           string           `json:"id"`
+	Code         string           `json:"code"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	Status       string           `json:"status"`
+	Multiplier   string           `json:"multiplier"`
+	RPMLimit     int              `json:"rpm_limit"`
+	BillingType  string           `json:"billing_type"`
+	MeteringMode string           `json:"metering_mode"`
+	Priority     int              `json:"priority"`
+	Channels     []ChannelSummary `json:"channels"`
+	Models       []string         `json:"models"`
+	CreatedAt    time.Time        `json:"created_at"`
+	UpdatedAt    time.Time        `json:"updated_at"`
 }
 
 type TokenGroupSummary struct {
-	ID          string   `json:"id"`
-	Code        string   `json:"code"`
-	Name        string   `json:"name"`
-	Multiplier  string   `json:"multiplier"`
-	BillingType string   `json:"billing_type"`
-	Status      string   `json:"status"`
-	Models      []string `json:"models"`
+	ID           string   `json:"id"`
+	Code         string   `json:"code"`
+	Name         string   `json:"name"`
+	Multiplier   string   `json:"multiplier"`
+	BillingType  string   `json:"billing_type"`
+	MeteringMode string   `json:"metering_mode"`
+	Status       string   `json:"status"`
+	Models       []string `json:"models"`
 }
 
 type TokenGroupLister interface {
@@ -110,15 +117,16 @@ type ModelMonitorService interface {
 }
 
 type Mutation struct {
-	Code        string   `json:"code"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Status      string   `json:"status"`
-	Multiplier  string   `json:"multiplier"`
-	RPMLimit    int      `json:"rpm_limit"`
-	BillingType string   `json:"billing_type"`
-	Priority    int      `json:"priority"`
-	ChannelIDs  []string `json:"channel_ids"`
+	Code         string   `json:"code"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Status       string   `json:"status"`
+	Multiplier   string   `json:"multiplier"`
+	RPMLimit     int      `json:"rpm_limit"`
+	BillingType  string   `json:"billing_type"`
+	MeteringMode string   `json:"metering_mode"`
+	Priority     int      `json:"priority"`
+	ChannelIDs   []string `json:"channel_ids"`
 }
 
 type Service interface {
@@ -146,6 +154,7 @@ func (m Mutation) validate() (Mutation, error) {
 	m.Status = strings.ToLower(strings.TrimSpace(m.Status))
 	m.Multiplier = strings.TrimSpace(m.Multiplier)
 	m.BillingType = strings.ToLower(strings.TrimSpace(m.BillingType))
+	m.MeteringMode = strings.ToLower(strings.TrimSpace(m.MeteringMode))
 	if m.Status == "" {
 		m.Status = StatusActive
 	}
@@ -155,10 +164,13 @@ func (m Mutation) validate() (Mutation, error) {
 	if m.BillingType == "" {
 		m.BillingType = BillingPrepaid
 	}
+	if m.MeteringMode == "" {
+		m.MeteringMode = MeteringToken
+	}
 	if !validCode(m.Code) || m.Name == "" || len(m.Name) > 128 || len(m.Description) > 1000 {
 		return Mutation{}, ErrInvalidRequest
 	}
-	if !validStatus(m.Status) || !validBillingType(m.BillingType) {
+	if !validStatus(m.Status) || !validBillingType(m.BillingType) || !validMeteringMode(m.MeteringMode) {
 		return Mutation{}, ErrInvalidRequest
 	}
 	if normalized, ok := normalizeMultiplier(m.Multiplier); ok {
@@ -191,6 +203,15 @@ func validStatus(value string) bool {
 
 func validBillingType(value string) bool {
 	return value == BillingPrepaid || value == BillingFree
+}
+
+func validMeteringMode(value string) bool {
+	switch value {
+	case MeteringToken, MeteringImageCount, MeteringVideoSeconds, MeteringVideoRequest:
+		return true
+	default:
+		return false
+	}
 }
 
 func cleanIDs(values []string) []string {

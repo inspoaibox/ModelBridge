@@ -341,6 +341,7 @@ function defaultGroupForm(): GroupFormState {
     multiplier: "1",
     rpm_limit: 0,
     billing_type: "prepaid",
+    metering_mode: "token",
     priority: 100,
     channel_ids: [],
   };
@@ -411,6 +412,7 @@ function groupFormFromSummary(group: GroupSummary): GroupFormState {
     multiplier: group.multiplier,
     rpm_limit: group.rpm_limit,
     billing_type: group.billing_type,
+    metering_mode: group.metering_mode || "token",
     priority: group.priority,
     channel_ids: group.channels.map((channel) => channel.id),
   };
@@ -2295,6 +2297,7 @@ export default function App() {
           multiplier,
           rpm_limit: Number(groupForm.rpm_limit),
           billing_type: groupForm.billing_type,
+          metering_mode: groupForm.metering_mode,
           priority: Number(groupForm.priority),
           channel_ids: groupForm.channel_ids,
         }),

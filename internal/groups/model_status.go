@@ -41,6 +41,7 @@ type ModelStatusGroup struct {
 	Multiplier           string        `json:"multiplier"`
 	RPMLimit             int           `json:"rpm_limit"`
 	BillingType          string        `json:"billing_type"`
+	MeteringMode         string        `json:"metering_mode"`
 	MonitorID            string        `json:"monitor_id,omitempty"`
 	MonitorName          string        `json:"monitor_name,omitempty"`
 	MonitorMode          string        `json:"monitor_mode,omitempty"`
@@ -88,7 +89,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rg.id::text, rg.code, rg.name, rg.status,
-		       rg.multiplier::text, rg.rpm_limit, rg.billing_type, rg.updated_at,
+		       rg.multiplier::text, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.updated_at,
 		       m.model_name, m.provider,
 		       COUNT(m.id)::int,
 		       COUNT(m.id) FILTER (WHERE c.status = 'active'
@@ -121,7 +122,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		        AND (tok.expires_at IS NULL OR tok.expires_at > now())
 		  ))
 		GROUP BY rg.id, rg.code, rg.name, rg.status, rg.multiplier,
-		         rg.rpm_limit, rg.billing_type, rg.updated_at,
+		         rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.updated_at,
 		         m.model_name, m.provider
 		ORDER BY rg.priority DESC, rg.code ASC, m.provider ASC, m.model_name ASC
 		`, tenantID)
@@ -146,7 +147,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		)
 		if err := rows.Scan(
 			&group.ID, &group.Code, &group.Name, &groupStatus,
-			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.UpdatedAt,
+			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.MeteringMode, &group.UpdatedAt,
 			&modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
 			&failures, &lastSuccess, &lastFailure,
 		); err != nil {
@@ -269,7 +270,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			       mmc.last_probe_started_at, mmc.last_probe_finished_at,
 			       mmc.last_probe_status, mmc.last_probe_error,
 			       rg.id AS group_id, rg.code, rg.name, rg.status,
-			       rg.multiplier, rg.rpm_limit, rg.billing_type, rg.updated_at,
+			       rg.multiplier, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.updated_at,
 			       m.id AS model_id, m.model_name, m.provider
 			FROM model_monitor_configs mmc
 			JOIN routing_groups rg ON rg.id = mmc.group_id
@@ -359,7 +360,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		         mm.probe_interval_seconds, mm.last_probe_started_at,
 		         mm.last_probe_finished_at, mm.last_probe_status,
 		         mm.last_probe_error, mm.group_id, mm.code, mm.name,
-		         mm.status, mm.multiplier, mm.rpm_limit, mm.billing_type,
+		         mm.status, mm.multiplier, mm.rpm_limit, mm.billing_type, mm.metering_mode,
 		         mm.updated_at, mm.model_id, mm.model_name, mm.provider
 		ORDER BY mm.code ASC, mm.provider ASC, mm.model_name ASC
 	`)
@@ -391,7 +392,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			&probeInterval, &lastProbeStarted, &lastProbeFinished,
 			&lastProbeStatus, &lastProbeError,
 			&group.ID, &group.Code, &group.Name, &groupStatus,
-			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.UpdatedAt,
+			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.MeteringMode, &group.UpdatedAt,
 			&modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
 			&failures, &lastSuccess, &lastFailure, &requestCount7d,
 			&successfulCount7d, &recentStatusesRaw, &lastLatency,

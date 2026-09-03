@@ -47,6 +47,90 @@ type PriceComponentInput struct {
 	Metadata      json.RawMessage `json:"metadata,omitempty"`
 }
 
+func normalizeMeteringMode(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return MeteringToken, nil
+	}
+	switch value {
+	case MeteringToken, MeteringImageCount, MeteringVideoSeconds, MeteringVideoRequest:
+		return value, nil
+	default:
+		return "", ErrInvalidRequest
+	}
+}
+
+// customerMeteringUsage projects the provider usage onto the unit selected by
+// the routing group. The original usage remains available for upstream cost
+// estimation and usage reporting; this projection is only for the customer
+// charge.
+func customerMeteringUsage(usage MeteredUsage, mode string) (MeteredUsage, error) {
+	normalizedMode, err := normalizeMeteringMode(mode)
+	if err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeMeteredUsage(usage)
+	if err != nil {
+		return nil, err
+	}
+	switch normalizedMode {
+	case MeteringToken:
+		return normalized, nil
+	case MeteringImageCount:
+		if value := firstPositiveMetric(normalized, "output_images"); value != "" {
+			return MeteredUsage{"output_images": value}, nil
+		}
+		return MeteredUsage{}, nil
+	case MeteringVideoSeconds:
+		if value := firstPositiveMetric(normalized,
+			"output_seconds", "output_video_seconds",
+			"output_seconds_480p", "output_seconds_1080p", "output_seconds_4k",
+		); value != "" {
+			return MeteredUsage{"output_seconds": value}, nil
+		}
+		return MeteredUsage{}, nil
+	case MeteringVideoRequest:
+		return MeteredUsage{"requests": "1"}, nil
+	default:
+		return nil, ErrInvalidRequest
+	}
+}
+
+// customerMeteringUsageWithEstimate uses a request estimate only for media
+// meters that providers commonly omit from their final response. Token
+// billing deliberately remains dependent on provider-reported token usage.
+func customerMeteringUsageWithEstimate(actual, estimate MeteredUsage, mode string) (MeteredUsage, error) {
+	normalizedMode, err := normalizeMeteringMode(mode)
+	if err != nil {
+		return nil, err
+	}
+	customer, err := customerMeteringUsage(actual, normalizedMode)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedMode == MeteringToken || meteredUsageHasPositiveQuantity(customer) {
+		return customer, nil
+	}
+	fallback, err := customerMeteringUsage(estimate, normalizedMode)
+	if err != nil {
+		return nil, err
+	}
+	if meteredUsageHasPositiveQuantity(fallback) {
+		return fallback, nil
+	}
+	return customer, nil
+}
+
+func firstPositiveMetric(usage MeteredUsage, codes ...string) string {
+	for _, code := range codes {
+		value := strings.TrimSpace(usage[code])
+		if value != "" && rationalValue(value).Sign() > 0 {
+			return ratDecimal(rationalValue(value))
+		}
+	}
+	return ""
+}
+
 var validComponentCodes = map[string]struct{}{
 	"input_tokens": {}, "output_tokens": {}, "cached_input_tokens": {}, "reasoning_tokens": {},
 	"input_images": {}, "output_images": {}, "input_audio_seconds": {}, "output_audio_seconds": {},

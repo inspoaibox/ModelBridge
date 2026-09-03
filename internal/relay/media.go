@@ -598,17 +598,10 @@ func (s *Service) finishVideoJob(ctx context.Context, job MediaJob, status strin
 	if status != "completed" {
 		return ErrInvalidRequest
 	}
-	// Seedance reports billable video tokens after the asynchronous task
-	// completes. A requested duration is only a reservation estimate and must
-	// not become a final charge when Ark did not return usage.
-	if !response.Usage.UsageProvided && strings.TrimSpace(job.ReservationID) != "" {
-		// An accepted paid video operation must never be settled from the
-		// requested duration. Keep the hold for reconciliation instead.
-		if err := s.markRelayBillingPending(ctx, billing.Reservation{ID: job.ReservationID}, "", "upstream_video_usage_unavailable"); err != nil {
-			return err
-		}
-		return nil
-	} else if !response.Usage.UsageProvided {
+	// Providers may omit the customer-facing media meter. The billing layer
+	// can use the saved request estimate for explicit image/video metering
+	// modes, while still using provider-reported tokens for upstream cost.
+	if !response.Usage.UsageProvided {
 		// Free requests still need a useful usage record. Their local estimate
 		// does not affect a balance and is explicitly marked as estimated.
 		response.Usage = mergeMediaUsage(response.Usage, job.EstimatedMetrics)
@@ -923,7 +916,7 @@ func (s *Service) startMediaBilling(ctx context.Context, principal *auth.Princip
 	if idempotencyKey == "" {
 		idempotencyKey = metadata.IdempotencyKey
 	}
-	request := billing.Request{RequestID: requestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, idempotencyKey), TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID, GroupMultiplier: policy.Multiplier, UpstreamCostDiscount: channel.UpstreamCostDiscount, EstimatedMetrics: metrics, Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType, BillingType: policy.BillingType}
+	request := billing.Request{RequestID: requestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, idempotencyKey), TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID, GroupMultiplier: policy.Multiplier, MeteringMode: policy.MeteringMode, UpstreamCostDiscount: channel.UpstreamCostDiscount, EstimatedMetrics: metrics, Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType, BillingType: policy.BillingType}
 	if enabled {
 		value, err := s.billing.Reserve(ctx, request)
 		return value, "", err

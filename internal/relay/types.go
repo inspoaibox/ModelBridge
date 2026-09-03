@@ -103,11 +103,12 @@ type GroupChannelCandidateRouter interface {
 }
 
 type GroupPolicy struct {
-	ID          string
-	Status      string
-	Multiplier  string
-	RPMLimit    int
-	BillingType string
+	ID           string
+	Status       string
+	Multiplier   string
+	RPMLimit     int
+	BillingType  string
+	MeteringMode string
 }
 
 type GroupPolicyResolver interface {
@@ -692,6 +693,7 @@ func (s *Service) ChatCompletions(
 				ChannelID:             channel.ID,
 				GroupID:               groupPolicy.ID,
 				GroupMultiplier:       groupPolicy.Multiplier,
+				MeteringMode:          groupPolicy.MeteringMode,
 				UpstreamCostDiscount:  channel.UpstreamCostDiscount,
 				EstimatedInputTokens:  estimateInputTokens(request),
 				EstimatedOutputTokens: estimateOutputTokens(request),
@@ -723,6 +725,7 @@ func (s *Service) ChatCompletions(
 					ChannelID:            channel.ID,
 					GroupID:              groupPolicy.ID,
 					GroupMultiplier:      groupPolicy.Multiplier,
+					MeteringMode:         groupPolicy.MeteringMode,
 					UpstreamCostDiscount: channel.UpstreamCostDiscount,
 					Endpoint:             metadata.Endpoint,
 					ClientIP:             metadata.ClientIP,
@@ -869,7 +872,7 @@ func (s *Service) ChatCompletions(
 }
 
 func (s *Service) resolveGroupPolicy(ctx context.Context, principal *auth.Principal) (GroupPolicy, error) {
-	policy := GroupPolicy{Multiplier: "1.000000", BillingType: "prepaid"}
+	policy := GroupPolicy{Multiplier: "1.000000", BillingType: "prepaid", MeteringMode: billing.MeteringToken}
 	if principal == nil || strings.TrimSpace(principal.GroupID) == "" {
 		return policy, nil
 	}

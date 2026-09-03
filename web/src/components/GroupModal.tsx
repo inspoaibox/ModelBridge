@@ -99,6 +99,16 @@ export function GroupModal({ open, form, setForm, channels, language, busy, mess
                   <option value="free">{t("groupsBillingFree")}</option>
                 </select>
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="group-metering-mode">{t("groupsMeteringMode")}</Label>
+                <select id="group-metering-mode" value={form.metering_mode} onChange={(event) => setForm((current) => ({ ...current, metering_mode: event.target.value as GroupFormState["metering_mode"] }))} disabled={busy} className="flex h-10 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 ring-offset-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:ring-offset-slate-900">
+                  <option value="token">{t("groupsMeteringToken")}</option>
+                  <option value="image_count">{t("groupsMeteringImageCount")}</option>
+                  <option value="video_seconds">{t("groupsMeteringVideoSeconds")}</option>
+                  <option value="video_request">{t("groupsMeteringVideoRequest")}</option>
+                </select>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{t("groupsMeteringHint")}</p>
+              </div>
             </div>
 
             <section className="space-y-3" aria-labelledby="group-channels-title">

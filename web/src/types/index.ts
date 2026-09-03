@@ -336,6 +336,7 @@ export interface GroupSummary {
   multiplier: string;
   rpm_limit: number;
   billing_type: "prepaid" | "free";
+  metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
   priority: number;
   channels: GroupChannelSummary[];
   models: string[];
@@ -371,6 +372,7 @@ export interface ModelStatusGroup {
   multiplier: string;
   rpm_limit: number;
   billing_type: "prepaid" | "free";
+  metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
   monitor_id?: string;
   monitor_name?: string;
   monitor_mode?: "passive" | "active";
@@ -432,6 +434,7 @@ export interface GroupFormState {
   multiplier: string;
   rpm_limit: number;
   billing_type: "prepaid" | "free";
+  metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
   priority: number;
   channel_ids: string[];
 }
@@ -476,6 +479,7 @@ export interface TokenGroupOption {
   name: string;
   multiplier: string;
   billing_type: "prepaid" | "free";
+  metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
   status: "active" | "disabled";
   models: string[];
 }

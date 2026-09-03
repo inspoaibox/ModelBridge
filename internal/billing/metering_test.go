@@ -233,3 +233,103 @@ func TestUpstreamCostDefaultsToFullReferencePrice(t *testing.T) {
 		t.Fatalf("empty upstream discount should default to 1: %s", cost)
 	}
 }
+
+func TestCustomerMeteringUsageModes(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   string
+		actual MeteredUsage
+		want   MeteredUsage
+	}{
+		{
+			name:   "token keeps provider usage",
+			mode:   MeteringToken,
+			actual: MeteredUsage{"input_tokens": "10", "output_tokens": "3"},
+			want:   MeteredUsage{"input_tokens": "10", "output_tokens": "3"},
+		},
+		{
+			name:   "images use output count",
+			mode:   MeteringImageCount,
+			actual: MeteredUsage{"input_tokens": "10", "output_tokens": "3", "output_images": "6"},
+			want:   MeteredUsage{"output_images": "6"},
+		},
+		{
+			name:   "video uses seconds",
+			mode:   MeteringVideoSeconds,
+			actual: MeteredUsage{"output_video_tokens": "120", "output_seconds": "12.5"},
+			want:   MeteredUsage{"output_seconds": "12.5"},
+		},
+		{
+			name:   "video request is one request",
+			mode:   MeteringVideoRequest,
+			actual: MeteredUsage{"output_video_tokens": "120"},
+			want:   MeteredUsage{"requests": "1"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := customerMeteringUsage(test.actual, test.mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("unexpected metrics: %#v", got)
+			}
+			for code, want := range test.want {
+				if got[code] != want {
+					t.Fatalf("metric %s = %q, want %q", code, got[code], want)
+				}
+			}
+		})
+	}
+}
+
+func TestCustomerMediaMeteringFallsBackToRequestEstimate(t *testing.T) {
+	got, err := customerMeteringUsageWithEstimate(
+		MeteredUsage{"output_video_tokens": "120"},
+		MeteredUsage{"output_seconds": "8"},
+		MeteringVideoSeconds,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["output_seconds"] != "8" || len(got) != 1 {
+		t.Fatalf("unexpected media estimate projection: %#v", got)
+	}
+
+	got, err = customerMeteringUsageWithEstimate(
+		MeteredUsage{},
+		MeteredUsage{"output_images": "6"},
+		MeteringImageCount,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["output_images"] != "6" || len(got) != 1 {
+		t.Fatalf("unexpected image estimate projection: %#v", got)
+	}
+
+	got, err = customerMeteringUsageWithEstimate(
+		MeteredUsage{},
+		MeteredUsage{"output_tokens": "100"},
+		MeteringToken,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("token mode must not use request estimates: %#v", got)
+	}
+}
+
+func TestMediaMeteringDoesNotAllowUnpricedZeroUsage(t *testing.T) {
+	price := Price{
+		MinimumCharge: "0.01",
+		Components: []PriceComponent{
+			{ComponentCode: "output_images", Unit: "image", PricePerUnit: "1"},
+		},
+	}
+	if priceAllowsZeroUsage(price, "", MeteringImageCount) {
+		t.Fatal("image metering must require an image quantity")
+	}
+}
