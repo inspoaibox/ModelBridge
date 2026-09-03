@@ -170,7 +170,6 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
                 <span>{primary.last_request_at ? formatTime(primary.last_request_at, language) : t("consoleModelStatusNow")}</span>
               </div>
             </div>
-            {primary.last_failure_reason ? <p className="mt-2 truncate text-xs text-rose-600 dark:text-rose-300" title={primary.last_failure_reason}>{primary.last_failure_reason}</p> : null}
           </div>
         </CardContent>
       </Card>

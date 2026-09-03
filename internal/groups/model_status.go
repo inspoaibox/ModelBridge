@@ -316,9 +316,8 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		if lastRequestStatus.Valid {
 			model.LastRequestStatus = strings.TrimSpace(lastRequestStatus.String)
 		}
-		if lastFailureReason.Valid {
-			model.LastFailureReason = strings.TrimSpace(lastFailureReason.String)
-		}
+		// Failure reasons are internal diagnostics. Keep them available to the
+		// admin report, but do not expose upstream/provider details to tenants.
 		if len(recentStatusesRaw) > 0 && string(recentStatusesRaw) != "null" {
 			_ = json.Unmarshal(recentStatusesRaw, &model.RecentStatuses)
 		}
