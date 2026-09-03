@@ -37,6 +37,7 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 				SelectionMode:        MonitorSelectionSelected,
 				Mode:                 MonitorModeActive,
 				ModelNames:           []string{" gpt-5 ", "gpt-5", "claude-sonnet"},
+				PrimaryModel:         " claude-sonnet ",
 				ProbeIntervalSeconds: 60,
 				RecentRequestLimit:   120,
 			},
@@ -44,10 +45,24 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 				if len(got.ModelNames) != 2 || got.ModelNames[0] != "gpt-5" || got.ModelNames[1] != "claude-sonnet" {
 					t.Fatalf("model names = %#v", got.ModelNames)
 				}
+				if got.PrimaryModel != "claude-sonnet" {
+					t.Fatalf("primary model = %q", got.PrimaryModel)
+				}
 				if got.RecentRequestLimit != 120 {
 					t.Fatalf("recent request limit = %d", got.RecentRequestLimit)
 				}
 			},
+		},
+		{
+			name: "selected primary model must be monitored",
+			request: ModelMonitorMutation{
+				GroupID:       testMonitorGroupID,
+				Name:          "Invalid primary",
+				SelectionMode: MonitorSelectionSelected,
+				ModelNames:    []string{"gpt-5"},
+				PrimaryModel:  "claude-sonnet",
+			},
+			wantErr: true,
 		},
 		{
 			name: "selected mode requires a model",

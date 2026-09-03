@@ -1612,7 +1612,7 @@ func TestAdminModelMonitorRoutesRequirePermissionAndConfiguredStepUp(t *testing.
 		t.Fatalf("monitor read should be allowed, got %d: %s", readRecord.Code, readRecord.Body.String())
 	}
 
-	body := `{"group_id":"11111111-1111-4111-8111-111111111111","name":"Primary","selection_mode":"all","mode":"passive","enabled":true}`
+	body := `{"group_id":"11111111-1111-4111-8111-111111111111","name":"Primary","selection_mode":"all","primary_model":"gpt-5","mode":"passive","enabled":true}`
 	denied := httptest.NewRequest(http.MethodPost, "/admin/v1/model-monitors", strings.NewReader(body))
 	denied.Header.Set("Authorization", "Bearer admin-monitor-read")
 	deniedRecord := httptest.NewRecorder()
@@ -1634,7 +1634,7 @@ func TestAdminModelMonitorRoutesRequirePermissionAndConfiguredStepUp(t *testing.
 	allowed.Header.Set("X-MFA-Code", "123456")
 	allowedRecord := httptest.NewRecorder()
 	handler.ServeHTTP(allowedRecord, allowed)
-	if allowedRecord.Code != http.StatusCreated || groupService.createdBy != "admin-2" || stepUp.calls != 1 {
+	if allowedRecord.Code != http.StatusCreated || groupService.createdBy != "admin-2" || groupService.item.PrimaryModel != "gpt-5" || stepUp.calls != 1 {
 		t.Fatalf("monitor write with step-up should succeed, got %d: %s calls=%d", allowedRecord.Code, allowedRecord.Body.String(), stepUp.calls)
 	}
 }
@@ -2652,7 +2652,7 @@ func (s *fakeModelMonitorGroupService) CreateAdminModelMonitor(_ context.Context
 		ID: "monitor-1", GroupID: request.GroupID, GroupCode: "standard", GroupName: "Standard",
 		Name: request.Name, SelectionMode: request.SelectionMode, Mode: request.Mode,
 		ProbeIntervalSeconds: request.ProbeIntervalSeconds, Enabled: request.Enabled,
-		ModelNames: request.ModelNames,
+		ModelNames: request.ModelNames, PrimaryModel: request.PrimaryModel,
 	}
 	return s.item, nil
 }

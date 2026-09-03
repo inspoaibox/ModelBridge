@@ -461,7 +461,7 @@ published_at
 - 余额缓存可以重建，不能成为唯一事实来源。
 - 数据库账号按服务拆分，Relay 不拥有用户和价格表写权限。
 - 跨租户查询在测试中默认失败。
-- 最新迁移版本为 `048_payment_idempotency_scope.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
+- 最新迁移版本为 `053_model_monitor_primary_model.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
 
 ### `email_templates` 与邮件功能设置
 
@@ -474,6 +474,10 @@ published_at
 ### `payment_provider_configs` 与 `payment_orders`
 
 `payment_provider_configs` 保存 `wechat`、`alipay`、`stripe`、`paypal` 四类支付方式的启用状态和加密配置 JSON。Stripe 的 `payment_method_types` 是可选的非敏感字段，只允许 `card`、`alipay`、`wechat_pay`，留空表示使用 Stripe Dashboard 动态支付方式；Apple Pay 和 Google Pay 不作为独立字段。Stripe 的 Webhook 路由是固定的 `/payments/webhooks/stripe`，后台接口返回该路径供管理员配置，成功/取消返回地址不落库，而是在创建 Checkout Session 时按充值页路由生成。私钥、证书、API v3 Key、Secret Key、Webhook Secret 和 PayPal Client Secret 不会明文落库或通过读取接口返回。`payment_orders` 保存租户、用户、支付方式、平台商户订单号、上游订单号、币种、金额、订单状态、回调/支付页面信息和幂等键；官方回调或 PayPal Capture 验证成功后才调用账务服务入账，入账使用 `payment:credit:<order_id>` 幂等键。`047_payments.sql` 创建表、索引和 `payment:read`、`payment:update` 权限；`048_payment_idempotency_scope.sql` 将充值幂等键唯一性限定为 `(tenant_id, idempotency_key)`。
+
+### `model_monitor_configs`
+
+每个路由分组最多有一条模型监控配置。`selection_mode` 决定监控全部有效渠道模型映射，还是只监控 `model_monitor_config_models` 中显式选择的模型；`recent_request_limit` 仅允许 30、60、120。`primary_model_id` 由 `053_model_monitor_primary_model.sql` 增加，引用 `models.id` 并在模型删除时置空。服务端在新增或编辑时验证主模型属于当前监控范围；未选择主模型时自动选择范围内按名称排序的第一个模型。该字段只决定用户端分组健康卡默认展示的模型，不影响实际渠道调度、故障切换或计费。
 
 ### `api_endpoints`
 

@@ -338,32 +338,42 @@ function MonitorConfigModal({
   onSubmit: () => void;
 }) {
   const selectedGroup = groups.find((group) => group.id === form.group_id);
-  const availableModels = Array.from(new Set([...(selectedGroup?.models ?? []), ...form.model_names, form.primary_model].filter(Boolean))).sort();
+  const groupModels = selectedGroup?.models ?? [];
+  const availableModels = Array.from(new Set(form.selection_mode === "all" ? groupModels : form.model_names)).sort();
 
   function setGroup(groupID: string) {
     const group = groups.find((item) => item.id === groupID);
-    const groupModels = group?.models ?? [];
-    const retainedModels = groupModels.filter((model) => form.model_names.includes(model));
-    const nextModels = form.selection_mode === "all" ? [] : retainedModels;
-    const nextPrimary = groupModels.includes(form.primary_model) ? form.primary_model : groupModels[0] || "";
-    setForm((current) => ({
-      ...current,
-      group_id: groupID,
-      model_names: nextModels,
-      primary_model: nextPrimary,
-      name: current.name || (group ? `${group.name} ${t("adminModelMonitorDefaultName")}` : ""),
-    }));
+    const nextGroupModels = group?.models ?? [];
+    setForm((current) => {
+      const nextModels = current.selection_mode === "all"
+        ? []
+        : nextGroupModels.filter((model) => current.model_names.includes(model));
+      const scopeModels = current.selection_mode === "all" ? nextGroupModels : nextModels;
+      return {
+        ...current,
+        group_id: groupID,
+        model_names: nextModels,
+        primary_model: scopeModels.includes(current.primary_model) ? current.primary_model : scopeModels[0] || "",
+        name: current.name || (group ? `${group.name} ${t("adminModelMonitorDefaultName")}` : ""),
+      };
+    });
   }
 
   function setSelectionMode(mode: "all" | "selected") {
-    const nextModels = mode === "all" ? [] : [...availableModels];
-    const nextPrimary = nextModels.includes(form.primary_model) ? form.primary_model : nextModels[0] || "";
-    setForm((current) => ({
-      ...current,
-      selection_mode: mode,
-      model_names: nextModels,
-      primary_model: nextPrimary,
-    }));
+    setForm((current) => {
+      const nextModels = mode === "all"
+        ? []
+        : current.selection_mode === "selected" && current.model_names.length > 0
+          ? current.model_names.filter((model) => groupModels.includes(model))
+          : [...groupModels];
+      const scopeModels = mode === "all" ? groupModels : nextModels;
+      return {
+        ...current,
+        selection_mode: mode,
+        model_names: nextModels,
+        primary_model: scopeModels.includes(current.primary_model) ? current.primary_model : scopeModels[0] || "",
+      };
+    });
   }
 
   function toggleModel(model: string) {
