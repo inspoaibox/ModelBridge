@@ -293,9 +293,10 @@ function MonitorConfigRow({
             <span>{t("adminModelMonitorRecentRequests")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.recent_request_limit || 60}</strong></span>
             {monitor.mode === "active" ? <span>{t("adminModelMonitorInterval")}: <strong className="text-slate-700 dark:text-slate-300">{Math.max(1, Math.round(monitor.probe_interval_seconds / 60))} {t("adminModelMonitorMinutes")}</strong></span> : null}
           </div>
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 dark:text-slate-500">
-            <span>{t("adminModelMonitorLastRun")}: {isProbeRunning(monitor) ? t("adminModelMonitorRunning") : formatTime(monitor.last_probe_finished_at, language)}</span>
-            {monitor.last_probe_status || isProbeRunning(monitor) ? <span className={isProbeRunning(monitor) ? "text-cyan-500" : monitor.last_probe_status === "failed" ? "text-rose-500" : monitor.last_probe_status === "success" ? "text-emerald-500" : "text-amber-500"}>{isProbeRunning(monitor) ? t("adminModelMonitorRunning") : probeStatusLabel(monitor.last_probe_status, t)}</span> : null}
+           <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 dark:text-slate-500">
+             <span>{t("adminModelMonitorLastRun")}: {isProbeRunning(monitor) ? t("adminModelMonitorRunning") : formatTime(monitor.last_probe_finished_at, language)}</span>
+            {monitor.mode === "active" ? <span>{t("adminModelMonitorNextRun")}: {isProbeRunning(monitor) ? t("adminModelMonitorNextRunPending") : formatTime(monitor.next_probe_at, language)}</span> : null}
+             {monitor.last_probe_status || isProbeRunning(monitor) ? <span className={isProbeRunning(monitor) ? "text-cyan-500" : monitor.last_probe_status === "failed" ? "text-rose-500" : monitor.last_probe_status === "success" ? "text-emerald-500" : "text-amber-500"}>{isProbeRunning(monitor) ? t("adminModelMonitorRunning") : probeStatusLabel(monitor.last_probe_status, t)}</span> : null}
             {monitor.last_probe_error ? <span className="max-w-full truncate text-rose-500" title={monitor.last_probe_error}>{monitor.last_probe_error}</span> : null}
           </div>
         </div>

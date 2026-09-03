@@ -65,7 +65,7 @@
 1. 本机 `.env.local` 当前含开发数据库密码、Token Pepper、Session Pepper 和 MFA 加密密钥。它虽然未被 Git 跟踪，但所有这些值必须在生产重新生成；发布包、备份、截图、日志和 shell history 都不得包含它。
 2. 生产必须使用非超级用户 PostgreSQL 账号、`COOKIE_SECURE=true`、HTTPS、明确 `CORS_ALLOWED_ORIGINS`、回环 `HTTP_ADDR` 和明确 `TRUSTED_PROXY_CIDRS`。
 3. 开启公开注册前，在“系统设置 → 功能开关”打开“开放用户注册”；如需邮箱验证，同时打开邮件总开关和“邮箱验证码”，并在“系统设置 → 邮件设置”配置 HTTPS 公开地址和可用的 SMTP STARTTLS；同时在边缘配置 Captcha/WAF。
-4. 迁移必须执行到 `053_model_monitor_primary_model.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
+4. 迁移必须执行到 `054_model_monitor_next_probe.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
 5. 配置支付平台 HTTPS 回调地址；Stripe 使用 `https://当前域名/payments/webhooks/stripe`，不配置 `notify_url`。分别完成微信 Native、支付宝当面付、Stripe Checkout、PayPal Capture 的沙箱或小额真实支付测试，并确认重复回调只入账一次、金额/币种不匹配不会入账。若 Stripe 配置了 `payment_method_types`，还要分别验收 `card`、`alipay`、`wechat_pay` 在实际账户、地区和币种下是否可用；Apple Pay/Google Pay 需在真实设备和已验证域名下验收。
 6. 生产应启用外部依赖漏洞扫描；本次使用官方 npm registry 检查生产依赖为 0 个已知漏洞，但仍不能替代发布镜像和运行环境扫描。
 
@@ -85,7 +85,7 @@ cd web && npm audit --omit=dev --registry=https://registry.npmjs.org
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
-结果：后端 `go test ./... -count=1`、`go vet ./...` 通过；加载本机开发数据库配置后，PostgreSQL 使用记录、财务和计费结算集成测试通过，测试会先执行 `db.Migrate` 并核对到 `053_model_monitor_primary_model.sql`。`govulncheck` 报告可达调用路径为 0 个漏洞（另有未被当前调用路径触及的依赖漏洞，需要持续升级依赖），前端 lint/typecheck/build/浏览器烟测通过，生产构建已按路由拆分且无 chunk 体积警告，官方 npm registry 的生产依赖审计显示 `found 0 vulnerabilities`，`git diff --check` 通过。
+结果：后端 `go test ./... -count=1`、`go vet ./...` 通过；加载本机开发数据库配置后，PostgreSQL 使用记录、财务和计费结算集成测试通过，测试会先执行 `db.Migrate` 并核对到 `054_model_monitor_next_probe.sql`。`govulncheck` 报告可达调用路径为 0 个漏洞（另有未被当前调用路径触及的依赖漏洞，需要持续升级依赖），前端 lint/typecheck/build/浏览器烟测通过，生产构建已按路由拆分且无 chunk 体积警告，官方 npm registry 的生产依赖审计显示 `found 0 vulnerabilities`，`git diff --check` 通过。
 
 本机页面检查还覆盖了首页、模型目录、暗色模式、登录、注册、404 和 390px 移动视口；重启后的干净 Vite 页面没有浏览器错误日志。Vite 热更新错误只出现在被替换的旧开发进程记录中，不属于生产构建。
 

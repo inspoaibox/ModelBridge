@@ -413,6 +413,7 @@ export interface ModelMonitor {
   enabled: boolean;
   model_names: string[];
   available_models: string[];
+  next_probe_at?: string;
   last_probe_started_at?: string;
   last_probe_finished_at?: string;
   last_probe_status?: "success" | "failed" | "skipped" | "";

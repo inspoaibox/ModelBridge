@@ -965,11 +965,6 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 		return ErrModelNotFound
 	}
 
-	one := int64(1)
-	request := ChatCompletionRequest{
-		Model:    model,
-		Messages: []ChatMessage{{Role: "user", Content: "x"}},
-	}
 	attempted := map[string]struct{}{}
 	var lastErr error
 	for len(attempted) < len(candidates) {
@@ -993,16 +988,7 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 		if upstreamModel == "" {
 			upstreamModel = model
 		}
-		probeRequest := request
-		// OpenAI's newer reasoning models use max_completion_tokens, while
-		// OpenAI-compatible Grok endpoints commonly expect max_tokens.
-		// Anthropic and Gemini adapters accept either field, so select the
-		// spelling per upstream provider for broad compatibility.
-		if canonicalProvider(channel.Provider) == ProviderOpenAI || canonicalProvider(channel.Provider) == ProviderGemini {
-			probeRequest.MaxCompletionTokens = &one
-		} else {
-			probeRequest.MaxTokens = &one
-		}
+		probeRequest := minimalProbeRequest(canonicalProvider(channel.Provider), upstreamModel, model)
 		_, callErr := provider.ChatCompletions(ctx, UpstreamChatCompletionRequest{
 			Channel: channel, APIKey: apiKey, Request: probeRequest, UpstreamModel: upstreamModel,
 		})
@@ -1020,6 +1006,46 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 		return ErrUpstream
 	}
 	return lastErr
+}
+
+func minimalProbeRequest(provider, upstreamModel, requestedModel string) ChatCompletionRequest {
+	one := int64(1)
+	request := ChatCompletionRequest{
+		Model:    requestedModel,
+		Messages: []ChatMessage{{Role: "user", Content: "x"}},
+	}
+	// OpenAI's newer reasoning models use max_completion_tokens, while
+	// OpenAI-compatible Grok endpoints commonly expect max_tokens.
+	// Anthropic and Gemini adapters accept either field, so select the
+	// spelling per upstream provider for broad compatibility.
+	if provider == ProviderOpenAI || provider == ProviderGemini {
+		request.MaxCompletionTokens = &one
+	} else {
+		request.MaxTokens = &one
+	}
+	if provider == ProviderOpenAI && reasoningProbeModel(upstreamModel) {
+		request.ReasoningEffort = "none"
+	}
+	if provider == ProviderGemini && geminiThinkingProbeModel(upstreamModel) {
+		request.ReasoningEffort = "none"
+	}
+	return request
+}
+
+func reasoningProbeModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(name, "gpt-5") ||
+		strings.HasPrefix(name, "o1") ||
+		strings.HasPrefix(name, "o3") ||
+		strings.HasPrefix(name, "o4") ||
+		strings.Contains(name, "reason")
+}
+
+func geminiThinkingProbeModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(name, "2.5") ||
+		strings.Contains(name, "2-5") ||
+		strings.Contains(name, "thinking")
 }
 
 // ModelProbeOutcome describes a group-level probe that uses the configured

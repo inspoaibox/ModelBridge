@@ -461,7 +461,7 @@ published_at
 - 余额缓存可以重建，不能成为唯一事实来源。
 - 数据库账号按服务拆分，Relay 不拥有用户和价格表写权限。
 - 跨租户查询在测试中默认失败。
-- 最新迁移版本为 `053_model_monitor_primary_model.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
+- 最新迁移版本为 `054_model_monitor_next_probe.sql`；应用启动使用事务和 PostgreSQL advisory lock 串行执行迁移。
 
 ### `email_templates` 与邮件功能设置
 
@@ -477,7 +477,7 @@ published_at
 
 ### `model_monitor_configs`
 
-每个路由分组最多有一条模型监控配置。`selection_mode` 决定监控全部有效渠道模型映射，还是只监控 `model_monitor_config_models` 中显式选择的模型；`recent_request_limit` 仅允许 30、60、120。`primary_model_id` 由 `053_model_monitor_primary_model.sql` 增加，引用 `models.id` 并在模型删除时置空。服务端在新增或编辑时验证主模型属于当前监控范围；未选择主模型时自动选择范围内按名称排序的第一个模型。该字段只决定用户端分组健康卡默认展示的模型，不影响实际渠道调度、故障切换或计费。
+每个路由分组最多有一条模型监控配置。`selection_mode` 决定监控全部有效渠道模型映射，还是只监控 `model_monitor_config_models` 中显式选择的模型；`recent_request_limit` 仅允许 30、60、120。`primary_model_id` 由 `053_model_monitor_primary_model.sql` 增加，引用 `models.id` 并在模型删除时置空。`next_probe_at` 由 `054_model_monitor_next_probe.sql` 增加，用于记录下一次主动探测时间；主动监控启用或修改后立即执行，探测完成后按配置间隔重新安排，并加入最多约 10% 的随机抖动。服务端在新增或编辑时验证主模型属于当前监控范围；未选择主模型时自动选择范围内按名称排序的第一个模型。主模型字段只决定用户端分组健康卡默认展示的模型，不影响实际渠道调度、故障切换或计费。
 
 ### `api_endpoints`
 

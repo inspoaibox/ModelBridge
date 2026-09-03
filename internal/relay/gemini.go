@@ -51,7 +51,7 @@ func (GeminiProvider) ChatCompletions(ctx context.Context, upstream UpstreamChat
 	if err != nil {
 		return ChatCompletionResponse{}, err
 	}
-	config, err := geminiGenerateConfig(upstream.Request, systemInstruction)
+	config, err := geminiGenerateConfig(upstream.Request, systemInstruction, upstream.model())
 	if err != nil {
 		return ChatCompletionResponse{}, err
 	}
@@ -71,7 +71,7 @@ func (GeminiProvider) NewChatCompletionStream(ctx context.Context, upstream Upst
 	if err != nil {
 		return nil, err
 	}
-	config, err := geminiGenerateConfig(upstream.Request, systemInstruction)
+	config, err := geminiGenerateConfig(upstream.Request, systemInstruction, upstream.model())
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (GeminiProvider) NewChatCompletionStream(ctx context.Context, upstream Upst
 	return &geminiCompletionStream{results: results, cancel: cancel, requestedModel: upstream.model()}, nil
 }
 
-func geminiGenerateConfig(request ChatCompletionRequest, systemInstruction string) (*genai.GenerateContentConfig, error) {
+func geminiGenerateConfig(request ChatCompletionRequest, systemInstruction, model string) (*genai.GenerateContentConfig, error) {
 	config := &genai.GenerateContentConfig{}
 	if systemInstruction != "" {
 		config.SystemInstruction = genai.NewContentFromText(systemInstruction, genai.RoleUser)
@@ -110,6 +110,10 @@ func geminiGenerateConfig(request ChatCompletionRequest, systemInstruction strin
 		config.MaxOutputTokens = int32(*request.MaxCompletionTokens)
 	} else if request.MaxTokens != nil {
 		config.MaxOutputTokens = int32(*request.MaxTokens)
+	}
+	if request.ReasoningEffort == "none" && geminiThinkingProbeModel(model) {
+		zero := int32(0)
+		config.ThinkingConfig = &genai.ThinkingConfig{ThinkingBudget: &zero}
 	}
 	if len(request.Stop) > 0 {
 		config.StopSequences = []string(request.Stop)

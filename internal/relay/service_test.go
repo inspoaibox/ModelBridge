@@ -1054,6 +1054,23 @@ func TestProbeModelUsesMinimalProviderCompatibleRequestWithoutBilling(t *testing
 	}
 }
 
+func TestMinimalProbeRequestDisablesSupportedReasoningModes(t *testing.T) {
+	openAI := minimalProbeRequest(ProviderOpenAI, "gpt-5.6", "gpt-5.6")
+	if openAI.ReasoningEffort != "none" || openAI.MaxCompletionTokens == nil || *openAI.MaxCompletionTokens != 1 {
+		t.Fatalf("OpenAI reasoning probe was not minimized: %#v", openAI)
+	}
+
+	gemini := minimalProbeRequest(ProviderGemini, "gemini-2.5-flash", "gemini-2.5-flash")
+	if gemini.ReasoningEffort != "none" || gemini.MaxCompletionTokens == nil || *gemini.MaxCompletionTokens != 1 {
+		t.Fatalf("Gemini thinking probe was not minimized: %#v", gemini)
+	}
+
+	regular := minimalProbeRequest(ProviderOpenAI, "gpt-4o-mini", "gpt-4o-mini")
+	if regular.ReasoningEffort != "" {
+		t.Fatalf("regular model should not receive reasoning_effort: %#v", regular)
+	}
+}
+
 func TestProbeModelSkipsUnsupportedMediaModel(t *testing.T) {
 	provider := &recordingProvider{}
 	service, err := NewService(

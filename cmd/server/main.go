@@ -316,8 +316,11 @@ func runModelMonitorProber(
 	monitors groups.ModelMonitorService,
 	prober relay.ModelProbeService,
 ) {
+	const (
+		workerCount  = 4
+		pollInterval = 5 * time.Second
+	)
 	run := func() {
-		const workerCount = 4
 		jobs := make(chan *groups.ModelMonitor)
 		var workers sync.WaitGroup
 		workers.Add(workerCount)
@@ -358,7 +361,7 @@ func runModelMonitorProber(
 	}
 
 	run()
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
 		select {

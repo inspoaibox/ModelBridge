@@ -90,6 +90,7 @@ type ModelMonitor struct {
 	Enabled              bool       `json:"enabled"`
 	ModelNames           []string   `json:"model_names"`
 	AvailableModels      []string   `json:"available_models"`
+	NextProbeAt          *time.Time `json:"next_probe_at,omitempty"`
 	LastProbeStartedAt   *time.Time `json:"last_probe_started_at,omitempty"`
 	LastProbeFinishedAt  *time.Time `json:"last_probe_finished_at,omitempty"`
 	LastProbeStatus      string     `json:"last_probe_status"`

@@ -19,7 +19,7 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		       mmc.selection_mode, mmc.mode, mmc.probe_interval_seconds,
 		       mmc.recent_request_limit,
 		       pm.model_name,
-		       mmc.enabled, mmc.last_probe_started_at, mmc.last_probe_finished_at,
+		       mmc.enabled, mmc.next_probe_at, mmc.last_probe_started_at, mmc.last_probe_finished_at,
 		       mmc.last_probe_status, mmc.last_probe_error,
 		       mmc.created_at, mmc.updated_at,
 		       COALESCE((
@@ -51,17 +51,17 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 	result := make([]ModelMonitor, 0)
 	for rows.Next() {
 		var (
-			item                        ModelMonitor
-			lastStarted, lastFinished   sql.NullTime
-			primaryModel                sql.NullString
-			modelNamesRaw, availableRaw []byte
+			item                                 ModelMonitor
+			nextProbe, lastStarted, lastFinished sql.NullTime
+			primaryModel                         sql.NullString
+			modelNamesRaw, availableRaw          []byte
 		)
 		if err := rows.Scan(
 			&item.ID, &item.GroupID, &item.GroupCode, &item.GroupName, &item.Name,
 			&item.SelectionMode, &item.Mode, &item.ProbeIntervalSeconds,
 			&item.RecentRequestLimit,
 			&primaryModel,
-			&item.Enabled, &lastStarted, &lastFinished, &item.LastProbeStatus,
+			&item.Enabled, &nextProbe, &lastStarted, &lastFinished, &item.LastProbeStatus,
 			&item.LastProbeError, &item.CreatedAt, &item.UpdatedAt,
 			&modelNamesRaw, &availableRaw,
 		); err != nil {
@@ -78,6 +78,10 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		}
 		if item.SelectionMode == MonitorSelectionAll {
 			item.ModelNames = append([]string(nil), item.AvailableModels...)
+		}
+		if nextProbe.Valid {
+			value := nextProbe.Time.UTC()
+			item.NextProbeAt = &value
 		}
 		if lastStarted.Valid {
 			value := lastStarted.Time.UTC()
@@ -160,9 +164,10 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO model_monitor_configs (
 				id, group_id, name, selection_mode, mode, probe_interval_seconds,
-				recent_request_limit, enabled, created_by, updated_by
+				recent_request_limit, enabled, next_probe_at, created_by, updated_by
 			) VALUES (
 				$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8,
+				CASE WHEN $5 = 'active' AND $8::boolean THEN now() ELSE NULL END,
 				NULLIF($9, '')::uuid, NULLIF($9, '')::uuid
 			)
 		`, monitorIDValue, request.GroupID, request.Name, request.SelectionMode,
@@ -205,6 +210,7 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 			    probe_interval_seconds = $6,
 			    recent_request_limit = $7,
 			    enabled = $8,
+			    next_probe_at = CASE WHEN $5 = 'active' AND $8::boolean THEN now() ELSE NULL END,
 			    primary_model_id = NULL,
 			    probe_started_at = NULL,
 			    last_probe_started_at = NULL,
@@ -381,12 +387,11 @@ func (s *SQLService) ClaimDueActiveModelMonitor(ctx context.Context) (*ModelMoni
 		WHERE mmc.enabled = true
 		  AND mmc.mode = 'active'
 		  AND (
-		      (mmc.probe_started_at IS NULL AND mmc.last_probe_finished_at IS NULL)
-		      OR (mmc.probe_started_at IS NULL AND mmc.last_probe_finished_at +
-		          make_interval(secs => mmc.probe_interval_seconds) <= now())
+		      (mmc.probe_started_at IS NULL AND mmc.next_probe_at IS NULL)
+		      OR (mmc.probe_started_at IS NULL AND mmc.next_probe_at <= now())
 		      OR mmc.probe_started_at < now() - interval '10 minutes'
 		  )
-		ORDER BY COALESCE(mmc.last_probe_finished_at, '-infinity'::timestamptz), mmc.id
+		ORDER BY COALESCE(mmc.next_probe_at, '-infinity'::timestamptz), mmc.id
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
 	`).Scan(&monitorID)
@@ -400,6 +405,7 @@ func (s *SQLService) ClaimDueActiveModelMonitor(ctx context.Context) (*ModelMoni
 		UPDATE model_monitor_configs
 		SET probe_started_at = now(),
 		    last_probe_started_at = now(),
+		    next_probe_at = NULL,
 		    last_probe_status = '',
 		    last_probe_error = '',
 		    updated_at = now()
@@ -461,6 +467,7 @@ func (s *SQLService) ClaimActiveModelMonitor(ctx context.Context, monitorID stri
 		UPDATE model_monitor_configs
 		SET probe_started_at = now(),
 		    last_probe_started_at = now(),
+		    next_probe_at = NULL,
 		    last_probe_status = '',
 		    last_probe_error = '',
 		    updated_at = now()
@@ -494,6 +501,14 @@ func (s *SQLService) CompleteActiveModelMonitor(ctx context.Context, monitorID, 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE model_monitor_configs
 		SET probe_started_at = NULL,
+		    next_probe_at = CASE
+		        WHEN enabled AND mode = 'active' THEN
+		            now() + make_interval(
+		                secs => probe_interval_seconds
+		                    + floor(random() * GREATEST(1, probe_interval_seconds / 10))::int
+		            )
+		        ELSE NULL
+		    END,
 		    last_probe_finished_at = now(),
 		    last_probe_status = $2,
 		    last_probe_error = $3,
