@@ -519,7 +519,7 @@ function GroupStatusCard({ group, language, t }: { group: ModelStatusReport["gro
           <span>{t("adminModelMonitorRecentRequests")} {group.recent_request_limit || 60}</span>
           <span>{group.rpm_limit ? `RPM ${group.rpm_limit}` : "RPM -"}</span>
         </div>
-        {group.monitor_mode === "active" ? <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">{t("adminModelMonitorLastRun")}: {isProbeRunning(group) ? t("adminModelMonitorRunning") : formatTime(group.last_probe_finished_at, language)} · {isProbeRunning(group) ? t("adminModelMonitorRunning") : probeStatusLabel(group.last_probe_status, t)}</div> : null}
+        {group.monitor_mode === "active" ? <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 dark:text-slate-500"><span>{t("adminModelMonitorLastRun")}: {isProbeRunning(group) ? t("adminModelMonitorRunning") : formatTime(group.last_probe_finished_at, language)}</span><span>{isProbeRunning(group) ? t("adminModelMonitorRunning") : probeStatusLabel(group.last_probe_status, t)}</span><span>{t("adminModelStatusProbeNote")}</span></div> : null}
       </div>
       <div className="text-xs text-slate-500 dark:text-slate-400">{group.group_status === "active" ? t("adminModelStatusGroupActive") : t("adminModelStatusGroupDisabled")}</div>
     </div>
@@ -528,7 +528,8 @@ function GroupStatusCard({ group, language, t }: { group: ModelStatusReport["gro
 }
 
 function ModelStatusRow({ model, language, t }: { model: ModelStatus; language: Language; t: (key: TranslationKey) => string }) {
-  return <tr className="align-top"><td className="px-4 py-3"><div className="font-semibold text-slate-900 dark:text-white">{model.model}</div><div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{model.provider}</div></td><td className="px-4 py-3"><StatusBadge status={model.status} t={t} /><div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">{model.consecutive_failures} {t("adminModelStatusConsecutiveFailures")}</div></td><td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300"><div>{model.available_routes} / {model.total_routes}</div><div className="mt-2 h-1.5 w-24 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"><div className={cn("h-full rounded-full", model.available_routes === 0 ? "bg-rose-500" : model.available_routes < model.total_routes ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${model.total_routes > 0 ? Math.min(100, model.available_routes / model.total_routes * 100) : 0}%` }} /></div></td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700 dark:text-slate-300">{model.last_latency_ms > 0 ? `${model.last_latency_ms} ms` : "-"}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700 dark:text-slate-300">{model.request_count_7d > 0 ? `${model.availability_7d.toFixed(2)}%` : t("adminModelStatusNoData")}</td><td className="px-4 py-3"><RequestStrip statuses={model.recent_statuses || []} t={t} /></td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500 dark:text-slate-400"><div>{statusLabel(model.last_request_status, t)}</div><div className="mt-1">{formatTime(model.last_request_at, language)}</div>{model.last_failure_reason ? <div className="mt-1 max-w-[220px] truncate text-rose-600 dark:text-rose-300" title={model.last_failure_reason}>{model.last_failure_reason}</div> : null}</td></tr>;
+  const observationAt = latestHealthObservationAt(model);
+  return <tr className="align-top"><td className="px-4 py-3"><div className="font-semibold text-slate-900 dark:text-white">{model.model}</div><div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{model.provider}</div></td><td className="px-4 py-3"><StatusBadge status={model.status} t={t} /><div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">{model.consecutive_failures} {t("adminModelStatusConsecutiveFailures")}</div>{observationAt ? <div className="mt-1 whitespace-nowrap text-[10px] text-slate-400 dark:text-slate-500">{t("adminModelStatusLastObservation")}: {formatTime(observationAt, language)}</div> : null}</td><td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300"><div>{model.available_routes} / {model.total_routes}</div><div className="mt-2 h-1.5 w-24 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"><div className={cn("h-full rounded-full", model.available_routes === 0 ? "bg-rose-500" : model.available_routes < model.total_routes ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${model.total_routes > 0 ? Math.min(100, model.available_routes / model.total_routes * 100) : 0}%` }} /></div></td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700 dark:text-slate-300">{model.last_latency_ms > 0 ? `${model.last_latency_ms} ms` : "-"}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700 dark:text-slate-300">{model.request_count_7d > 0 ? `${model.availability_7d.toFixed(2)}%` : t("adminModelStatusNoData")}</td><td className="px-4 py-3"><RequestStrip statuses={model.recent_statuses || []} t={t} /></td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500 dark:text-slate-400"><div>{statusLabel(model.last_request_status, t)}</div><div className="mt-1">{formatTime(model.last_request_at, language)}</div>{model.last_failure_reason ? <div className="mt-1 max-w-[220px] truncate text-rose-600 dark:text-rose-300" title={model.last_failure_reason}>{model.last_failure_reason}</div> : null}</td></tr>;
 }
 
 function RequestStrip({ statuses, t }: { statuses: string[]; t: (key: TranslationKey) => string }) {
@@ -559,6 +560,15 @@ function statusLabel(status: string | undefined, t: (key: TranslationKey) => str
   if (status === "settlement_pending") return t("adminModelStatusRequestPending");
   if (status) return status;
   return t("adminModelStatusNoData");
+}
+
+function latestHealthObservationAt(model: ModelStatus) {
+  const successAt = model.last_success_at ? new Date(model.last_success_at) : null;
+  const failureAt = model.last_failure_at ? new Date(model.last_failure_at) : null;
+  const successTime = successAt && Number.isFinite(successAt.getTime()) ? successAt.getTime() : 0;
+  const failureTime = failureAt && Number.isFinite(failureAt.getTime()) ? failureAt.getTime() : 0;
+  if (!successTime && !failureTime) return undefined;
+  return new Date(Math.max(successTime, failureTime)).toISOString();
 }
 
 function probeStatusLabel(status: string | undefined, t: (key: TranslationKey) => string) {
