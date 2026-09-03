@@ -1,8 +1,6 @@
-import { useState } from "react";
 import {
   Activity,
   CheckCircle2,
-  ChevronDown,
   CircleAlert,
   CircleOff,
   Clock3,
@@ -117,11 +115,7 @@ function EmptyState({ icon: Icon, label, spinning = false }: { icon: typeof Acti
 }
 
 function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; language: Language; t: (key: TranslationKey) => string }) {
-  const [hovering, setHovering] = useState(false);
-  const [pinned, setPinned] = useState(false);
   const primary = group.models.find((model) => model.model === group.primary_model) ?? group.models[0];
-  const secondary = primary ? group.models.filter((model) => model !== primary) : group.models;
-  const showDetails = Boolean(primary && (hovering || pinned));
 
   if (!primary) {
     return (
@@ -133,41 +127,14 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
   }
 
   return (
-    <section
-      className="relative"
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
-      onFocus={() => setHovering(true)}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHovering(false);
-      }}
-    >
+    <section>
       <Card className="h-full overflow-hidden border-slate-200/90 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
         <CardContent className="p-0">
-          <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 dark:border-slate-800/80 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div className="border-b border-slate-100 px-4 py-3.5 dark:border-slate-800/80 sm:px-5">
             <GroupHeading group={group} t={t} />
-            <div className="flex items-center gap-2 self-start sm:self-center">
-              <span className="text-xs text-slate-500 dark:text-slate-400">
-                {t("consoleModelStatusModels")} {group.models.length}
-              </span>
-              {secondary.length > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  aria-expanded={showDetails}
-                  onClick={() => setPinned((current) => !current)}
-                  className="gap-1.5"
-                >
-                  <Layers3 className="h-3.5 w-3.5" />
-                  {t("consoleModelStatusFallbackModels")} {secondary.length}
-                  <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showDetails ? "rotate-180" : "")} />
-                </Button>
-              ) : null}
-            </div>
           </div>
 
-          <div className="grid gap-px bg-slate-100 dark:bg-slate-800 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-px bg-slate-100 dark:bg-slate-800">
             <MetricCell icon={Gauge} label={t("consoleModelStatusLatency")} value={primary.last_latency_ms > 0 ? formatLatency(primary.last_latency_ms) : "-"} />
             <MetricCell icon={Server} label={t("consoleModelStatusRoutes")} value={`${primary.available_routes} / ${primary.total_routes}`} />
             <MetricCell
@@ -183,7 +150,7 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
             />
           </div>
 
-          <div className="px-4 pb-5 pt-4 sm:px-5">
+          <div className="px-4 py-3.5 sm:px-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold uppercase", providerLabel(primary.provider).tone)}>
@@ -198,7 +165,7 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
               <StatusBadge status={group.status} t={t} />
             </div>
 
-            <div className="mt-4">
+            <div className="mt-3">
               <div className="mb-2 flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
                 <span>{t("consoleModelStatusRecentRequests")} {group.recent_request_limit || 60}</span>
                 <span>{primary.recent_statuses?.length ? `${primary.recent_statuses.length} ${t("consoleModelStatusRecorded")}` : t("consoleModelStatusNoData")}</span>
@@ -209,10 +176,8 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
                 <span>{primary.last_request_at ? formatTime(primary.last_request_at, language) : t("consoleModelStatusNow")}</span>
               </div>
             </div>
-            {primary.last_failure_reason ? <p className="mt-3 truncate text-xs text-rose-600 dark:text-rose-300" title={primary.last_failure_reason}>{primary.last_failure_reason}</p> : null}
+            {primary.last_failure_reason ? <p className="mt-2 truncate text-xs text-rose-600 dark:text-rose-300" title={primary.last_failure_reason}>{primary.last_failure_reason}</p> : null}
           </div>
-
-          {showDetails ? <FallbackModels models={secondary} t={t} /> : null}
         </CardContent>
       </Card>
     </section>
@@ -236,28 +201,6 @@ function GroupHeading({ group, t }: { group: ModelStatusGroup; t: (key: Translat
   );
 }
 
-function FallbackModels({ models, t }: { models: ModelStatus[]; t: (key: TranslationKey) => string }) {
-  return (
-    <div className="border-t border-slate-100 bg-slate-50/80 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/45 sm:px-5">
-      <div className="mb-3 text-xs font-semibold text-slate-700 dark:text-slate-300">{t("consoleModelStatusFallbackDetails")}</div>
-      <div className="grid gap-2 md:grid-cols-2">
-        {models.map((model) => (
-          <div key={`${model.provider}:${model.model}`} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900/70">
-            <div className="min-w-0">
-              <div className="truncate font-mono text-xs font-semibold text-slate-800 dark:text-slate-200" title={model.model}>{model.model}</div>
-              <div className="mt-1 truncate text-[10px] text-slate-500 dark:text-slate-400">{model.provider} · {model.available_routes}/{model.total_routes} {t("consoleModelStatusRoutesShort")}</div>
-            </div>
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <StatusBadge status={model.status} t={t} />
-              <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">{model.last_latency_ms > 0 ? formatLatency(model.last_latency_ms) : "-"}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function MetricCell({
   icon: Icon,
   label,
@@ -270,16 +213,16 @@ function MetricCell({
   valueClassName?: string;
 }) {
   return (
-    <div className="min-w-0 bg-white px-4 py-3 dark:bg-slate-900/70 sm:px-5">
-      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400"><Icon className="h-3.5 w-3.5" />{label}</div>
+    <div className="min-w-0 bg-white px-3 py-2.5 dark:bg-slate-900/70 sm:px-4">
+      <div className="flex min-h-8 items-start gap-1.5 text-[11px] leading-4 text-slate-500 dark:text-slate-400"><Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{label}</span></div>
       <div className={cn("mt-1 truncate font-mono text-sm font-semibold tabular-nums text-slate-900 dark:text-white", valueClassName)}>{value}</div>
     </div>
   );
 }
 
 function RequestHistory({ statuses, t }: { statuses: string[]; t: (key: TranslationKey) => string }) {
-  if (statuses.length === 0) return <div className="mt-3 flex h-10 items-center justify-center rounded-md border border-dashed border-slate-200 text-xs text-slate-400 dark:border-slate-800 dark:text-slate-500">{t("consoleModelStatusNoData")}</div>;
-  return <div className="mt-3 grid h-10 grid-flow-col auto-cols-fr items-end gap-0.5" title={t("consoleModelStatusRecentRequestsHint")}>{statuses.map((status, index) => <span key={`${status}:${index}`} className={cn("min-w-0 rounded-sm", requestStatusTone(status), requestStatusHeight(status, index))} title={status} />)}</div>;
+  if (statuses.length === 0) return <div className="mt-2 flex h-8 items-center justify-center rounded-md border border-dashed border-slate-200 text-xs text-slate-400 dark:border-slate-800 dark:text-slate-500">{t("consoleModelStatusNoData")}</div>;
+  return <div className="mt-2 grid h-8 grid-flow-col auto-cols-fr items-end gap-0.5" title={t("consoleModelStatusRecentRequestsHint")}>{statuses.map((status, index) => <span key={`${status}:${index}`} className={cn("min-w-0 rounded-sm", requestStatusTone(status), requestStatusHeight(status, index))} title={status} />)}</div>;
 }
 
 function requestStatusTone(status: string) {
