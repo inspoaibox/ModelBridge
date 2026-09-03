@@ -354,6 +354,7 @@ function defaultModelMonitorForm(): ModelMonitorFormState {
     name: "",
     selection_mode: "all",
     model_names: [],
+    primary_model: "",
     mode: "passive",
     probe_interval_seconds: 300,
     recent_request_limit: 60,
@@ -368,6 +369,7 @@ function modelMonitorFormFromItem(item: ModelMonitor): ModelMonitorFormState {
     name: item.name,
     selection_mode: item.selection_mode,
     model_names: item.selection_mode === "all" ? [] : [...item.model_names],
+    primary_model: item.primary_model || "",
     mode: item.mode,
     probe_interval_seconds: item.probe_interval_seconds,
     recent_request_limit: item.recent_request_limit || 60,
@@ -2889,6 +2891,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       ...defaultModelMonitorForm(),
       group_id: firstGroup?.id || "",
       name: firstGroup ? `${firstGroup.name} ${t("adminModelMonitorDefaultName")}` : "",
+      primary_model: firstGroup?.models[0] || "",
     });
     setAdminModelMonitorFormOpen(true);
     setAdminModelMonitorsMessage({ kind: "", text: "" });
@@ -2928,6 +2931,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             name: form.name.trim(),
             selection_mode: form.selection_mode,
             model_names: form.selection_mode === "all" ? [] : form.model_names,
+            primary_model: form.primary_model.trim(),
             mode: form.mode,
             probe_interval_seconds: Math.max(60, Number(form.probe_interval_seconds) || 300),
             recent_request_limit: [30, 60, 120].includes(Number(form.recent_request_limit)) ? Number(form.recent_request_limit) : 60,

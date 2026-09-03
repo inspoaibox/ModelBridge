@@ -84,6 +84,7 @@ type ModelMonitor struct {
 	Name                 string     `json:"name"`
 	SelectionMode        string     `json:"selection_mode"`
 	Mode                 string     `json:"mode"`
+	PrimaryModel         string     `json:"primary_model"`
 	ProbeIntervalSeconds int        `json:"probe_interval_seconds"`
 	RecentRequestLimit   int        `json:"recent_request_limit"`
 	Enabled              bool       `json:"enabled"`
@@ -103,6 +104,7 @@ type ModelMonitorMutation struct {
 	SelectionMode        string   `json:"selection_mode"`
 	ModelNames           []string `json:"model_names"`
 	Mode                 string   `json:"mode"`
+	PrimaryModel         string   `json:"primary_model"`
 	ProbeIntervalSeconds int      `json:"probe_interval_seconds"`
 	RecentRequestLimit   int      `json:"recent_request_limit"`
 	Enabled              bool     `json:"enabled"`
@@ -248,6 +250,7 @@ func (m ModelMonitorMutation) validate() (ModelMonitorMutation, error) {
 	m.Name = strings.TrimSpace(m.Name)
 	m.SelectionMode = strings.ToLower(strings.TrimSpace(m.SelectionMode))
 	m.Mode = strings.ToLower(strings.TrimSpace(m.Mode))
+	m.PrimaryModel = strings.TrimSpace(m.PrimaryModel)
 	m.ModelNames = cleanModelNames(m.ModelNames)
 	if m.SelectionMode == "" {
 		m.SelectionMode = MonitorSelectionAll
@@ -262,6 +265,9 @@ func (m ModelMonitorMutation) validate() (ModelMonitorMutation, error) {
 		m.RecentRequestLimit = 60
 	}
 	if m.GroupID == "" || !ids.Valid(m.GroupID) || m.Name == "" || len(m.Name) > 128 {
+		return ModelMonitorMutation{}, ErrInvalidRequest
+	}
+	if len(m.PrimaryModel) > 256 {
 		return ModelMonitorMutation{}, ErrInvalidRequest
 	}
 	if m.SelectionMode != MonitorSelectionAll && m.SelectionMode != MonitorSelectionSelected {

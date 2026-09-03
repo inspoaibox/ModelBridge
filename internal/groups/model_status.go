@@ -46,6 +46,7 @@ type ModelStatusGroup struct {
 	MonitorName          string        `json:"monitor_name,omitempty"`
 	MonitorMode          string        `json:"monitor_mode,omitempty"`
 	SelectionMode        string        `json:"selection_mode,omitempty"`
+	PrimaryModel         string        `json:"primary_model,omitempty"`
 	ProbeIntervalSeconds int           `json:"probe_interval_seconds,omitempty"`
 	RecentRequestLimit   int           `json:"recent_request_limit"`
 	LastProbeStartedAt   *time.Time    `json:"last_probe_started_at,omitempty"`
@@ -106,6 +107,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		           rg.metering_mode,
 		           rg.priority,
 		           rg.updated_at,
+		           pm.model_name AS primary_model,
 		           m.id AS model_id,
 		           m.model_name,
 		           m.provider,
@@ -113,6 +115,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		    FROM model_monitor_configs mmc
 		    JOIN routing_groups rg ON rg.id = mmc.group_id
 		      AND rg.deleted_at IS NULL
+		    LEFT JOIN models pm ON pm.id = mmc.primary_model_id
 		    JOIN models m ON true
 		    WHERE mmc.enabled = true
 		      AND (rg.status = 'active' OR EXISTS (
@@ -152,6 +155,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		SELECT mm.group_id::text, mm.code, mm.name, mm.status,
 		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.metering_mode, mm.updated_at,
 		       mm.recent_request_limit,
+		       mm.primary_model,
 		       mm.model_id::text, mm.model_name, mm.provider,
 		       COUNT(cm.model_id)::int,
 		       COUNT(cm.model_id) FILTER (WHERE mm.model_status = 'active'
@@ -210,7 +214,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		  AND cm.model_id = mm.model_id
 		GROUP BY mm.group_id, mm.code, mm.name, mm.status, mm.multiplier,
 		         mm.rpm_limit, mm.billing_type, mm.metering_mode, mm.priority,
-		         mm.updated_at, mm.recent_request_limit, mm.model_id,
+		         mm.updated_at, mm.recent_request_limit, mm.primary_model, mm.model_id,
 		         mm.model_name, mm.provider, mm.model_status
 		ORDER BY mm.priority DESC, mm.code ASC, mm.provider ASC, mm.model_name ASC
 		`, tenantID)
@@ -235,12 +239,13 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 			lastSuccess, lastFailure, lastRequestAt                      sql.NullTime
 			lastLatency                                                  sql.NullInt64
 			lastRequestStatus, lastFailureReason                         sql.NullString
+			primaryModel                                                 sql.NullString
 			recentStatusesRaw                                            []byte
 		)
 		if err := rows.Scan(
 			&group.ID, &group.Code, &group.Name, &groupStatus,
 			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.MeteringMode, &group.UpdatedAt,
-			&group.RecentRequestLimit, &modelID, &modelName, &provider,
+			&group.RecentRequestLimit, &primaryModel, &modelID, &modelName, &provider,
 			&totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
 			&failures, &lastSuccess, &lastFailure, &requestCount7d, &successfulCount7d,
 			&recentStatusesRaw, &lastLatency, &lastRequestStatus, &lastRequestAt, &lastFailureReason,
@@ -248,6 +253,9 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 			return ModelStatusReport{}, err
 		}
 		group.GroupStatus = strings.ToLower(strings.TrimSpace(groupStatus))
+		if primaryModel.Valid {
+			group.PrimaryModel = strings.TrimSpace(primaryModel.String)
+		}
 		if existing, ok := byID[group.ID]; ok {
 			group = groups[existing.index]
 		} else {
@@ -386,10 +394,12 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			       mmc.last_probe_status, mmc.last_probe_error,
 			       rg.id AS group_id, rg.code, rg.name, rg.status,
 			       rg.multiplier, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.updated_at,
+			       pm.model_name AS primary_model,
 			       m.id AS model_id, m.model_name, m.provider, m.status AS model_status
 			FROM model_monitor_configs mmc
 			JOIN routing_groups rg ON rg.id = mmc.group_id
 			  AND rg.deleted_at IS NULL
+			LEFT JOIN models pm ON pm.id = mmc.primary_model_id
 			JOIN models m ON true
 			WHERE mmc.enabled = true
 			  AND (
@@ -416,7 +426,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		       mm.last_probe_finished_at, mm.last_probe_status, mm.last_probe_error,
 		       mm.group_id::text, mm.code, mm.name, mm.status,
 		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.updated_at,
-		       mm.model_name, mm.provider,
+		       mm.primary_model, mm.model_name, mm.provider,
 		       COUNT(cm.model_id)::int,
 		       COUNT(cm.model_id) FILTER (WHERE mm.model_status = 'active'
 		           AND cm.enabled = true
@@ -477,7 +487,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		         mm.last_probe_finished_at, mm.last_probe_status,
 		         mm.last_probe_error, mm.group_id, mm.code, mm.name,
 		         mm.status, mm.multiplier, mm.rpm_limit, mm.billing_type, mm.metering_mode,
-		         mm.updated_at, mm.model_id, mm.model_name, mm.provider, mm.model_status
+		         mm.updated_at, mm.primary_model, mm.model_id, mm.model_name, mm.provider, mm.model_status
 		ORDER BY mm.code ASC, mm.provider ASC, mm.model_name ASC
 	`)
 	if err != nil {
@@ -496,6 +506,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			lastProbeStarted, lastProbeFinished                          sql.NullTime
 			groupStatus                                                  string
 			modelName, provider                                          sql.NullString
+			primaryModel                                                 sql.NullString
 			totalRoutes, availableRoutes, degradedRoutes, observedRoutes int
 			failures, requestCount7d, successfulCount7d                  int
 			lastSuccess, lastFailure, lastRequestAt                      sql.NullTime
@@ -509,7 +520,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			&lastProbeStatus, &lastProbeError,
 			&group.ID, &group.Code, &group.Name, &groupStatus,
 			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.MeteringMode, &group.UpdatedAt,
-			&modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
+			&primaryModel, &modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
 			&failures, &lastSuccess, &lastFailure, &requestCount7d,
 			&successfulCount7d, &recentStatusesRaw, &lastLatency,
 			&lastRequestStatus, &lastRequestAt, &lastFailureReason,
@@ -533,6 +544,9 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			group.LastProbeFinishedAt = &value
 		}
 		group.GroupStatus = strings.ToLower(strings.TrimSpace(groupStatus))
+		if primaryModel.Valid {
+			group.PrimaryModel = strings.TrimSpace(primaryModel.String)
+		}
 		index, ok := byID[group.ID]
 		if !ok {
 			group.Models = make([]ModelStatus, 0)

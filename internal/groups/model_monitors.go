@@ -18,6 +18,7 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		SELECT mmc.id::text, mmc.group_id::text, rg.code, rg.name, mmc.name,
 		       mmc.selection_mode, mmc.mode, mmc.probe_interval_seconds,
 		       mmc.recent_request_limit,
+		       pm.model_name,
 		       mmc.enabled, mmc.last_probe_started_at, mmc.last_probe_finished_at,
 		       mmc.last_probe_status, mmc.last_probe_error,
 		       mmc.created_at, mmc.updated_at,
@@ -39,6 +40,7 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		       ), '[]'::jsonb)
 		FROM model_monitor_configs mmc
 		JOIN routing_groups rg ON rg.id = mmc.group_id AND rg.deleted_at IS NULL
+		LEFT JOIN models pm ON pm.id = mmc.primary_model_id
 		ORDER BY mmc.updated_at DESC, mmc.id ASC
 	`)
 	if err != nil {
@@ -51,12 +53,14 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		var (
 			item                        ModelMonitor
 			lastStarted, lastFinished   sql.NullTime
+			primaryModel                sql.NullString
 			modelNamesRaw, availableRaw []byte
 		)
 		if err := rows.Scan(
 			&item.ID, &item.GroupID, &item.GroupCode, &item.GroupName, &item.Name,
 			&item.SelectionMode, &item.Mode, &item.ProbeIntervalSeconds,
 			&item.RecentRequestLimit,
+			&primaryModel,
 			&item.Enabled, &lastStarted, &lastFinished, &item.LastProbeStatus,
 			&item.LastProbeError, &item.CreatedAt, &item.UpdatedAt,
 			&modelNamesRaw, &availableRaw,
@@ -68,6 +72,9 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		}
 		if err := json.Unmarshal(availableRaw, &item.AvailableModels); err != nil {
 			return nil, err
+		}
+		if primaryModel.Valid {
+			item.PrimaryModel = strings.TrimSpace(primaryModel.String)
 		}
 		if item.SelectionMode == MonitorSelectionAll {
 			item.ModelNames = append([]string(nil), item.AvailableModels...)
@@ -198,6 +205,7 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 			    probe_interval_seconds = $6,
 			    recent_request_limit = $7,
 			    enabled = $8,
+			    primary_model_id = NULL,
 			    probe_started_at = NULL,
 			    last_probe_started_at = NULL,
 			    last_probe_finished_at = NULL,
@@ -258,6 +266,68 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 	} else if _, err := tx.ExecContext(ctx, `
 		DELETE FROM model_monitor_config_models WHERE config_id = $1::uuid
 	`, monitorIDValue); err != nil {
+		return ModelMonitor{}, err
+	}
+
+	// Resolve the configured primary model only after selected mappings have
+	// been reconciled. This keeps the primary model inside the monitor's
+	// actual scope and clears stale values when a model is removed.
+	primaryModelID := ""
+	if request.SelectionMode == MonitorSelectionSelected {
+		err = tx.QueryRowContext(ctx, `
+			SELECT m.id::text
+			FROM model_monitor_config_models cmm
+			JOIN models m ON m.id = cmm.model_id
+			WHERE cmm.config_id = $1::uuid
+			  AND m.model_name = $2
+			ORDER BY m.model_name ASC, m.id ASC
+			LIMIT 1
+		`, monitorIDValue, request.PrimaryModel).Scan(&primaryModelID)
+		if request.PrimaryModel != "" && errors.Is(err, sql.ErrNoRows) {
+			return ModelMonitor{}, ErrInvalidRequest
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return ModelMonitor{}, err
+		}
+		if request.PrimaryModel == "" {
+			primaryModelID = ""
+			_ = tx.QueryRowContext(ctx, `
+				SELECT m.id::text
+				FROM model_monitor_config_models cmm
+				JOIN models m ON m.id = cmm.model_id
+				WHERE cmm.config_id = $1::uuid
+				ORDER BY m.model_name ASC, m.id ASC
+				LIMIT 1
+			`, monitorIDValue).Scan(&primaryModelID)
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			SELECT m.id::text
+			FROM routing_group_channels rgc
+			JOIN channels c ON c.id = rgc.channel_id
+			  AND c.deleted_at IS NULL
+			JOIN channel_models cm ON cm.channel_id = c.id
+			  AND cm.enabled = true
+			JOIN models m ON m.id = cm.model_id
+			  AND m.status = 'active'
+			WHERE rgc.group_id = $1::uuid
+			  AND ($2 = '' OR m.model_name = $2)
+			ORDER BY m.model_name ASC, m.id ASC
+			LIMIT 1
+		`, request.GroupID, request.PrimaryModel).Scan(&primaryModelID)
+		if request.PrimaryModel != "" && errors.Is(err, sql.ErrNoRows) {
+			return ModelMonitor{}, ErrInvalidRequest
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return ModelMonitor{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE model_monitor_configs
+		SET primary_model_id = NULLIF($2, '')::uuid,
+		    updated_at = now()
+		WHERE id = $1::uuid
+	`, monitorIDValue, primaryModelID); err != nil {
 		return ModelMonitor{}, err
 	}
 	if err := tx.Commit(); err != nil {

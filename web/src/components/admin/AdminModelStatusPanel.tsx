@@ -289,6 +289,7 @@ function MonitorConfigRow({
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
             <span>{t("adminModelMonitorGroup")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.group_name}</strong> <code className="font-mono">({monitor.group_code})</code></span>
             <span>{t("adminModelMonitorModels")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.selection_mode === "all" ? t("adminModelMonitorAllModels") : `${monitor.model_names.length} ${t("adminModelMonitorSelectedUnit")}`}</strong></span>
+            <span>{t("adminModelMonitorPrimaryModel")}: <strong className="font-mono text-slate-700 dark:text-slate-300">{monitor.primary_model || "-"}</strong></span>
             <span>{t("adminModelMonitorRecentRequests")}: <strong className="text-slate-700 dark:text-slate-300">{monitor.recent_request_limit || 60}</strong></span>
             {monitor.mode === "active" ? <span>{t("adminModelMonitorInterval")}: <strong className="text-slate-700 dark:text-slate-300">{Math.max(1, Math.round(monitor.probe_interval_seconds / 60))} {t("adminModelMonitorMinutes")}</strong></span> : null}
           </div>
@@ -337,31 +338,45 @@ function MonitorConfigModal({
   onSubmit: () => void;
 }) {
   const selectedGroup = groups.find((group) => group.id === form.group_id);
-  const availableModels = Array.from(new Set([...(selectedGroup?.models ?? []), ...form.model_names])).sort();
+  const availableModels = Array.from(new Set([...(selectedGroup?.models ?? []), ...form.model_names, form.primary_model].filter(Boolean))).sort();
 
   function setGroup(groupID: string) {
     const group = groups.find((item) => item.id === groupID);
+    const groupModels = group?.models ?? [];
+    const retainedModels = groupModels.filter((model) => form.model_names.includes(model));
+    const nextModels = form.selection_mode === "all" ? [] : retainedModels;
+    const nextPrimary = groupModels.includes(form.primary_model) ? form.primary_model : groupModels[0] || "";
     setForm((current) => ({
       ...current,
       group_id: groupID,
-      model_names: current.selection_mode === "all" ? [] : (group?.models ?? []).filter((model) => current.model_names.includes(model)),
+      model_names: nextModels,
+      primary_model: nextPrimary,
       name: current.name || (group ? `${group.name} ${t("adminModelMonitorDefaultName")}` : ""),
     }));
   }
 
   function setSelectionMode(mode: "all" | "selected") {
+    const nextModels = mode === "all" ? [] : [...availableModels];
+    const nextPrimary = nextModels.includes(form.primary_model) ? form.primary_model : nextModels[0] || "";
     setForm((current) => ({
       ...current,
       selection_mode: mode,
-      model_names: mode === "all" ? [] : [...availableModels],
+      model_names: nextModels,
+      primary_model: nextPrimary,
     }));
   }
 
   function toggleModel(model: string) {
-    setForm((current) => ({
-      ...current,
-      model_names: current.model_names.includes(model) ? current.model_names.filter((item) => item !== model) : [...current.model_names, model],
-    }));
+    setForm((current) => {
+      const modelNames = current.model_names.includes(model)
+        ? current.model_names.filter((item) => item !== model)
+        : [...current.model_names, model];
+      return {
+        ...current,
+        model_names: modelNames,
+        primary_model: modelNames.includes(current.primary_model) ? current.primary_model : modelNames[0] || "",
+      };
+    });
   }
 
   return (
@@ -413,6 +428,20 @@ function MonitorConfigModal({
                   })}
                 </div>
               ) : null}
+              <div className="space-y-2">
+                <Label htmlFor="model-monitor-primary-model">{t("adminModelMonitorPrimaryModel")}</Label>
+                <select
+                  id="model-monitor-primary-model"
+                  value={form.primary_model}
+                  onChange={(event) => setForm((current) => ({ ...current, primary_model: event.target.value }))}
+                  disabled={busy || availableModels.length === 0}
+                  className={cn(selectClass, "w-full")}
+                >
+                  <option value="">{t("adminModelMonitorPrimaryModelAuto")}</option>
+                  {availableModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                </select>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{t("adminModelMonitorPrimaryModelHint")}</p>
+              </div>
             </section>
 
             <div className="grid gap-4 sm:grid-cols-2">

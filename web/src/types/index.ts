@@ -377,6 +377,7 @@ export interface ModelStatusGroup {
   monitor_name?: string;
   monitor_mode?: "passive" | "active";
   selection_mode?: "all" | "selected";
+  primary_model?: string;
   probe_interval_seconds?: number;
   recent_request_limit: number;
   last_probe_started_at?: string;
@@ -403,6 +404,7 @@ export interface ModelMonitor {
   name: string;
   selection_mode: ModelMonitorSelectionMode;
   mode: ModelMonitorMode;
+  primary_model: string;
   probe_interval_seconds: number;
   recent_request_limit: number;
   enabled: boolean;
@@ -422,6 +424,7 @@ export interface ModelMonitorFormState {
   name: string;
   selection_mode: ModelMonitorSelectionMode;
   model_names: string[];
+  primary_model: string;
   mode: ModelMonitorMode;
   probe_interval_seconds: number;
   recent_request_limit: number;
