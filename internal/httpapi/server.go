@@ -299,13 +299,17 @@ func newHandler(
 			permissions = append(permissions, permission)
 		}
 		sort.Strings(permissions)
-		writeJSON(w, http.StatusOK, map[string]any{
+		response := map[string]any{
 			"id":          principal.ID,
 			"type":        principal.Type,
 			"audience":    principal.Audience,
 			"roles":       principal.Roles,
 			"permissions": permissions,
-		})
+		}
+		if adminEntryPath != "" {
+			response["admin_entry_path"] = adminEntryPath
+		}
+		writeJSON(w, http.StatusOK, response)
 	})))
 
 	mux.Handle("GET /admin/v1/profile", authMiddleware.Protect(
@@ -3189,7 +3193,7 @@ func consoleProfileResponse(principal *auth.Principal, profile users.Profile) ma
 		permissions = append(permissions, permission)
 	}
 	sort.Strings(permissions)
-	return map[string]any{
+	response := map[string]any{
 		"id":            profile.ID,
 		"type":          principal.Type,
 		"audience":      principal.Audience,
@@ -3204,6 +3208,12 @@ func consoleProfileResponse(principal *auth.Principal, profile users.Profile) ma
 		"project_roles": principal.ProjectRoles,
 		"project_ids":   projectIDs,
 	}
+	if principal.Audience == auth.AudienceAdmin {
+		if adminEntryPath := configuredAdminEntryPath(); adminEntryPath != "" {
+			response["admin_entry_path"] = adminEntryPath
+		}
+	}
+	return response
 }
 
 type consoleProfilePayload struct {

@@ -19,6 +19,7 @@ export interface Principal {
   tenant_id?: string;
   project_ids?: string[];
   project_roles?: Record<string, string>;
+  admin_entry_path?: string;
 }
 
 export interface UserSummary {
@@ -802,6 +803,7 @@ export interface ConsoleProfile {
   roles?: string[];
   project_ids?: string[];
   project_roles?: Record<string, string>;
+  admin_entry_path?: string;
 }
 
 export interface ProfileFormState {

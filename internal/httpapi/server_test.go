@@ -1868,6 +1868,7 @@ func TestFeatureSettingsValidationReturnsSpecificErrors(t *testing.T) {
 }
 
 func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
+	t.Setenv("ADMIN_ENTRY_PATH", "/admin-0123456789abcdef")
 	userService := &fakeProfileUserService{}
 	mfaService := &fakeMFASettingsService{}
 	resolver := testResolver{
@@ -1935,6 +1936,25 @@ func TestConsoleProfileRoutesAreAudienceBoundAndSelfService(t *testing.T) {
 	handler.ServeHTTP(meRec, meRequest)
 	if meRec.Code != http.StatusOK || !strings.Contains(meRec.Body.String(), `"permissions":["billing:read","token:create","token:read","usage:read"]`) {
 		t.Fatalf("console me response must include permissions, got %d: %s", meRec.Code, meRec.Body.String())
+	}
+	if strings.Contains(meRec.Body.String(), `"admin_entry_path"`) {
+		t.Fatalf("console me response must not expose the administrator entry path: %s", meRec.Body.String())
+	}
+
+	adminMeRequest := httptest.NewRequest(http.MethodGet, "/admin/v1/me", nil)
+	adminMeRequest.Header.Set("Authorization", "Bearer admin-user")
+	adminMeRec := httptest.NewRecorder()
+	handler.ServeHTTP(adminMeRec, adminMeRequest)
+	if adminMeRec.Code != http.StatusOK || !strings.Contains(adminMeRec.Body.String(), `"admin_entry_path":"/admin-0123456789abcdef"`) {
+		t.Fatalf("admin me response must return the configured administrator entry path, got %d: %s", adminMeRec.Code, adminMeRec.Body.String())
+	}
+
+	adminProfileRequest := httptest.NewRequest(http.MethodGet, "/admin/v1/profile", nil)
+	adminProfileRequest.Header.Set("Authorization", "Bearer admin-user")
+	adminProfileRec := httptest.NewRecorder()
+	handler.ServeHTTP(adminProfileRec, adminProfileRequest)
+	if adminProfileRec.Code != http.StatusOK || !strings.Contains(adminProfileRec.Body.String(), `"admin_entry_path":"/admin-0123456789abcdef"`) {
+		t.Fatalf("admin profile response must return the configured administrator entry path, got %d: %s", adminProfileRec.Code, adminProfileRec.Body.String())
 	}
 
 	updateRequest := httptest.NewRequest(http.MethodPut, "/console/v1/profile", strings.NewReader(`{"display_name":"Updated User"}`))

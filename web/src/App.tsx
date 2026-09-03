@@ -90,6 +90,10 @@ function isAdminEntryLocation() {
   return adminEntryPathPattern.test(window.location.pathname);
 }
 
+function isValidAdminEntryPath(value?: string) {
+  return Boolean(value && adminEntryPathPattern.test(value));
+}
+
 function paymentReturnURL() {
   const url = new URL(window.location.origin + "/");
   url.hash = "#console/billing";
@@ -963,15 +967,28 @@ export default function App() {
           return;
         }
 
-        const response = await fetch("/console/v1/me", {
+        const consoleResponse = await fetch("/console/v1/me", {
           headers: { Accept: "application/json" },
           credentials: "same-origin",
         });
-        if (!response.ok) throw new Error("unauthorized");
-        const profile = (await response.json()) as Principal;
+        if (consoleResponse.ok) {
+          const profile = (await consoleResponse.json()) as Principal;
+          if (cancelled) return;
+          setSignedIn(true);
+          setAudience("console");
+          setPrincipal(profile);
+          return;
+        }
+
+        const adminResponse = await fetch("/admin/v1/me", {
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+        });
+        if (!adminResponse.ok) throw new Error("unauthorized");
+        const profile = (await adminResponse.json()) as Principal;
         if (cancelled) return;
         setSignedIn(true);
-        setAudience("console");
+        setAudience("admin");
         setPrincipal(profile);
       } catch {
         if (!cancelled) {
@@ -1232,6 +1249,14 @@ export default function App() {
       (target === "#home" || target === "#login" || target === "#register" || target === "#models")
     ) {
       window.location.assign(`/${target}`);
+      return;
+    }
+    if ((target === "#admin" || target.startsWith("#admin/")) && !isAdminEntryLocation()) {
+      const adminEntryPath = principal?.audience === "admin" && isValidAdminEntryPath(principal.admin_entry_path)
+        ? principal.admin_entry_path
+        : "";
+      if (!adminEntryPath) return;
+      window.location.assign(`${adminEntryPath}${target}`);
       return;
     }
     window.location.hash = target;
@@ -4125,7 +4150,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             <HomeView
             language={language}
             signedIn={signedIn}
-            workspaceRoute={audience === "console" ? "#console/dashboard" : "#admin/dashboard"}
+            workspaceRoute={(principal?.audience || audience) === "console" ? "#console/dashboard" : "#admin/dashboard"}
             routeTo={routeTo}
             handleSignOut={handleSignOut}
             models={modelCatalog}
