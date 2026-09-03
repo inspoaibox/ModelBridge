@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -316,43 +317,44 @@ func runModelMonitorProber(
 	prober relay.ModelProbeService,
 ) {
 	run := func() {
+		const workerCount = 4
+		jobs := make(chan *groups.ModelMonitor)
+		var workers sync.WaitGroup
+		workers.Add(workerCount)
+		for i := 0; i < workerCount; i++ {
+			go func() {
+				defer workers.Done()
+				for monitor := range jobs {
+					status, probeError := probeModelMonitor(ctx, prober, monitor)
+					if err := monitors.CompleteActiveModelMonitor(ctx, monitor.ID, status, probeError); err != nil &&
+						!errors.Is(err, context.Canceled) {
+						log.Printf("model monitor completion failed for %s: %v", monitor.ID, err)
+					}
+				}
+			}()
+		}
+
 		for {
 			monitor, err := monitors.ClaimDueActiveModelMonitor(ctx)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
 					log.Printf("model monitor claim failed: %v", err)
 				}
-				return
+				break
 			}
 			if monitor == nil {
+				break
+			}
+			select {
+			case jobs <- monitor:
+			case <-ctx.Done():
+				close(jobs)
+				workers.Wait()
 				return
 			}
-			status := groups.MonitorProbeSuccess
-			var failures []string
-			supported := 0
-			for _, model := range monitor.ModelNames {
-				probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				err := prober.ProbeModel(probeCtx, monitor.GroupID, model)
-				cancel()
-				if errors.Is(err, relay.ErrUnsupportedFeature) {
-					continue
-				}
-				supported++
-				if err != nil {
-					failures = append(failures, model+": "+err.Error())
-				}
-			}
-			if supported == 0 {
-				status = groups.MonitorProbeSkipped
-			} else if len(failures) > 0 {
-				status = groups.MonitorProbeFailed
-			}
-			probeError := strings.Join(failures, "; ")
-			if err := monitors.CompleteActiveModelMonitor(ctx, monitor.ID, status, probeError); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				log.Printf("model monitor completion failed: %v", err)
-			}
 		}
+		close(jobs)
+		workers.Wait()
 	}
 
 	run()
@@ -366,4 +368,19 @@ func runModelMonitorProber(
 			run()
 		}
 	}
+}
+
+func probeModelMonitor(
+	ctx context.Context,
+	prober relay.ModelProbeService,
+	monitor *groups.ModelMonitor,
+) (string, string) {
+	outcome := relay.ProbeModelCandidates(ctx, prober, monitor.GroupID, monitor.PrimaryModel, monitor.ModelNames)
+	if outcome.Supported == 0 {
+		return groups.MonitorProbeSkipped, ""
+	}
+	if outcome.Succeeded {
+		return groups.MonitorProbeSuccess, ""
+	}
+	return groups.MonitorProbeFailed, strings.Join(outcome.Failures, "; ")
 }

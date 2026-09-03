@@ -1022,6 +1022,66 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 	return lastErr
 }
 
+// ModelProbeOutcome describes a group-level probe that uses the configured
+// primary model first and only falls back to the remaining models when it
+// fails. A single model failure therefore does not make the whole group
+// unavailable when another configured model succeeds.
+type ModelProbeOutcome struct {
+	Supported int
+	Succeeded bool
+	Failures  []string
+}
+
+func ProbeModelCandidates(
+	ctx context.Context,
+	prober ModelProbeService,
+	groupID, primary string,
+	models []string,
+) ModelProbeOutcome {
+	ordered := orderedProbeModels(primary, models)
+	outcome := ModelProbeOutcome{}
+	for _, model := range ordered {
+		if ctx.Err() != nil {
+			outcome.Failures = append(outcome.Failures, model+": "+ctx.Err().Error())
+			break
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err := prober.ProbeModel(probeCtx, groupID, model)
+		cancel()
+		if errors.Is(err, ErrUnsupportedFeature) {
+			continue
+		}
+		outcome.Supported++
+		if err == nil {
+			outcome.Succeeded = true
+			break
+		}
+		outcome.Failures = append(outcome.Failures, model+": "+err.Error())
+	}
+	return outcome
+}
+
+func orderedProbeModels(primary string, models []string) []string {
+	ordered := make([]string, 0, len(models)+1)
+	seen := make(map[string]struct{}, len(models)+1)
+	appendModel := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			return
+		}
+		if _, ok := seen[model]; ok {
+			return
+		}
+		seen[model] = struct{}{}
+		ordered = append(ordered, model)
+	}
+	appendModel(primary)
+	for _, model := range models {
+		appendModel(model)
+	}
+	return ordered
+}
+
 func probeableTextModel(model string) bool {
 	name := strings.ToLower(strings.TrimSpace(model))
 	for _, marker := range []string{

@@ -3505,27 +3505,14 @@ func adminModelMonitorProbeHandler(groupService groups.Service, relayService rel
 			writeModelMonitorError(w, err)
 			return
 		}
-		probeCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
+		outcome := relay.ProbeModelCandidates(r.Context(), prober, monitor.GroupID, monitor.PrimaryModel, monitor.ModelNames)
 		status := groups.MonitorProbeSuccess
-		var failures []string
-		supported := 0
-		for _, model := range monitor.ModelNames {
-			err := prober.ProbeModel(probeCtx, monitor.GroupID, model)
-			if errors.Is(err, relay.ErrUnsupportedFeature) {
-				continue
-			}
-			supported++
-			if err != nil {
-				failures = append(failures, model+": "+err.Error())
-			}
-		}
-		if supported == 0 {
+		if outcome.Supported == 0 {
 			status = groups.MonitorProbeSkipped
-		} else if len(failures) > 0 {
+		} else if !outcome.Succeeded {
 			status = groups.MonitorProbeFailed
 		}
-		if err := monitors.CompleteActiveModelMonitor(r.Context(), monitor.ID, status, strings.Join(failures, "; ")); err != nil {
+		if err := monitors.CompleteActiveModelMonitor(r.Context(), monitor.ID, status, strings.Join(outcome.Failures, "; ")); err != nil {
 			writeModelMonitorError(w, err)
 			return
 		}
