@@ -66,7 +66,7 @@
 2. 生产必须使用非超级用户 PostgreSQL 账号、`COOKIE_SECURE=true`、HTTPS、明确 `CORS_ALLOWED_ORIGINS`、回环 `HTTP_ADDR` 和明确 `TRUSTED_PROXY_CIDRS`。
 3. 开启公开注册前，在“系统设置 → 功能开关”打开“开放用户注册”；如需邮箱验证，同时打开邮件总开关和“邮箱验证码”，并在“系统设置 → 邮件设置”配置 HTTPS 公开地址和可用的 SMTP STARTTLS；同时在边缘配置 Captcha/WAF。
 4. 迁移必须执行到 `048_payment_idempotency_scope.sql`；正式包中的 `migrations/` 必须和二进制来自同一提交。
-5. 配置支付平台 HTTPS 回调地址；分别完成微信 Native、支付宝当面付、Stripe Checkout、PayPal Capture 的沙箱或小额真实支付测试，并确认重复回调只入账一次、金额/币种不匹配不会入账。若 Stripe 配置了 `payment_method_types`，还要分别验收 `card`、`alipay`、`wechat_pay` 在实际账户、地区和币种下是否可用。
+5. 配置支付平台 HTTPS 回调地址；Stripe 使用 `https://当前域名/payments/webhooks/stripe`，不配置 `notify_url`。分别完成微信 Native、支付宝当面付、Stripe Checkout、PayPal Capture 的沙箱或小额真实支付测试，并确认重复回调只入账一次、金额/币种不匹配不会入账。若 Stripe 配置了 `payment_method_types`，还要分别验收 `card`、`alipay`、`wechat_pay` 在实际账户、地区和币种下是否可用；Apple Pay/Google Pay 需在真实设备和已验证域名下验收。
 6. 生产应启用外部依赖漏洞扫描；本次使用官方 npm registry 检查生产依赖为 0 个已知漏洞，但仍不能替代发布镜像和运行环境扫描。
 
 ## 5. 验证记录

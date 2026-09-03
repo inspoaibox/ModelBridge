@@ -21,10 +21,25 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 	if err != nil {
 		return providerOrder{}, err
 	}
+	successURL, err := paymentReturnURL(returnURL, url.Values{
+		"payment_order_id": {order.ID},
+		"provider":         {"stripe"},
+	})
+	if err != nil {
+		return providerOrder{}, err
+	}
+	cancelURL, err := paymentReturnURL(returnURL, url.Values{
+		"payment_order_id": {order.ID},
+		"provider":         {"stripe"},
+		"cancelled":        {"1"},
+	})
+	if err != nil {
+		return providerOrder{}, err
+	}
 	form := url.Values{}
 	form.Set("mode", "payment")
-	form.Set("success_url", returnURL+"?payment_order_id="+url.QueryEscape(order.ID)+"&provider=stripe")
-	form.Set("cancel_url", returnURL+"?payment_order_id="+url.QueryEscape(order.ID)+"&provider=stripe&cancelled=1")
+	form.Set("success_url", successURL)
+	form.Set("cancel_url", cancelURL)
 	form.Set("client_reference_id", order.MerchantOrderNo)
 	form.Set("metadata[order_id]", order.ID)
 	form.Set("metadata[merchant_order_no]", order.MerchantOrderNo)
@@ -40,6 +55,10 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 		for index, method := range strings.Split(methods, ",") {
 			form.Set(fmt.Sprintf("payment_method_types[%d]", index), method)
 		}
+	} else {
+		// Stripe selects eligible methods from its Dashboard and account
+		// capabilities when no explicit allow-list is configured.
+		form.Set("automatic_payment_methods[enabled]", "true")
 	}
 	endpoint := strings.TrimRight(config["api_base_url"], "/")
 	if endpoint == "" {
@@ -190,7 +209,22 @@ func (s *SQLService) createPayPalOrder(ctx context.Context, order Order, config 
 	if err != nil {
 		return providerOrder{}, err
 	}
-	payload := map[string]any{"intent": "CAPTURE", "purchase_units": []any{map[string]any{"reference_id": order.MerchantOrderNo, "custom_id": order.MerchantOrderNo, "amount": map[string]string{"currency_code": order.Currency, "value": order.Amount}}}, "application_context": map[string]string{"return_url": returnURL + "?payment_order_id=" + url.QueryEscape(order.ID) + "&provider=paypal", "cancel_url": returnURL + "?payment_order_id=" + url.QueryEscape(order.ID) + "&provider=paypal&cancelled=1"}}
+	returnURLValue, err := paymentReturnURL(returnURL, url.Values{
+		"payment_order_id": {order.ID},
+		"provider":         {"paypal"},
+	})
+	if err != nil {
+		return providerOrder{}, err
+	}
+	cancelURL, err := paymentReturnURL(returnURL, url.Values{
+		"payment_order_id": {order.ID},
+		"provider":         {"paypal"},
+		"cancelled":        {"1"},
+	})
+	if err != nil {
+		return providerOrder{}, err
+	}
+	payload := map[string]any{"intent": "CAPTURE", "purchase_units": []any{map[string]any{"reference_id": order.MerchantOrderNo, "custom_id": order.MerchantOrderNo, "amount": map[string]string{"currency_code": order.Currency, "value": order.Amount}}}, "application_context": map[string]string{"return_url": returnURLValue, "cancel_url": cancelURL}}
 	encoded, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, paypalBaseURL(config)+"/v2/checkout/orders", bytesReader(encoded))
 	if err != nil {
@@ -328,3 +362,19 @@ func parsePayPalWebhookEvent(body []byte) (callbackPayment, error) {
 }
 
 func bytesReader(value []byte) *bytes.Reader { return bytes.NewReader(value) }
+
+func paymentReturnURL(base string, params url.Values) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return "", ErrInvalidRequest
+	}
+	query := parsed.Query()
+	for key, values := range params {
+		query.Del(key)
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}

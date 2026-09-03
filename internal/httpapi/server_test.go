@@ -144,6 +144,7 @@ func TestPaymentReturnURLIsRestrictedToKnownOrigin(t *testing.T) {
 		want  bool
 	}{
 		{name: "same origin", value: "https://gateway.example.com/console/billing", want: true},
+		{name: "same origin with console hash route", value: "https://gateway.example.com/#console/billing", want: true},
 		{name: "configured origin", value: "https://gateway.example.com", want: true},
 		{name: "external origin", value: "https://attacker.example/collect", want: false},
 		{name: "credentials", value: "https://user:password@gateway.example.com", want: false},

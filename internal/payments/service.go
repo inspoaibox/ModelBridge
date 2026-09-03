@@ -49,6 +49,7 @@ type ProviderConfig struct {
 	Values       map[string]string `json:"values"`
 	Configured   bool              `json:"configured"`
 	SecretFields []string          `json:"secret_fields"`
+	WebhookURL   string            `json:"webhook_url,omitempty"`
 	UpdatedAt    time.Time         `json:"updated_at,omitempty"`
 	UpdatedBy    string            `json:"updated_by,omitempty"`
 }
@@ -150,8 +151,8 @@ var secretFieldsByProvider = map[string][]string{
 var requiredFieldsByProvider = map[string][]string{
 	ProviderWechat: {"app_id", "mch_id", "serial_no", "platform_certificate_serial_no", "private_key_pem", "api_v3_key", "platform_certificate_pem", "notify_url"},
 	ProviderAlipay: {"app_id", "private_key_pem", "alipay_public_key_pem", "notify_url"},
-	ProviderStripe: {"secret_key", "webhook_secret", "notify_url"},
-	ProviderPayPal: {"client_id", "client_secret", "webhook_id", "notify_url"},
+	ProviderStripe: {"secret_key", "webhook_secret"},
+	ProviderPayPal: {"client_id", "client_secret", "webhook_id"},
 }
 
 var allowedFieldsByProvider = map[string]map[string]struct{}{
@@ -165,10 +166,10 @@ var allowedFieldsByProvider = map[string]map[string]struct{}{
 		"notify_url": {}, "gateway": {},
 	},
 	ProviderStripe: {
-		"secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "notify_url": {}, "api_base_url": {}, "payment_method_types": {},
+		"secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "api_base_url": {}, "payment_method_types": {},
 	},
 	ProviderPayPal: {
-		"client_id": {}, "client_secret": {}, "webhook_id": {}, "environment": {}, "notify_url": {},
+		"client_id": {}, "client_secret": {}, "webhook_id": {}, "environment": {},
 	},
 }
 
@@ -321,6 +322,7 @@ func (s *SQLService) readConfig(ctx context.Context, provider string) (ProviderC
 		}
 	}
 	item := ProviderConfig{Provider: provider, Enabled: enabled, Values: public, Configured: hasRequiredFields(provider, values), SecretFields: append([]string(nil), secretFieldsByProvider[provider]...)}
+	item.WebhookURL = providerWebhookURL(provider)
 	if updatedAt.Valid {
 		item.UpdatedAt = updatedAt.Time
 	}
@@ -355,6 +357,21 @@ func validConfigKey(provider, key string) bool {
 	}
 	_, ok := allowedFieldsByProvider[provider][key]
 	return ok
+}
+
+func providerWebhookURL(provider string) string {
+	switch provider {
+	case ProviderWechat:
+		return "/payments/webhooks/wechat"
+	case ProviderAlipay:
+		return "/payments/webhooks/alipay"
+	case ProviderStripe:
+		return "/payments/webhooks/stripe"
+	case ProviderPayPal:
+		return "/payments/webhooks/paypal"
+	default:
+		return ""
+	}
 }
 
 func hasRequiredFields(provider string, values map[string]string) bool {
@@ -785,7 +802,7 @@ func minorAmount(value, currency string) (string, error) {
 }
 func validHTTPSURL(value string) bool {
 	u, err := url.Parse(strings.TrimSpace(value))
-	return err == nil && u.Scheme == "https" && u.Host != ""
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 
 func providerSupportsCurrency(provider, currency string) bool {

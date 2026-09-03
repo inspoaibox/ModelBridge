@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,6 +87,19 @@ func TestStripePaymentMethodConfiguration(t *testing.T) {
 				t.Fatalf("normalizeStripePaymentMethods(%q) = %q, %v; want %q", test.value, got, err, test.want)
 			}
 		})
+	}
+}
+
+func TestPaymentReturnURLKeepsHashRouteAfterAddingProviderParameters(t *testing.T) {
+	got, err := paymentReturnURL("https://gateway.example.com/#console/billing", url.Values{
+		"payment_order_id": {"order-123"},
+		"provider":         {"stripe"},
+	})
+	if err != nil {
+		t.Fatalf("paymentReturnURL returned error: %v", err)
+	}
+	if !strings.Contains(got, "?payment_order_id=order-123&provider=stripe#console/billing") {
+		t.Fatalf("paymentReturnURL(%q) = %q; query must be before hash", "https://gateway.example.com/#console/billing", got)
 	}
 }
 

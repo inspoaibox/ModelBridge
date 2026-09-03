@@ -352,7 +352,7 @@ func principalFromRequest(r *http.Request) (*auth.Principal, bool) {
 
 func safeReturnURL(value string, r *http.Request) bool {
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && !isLocalDevelopmentHost(parsed.Hostname())) {
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || (parsed.Scheme != "https" && !isLocalDevelopmentHost(parsed.Hostname())) {
 		return false
 	}
 	targetOrigin := parsed.Scheme + "://" + parsed.Host

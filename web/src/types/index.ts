@@ -615,6 +615,7 @@ export interface PaymentProviderConfig {
   configured: boolean;
   values: Record<string, string>;
   secret_fields: string[];
+  webhook_url?: string;
   updated_at?: string;
   updated_by?: string;
 }

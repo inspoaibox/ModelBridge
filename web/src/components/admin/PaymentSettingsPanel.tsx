@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { CreditCard, Save } from "lucide-react";
+import { Copy, CreditCard, ExternalLink, Info, Save } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,16 +10,64 @@ import { Switch } from "@/components/ui/switch";
 import { Language, LoginMessage, PaymentProviderConfig, TranslationKey } from "@/types";
 import { translations } from "@/locales/translations";
 
-interface Props { language: Language; configs: PaymentProviderConfig[]; busy: boolean; message: LoginMessage; save: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>; canUpdate: boolean; }
+interface Props {
+  language: Language;
+  configs: PaymentProviderConfig[];
+  busy: boolean;
+  message: LoginMessage;
+  save: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
+  canUpdate: boolean;
+}
+
 type Provider = PaymentProviderConfig["provider"];
 type Field = { key: string; label: TranslationKey; secret?: boolean; multiline?: boolean; hint?: TranslationKey };
+
 const fields: Record<Provider, Field[]> = {
-  wechat: [{ key: "app_id", label: "paymentWechatAppID" }, { key: "mch_id", label: "paymentWechatMchID" }, { key: "serial_no", label: "paymentWechatSerial" }, { key: "platform_certificate_serial_no", label: "paymentWechatPlatformSerial" }, { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true }, { key: "api_v3_key", label: "paymentWechatAPIv3Key", secret: true }, { key: "platform_certificate_pem", label: "paymentWechatPlatformCertificate", secret: true, multiline: true }, { key: "notify_url", label: "paymentNotifyURL" }, { key: "api_base_url", label: "paymentAPIBaseURL" }],
-  alipay: [{ key: "app_id", label: "paymentAlipayAppID" }, { key: "seller_id", label: "paymentAlipaySellerID" }, { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true }, { key: "alipay_public_key_pem", label: "paymentAlipayPublicKey", secret: true, multiline: true }, { key: "notify_url", label: "paymentNotifyURL" }, { key: "gateway", label: "paymentGateway" }],
-  stripe: [{ key: "secret_key", label: "paymentStripeSecretKey", secret: true }, { key: "publishable_key", label: "paymentStripePublishableKey" }, { key: "payment_method_types", label: "paymentStripePaymentMethods", hint: "paymentStripePaymentMethodsHint" }, { key: "webhook_secret", label: "paymentStripeWebhookSecret", secret: true }, { key: "notify_url", label: "paymentNotifyURL" }, { key: "api_base_url", label: "paymentAPIBaseURL" }],
-  paypal: [{ key: "client_id", label: "paymentPayPalClientID" }, { key: "client_secret", label: "paymentPayPalClientSecret", secret: true }, { key: "webhook_id", label: "paymentPayPalWebhookID" }, { key: "environment", label: "paymentPayPalEnvironment" }, { key: "notify_url", label: "paymentNotifyURL" }],
+  wechat: [
+    { key: "app_id", label: "paymentWechatAppID" },
+    { key: "mch_id", label: "paymentWechatMchID" },
+    { key: "serial_no", label: "paymentWechatSerial" },
+    { key: "platform_certificate_serial_no", label: "paymentWechatPlatformSerial" },
+    { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true },
+    { key: "api_v3_key", label: "paymentWechatAPIv3Key", secret: true },
+    { key: "platform_certificate_pem", label: "paymentWechatPlatformCertificate", secret: true, multiline: true },
+    { key: "notify_url", label: "paymentNotifyURL" },
+    { key: "api_base_url", label: "paymentAPIBaseURL" },
+  ],
+  alipay: [
+    { key: "app_id", label: "paymentAlipayAppID" },
+    { key: "seller_id", label: "paymentAlipaySellerID" },
+    { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true },
+    { key: "alipay_public_key_pem", label: "paymentAlipayPublicKey", secret: true, multiline: true },
+    { key: "notify_url", label: "paymentNotifyURL" },
+    { key: "gateway", label: "paymentGateway" },
+  ],
+  stripe: [
+    { key: "secret_key", label: "paymentStripeSecretKey", secret: true },
+    { key: "publishable_key", label: "paymentStripePublishableKey" },
+    { key: "webhook_secret", label: "paymentStripeWebhookSecret", secret: true },
+    { key: "api_base_url", label: "paymentAPIBaseURL" },
+  ],
+  paypal: [
+    { key: "client_id", label: "paymentPayPalClientID" },
+    { key: "client_secret", label: "paymentPayPalClientSecret", secret: true },
+    { key: "webhook_id", label: "paymentPayPalWebhookID" },
+    { key: "environment", label: "paymentPayPalEnvironment" },
+  ],
 };
-const providerLabels: Record<Provider, TranslationKey> = { wechat: "paymentWechat", alipay: "paymentAlipay", stripe: "paymentStripe", paypal: "paymentPayPal" };
+
+const providerLabels: Record<Provider, TranslationKey> = {
+  wechat: "paymentWechat",
+  alipay: "paymentAlipay",
+  stripe: "paymentStripe",
+  paypal: "paymentPayPal",
+};
+
+const stripeMethodOptions: Array<{ value: string; label: TranslationKey }> = [
+  { value: "card", label: "paymentStripeCard" },
+  { value: "alipay", label: "paymentStripeAlipay" },
+  { value: "wechat_pay", label: "paymentStripeWechatPay" },
+];
 
 export function PaymentSettingsPanel({ language, configs, busy, message, save, canUpdate }: Props) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
@@ -27,8 +76,122 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [clear, setClear] = useState<string[]>([]);
   const current = useMemo(() => configs.find((item) => item.provider === provider), [configs, provider]);
-  useEffect(() => { setEnabled(Boolean(current?.enabled)); setDraft(Object.fromEntries(Object.entries(current?.values || {}).filter(([key]) => !key.endsWith("_configured")))); setClear([]); }, [current, provider]);
+
+  useEffect(() => {
+    setEnabled(Boolean(current?.enabled));
+    setDraft(Object.fromEntries(Object.entries(current?.values || {}).filter(([key]) => !key.endsWith("_configured"))));
+    setClear([]);
+  }, [current, provider]);
+
   const providerFields = fields[provider];
-  async function submit(event: React.FormEvent) { event.preventDefault(); await save(provider, enabled, draft, clear); }
-  return <div className="space-y-5"><div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 dark:border-slate-800">{(Object.keys(fields) as Provider[]).map((item) => <Button key={item} type="button" size="sm" variant={provider === item ? "default" : "outline"} onClick={() => setProvider(item)}>{t(providerLabels[item])}</Button>)}</div><Card className="border-cyan-500/20"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-cyan-600" />{t("paymentSettingsTitle")}</CardTitle><CardDescription>{t("paymentSettingsDescription")}</CardDescription></CardHeader><CardContent><form className="space-y-5" onSubmit={(event) => void submit(event)}><div className="flex items-center justify-between rounded-xl border border-cyan-500/20 bg-cyan-50/60 p-4 dark:bg-cyan-500/10"><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t(providerLabels[provider])}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{current?.configured ? t("paymentConfigured") : t("paymentNotConfigured")}</div></div><Switch checked={enabled} onCheckedChange={setEnabled} disabled={busy || !canUpdate} /></div><div className="grid gap-4 sm:grid-cols-2">{providerFields.map((field) => { const configured = current?.values?.[field.key+"_configured"] === "true"; const isCleared = clear.includes(field.key); return <div key={field.key} className={field.multiline ? "space-y-2 sm:col-span-2" : "space-y-2"}><Label htmlFor={`payment-${provider}-${field.key}`}>{t(field.label)}</Label>{field.hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{t(field.hint)}</p> : null}{field.multiline ? <textarea id={`payment-${provider}-${field.key}`} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} rows={6} className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder={configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} /> : <Input id={`payment-${provider}-${field.key}`} type={field.secret ? "password" : "text"} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} placeholder={field.secret && configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />}{field.secret && configured ? <label className="flex items-center gap-2 text-xs text-slate-500"><input type="checkbox" checked={isCleared} onChange={(event) => setClear((value) => event.target.checked ? [...value, field.key] : value.filter((item) => item !== field.key))} disabled={busy || !canUpdate} />{t("paymentSecretClear")}</label> : null}</div>; })}</div>{message.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{message.text}</div> : null}<div className="flex justify-end"><Button type="submit" disabled={busy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{busy ? t("paymentSaving") : t("paymentSave")}</Button></div></form><div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400"><Badge variant="muted">{t("paymentCallbackOnly")}</Badge><span>{t("paymentSecurityHint")}</span></div></CardContent></Card></div>;
+  const webhookURL = current?.webhook_url ? absoluteURL(current.webhook_url) : "";
+  const stripeSuccessURL = provider === "stripe" ? `${window.location.origin}/?payment_order_id={order_id}&provider=stripe#console/billing` : "";
+  const stripeCancelURL = provider === "stripe" ? `${window.location.origin}/?payment_order_id={order_id}&provider=stripe&cancelled=1#console/billing` : "";
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    await save(provider, enabled, draft, clear);
+  }
+
+  function updateStripeMethod(method: string, checked: boolean) {
+    const selected = parseStripeMethods(draft.payment_method_types);
+    const next = checked ? [...new Set([...selected, method])] : selected.filter((item) => item !== method);
+    setDraft((value) => ({ ...value, payment_method_types: next.join(",") }));
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 dark:border-slate-800">
+        {(Object.keys(fields) as Provider[]).map((item) => (
+          <Button key={item} type="button" size="sm" variant={provider === item ? "default" : "outline"} onClick={() => setProvider(item)}>
+            {t(providerLabels[item])}
+          </Button>
+        ))}
+      </div>
+
+      <Card className="border-cyan-500/20">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-cyan-600" />{t("paymentSettingsTitle")}</CardTitle>
+          <CardDescription>{t("paymentSettingsDescription")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={(event) => void submit(event)}>
+            <div className="flex items-center justify-between rounded-xl border border-cyan-500/20 bg-cyan-50/60 p-4 dark:bg-cyan-500/10">
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">{t(providerLabels[provider])}</div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{current?.configured ? t("paymentConfigured") : t("paymentNotConfigured")}</div>
+              </div>
+              <Switch checked={enabled} onCheckedChange={setEnabled} disabled={busy || !canUpdate} />
+            </div>
+
+            {webhookURL ? <EndpointRow label={t("paymentWebhookURL")} value={webhookURL} copyLabel={t("paymentCopyURL")} /> : null}
+            {provider === "stripe" ? <StripeEndpointInfo t={t} successURL={stripeSuccessURL} cancelURL={stripeCancelURL} /> : null}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {providerFields.map((field) => {
+                const configured = current?.values?.[field.key + "_configured"] === "true";
+                const isCleared = clear.includes(field.key);
+                return (
+                  <div key={field.key} className={field.multiline ? "space-y-2 sm:col-span-2" : "space-y-2"}>
+                    <Label htmlFor={`payment-${provider}-${field.key}`}>{t(field.label)}</Label>
+                    {field.hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{t(field.hint)}</p> : null}
+                    {field.multiline ? (
+                      <textarea id={`payment-${provider}-${field.key}`} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} rows={6} className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder={configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />
+                    ) : (
+                      <Input id={`payment-${provider}-${field.key}`} type={field.secret ? "password" : "text"} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} placeholder={field.secret && configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />
+                    )}
+                    {field.secret && configured ? <label className="flex items-center gap-2 text-xs text-slate-500"><input type="checkbox" checked={isCleared} onChange={(event) => setClear((value) => event.target.checked ? [...value, field.key] : value.filter((item) => item !== field.key))} disabled={busy || !canUpdate} />{t("paymentSecretClear")}</label> : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            {provider === "stripe" ? <StripePaymentMethods t={t} value={draft.payment_method_types || ""} update={updateStripeMethod} disabled={busy || !canUpdate} /> : null}
+            {message.text ? <div className="rounded-xl border border-amber-500/30 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">{message.text}</div> : null}
+            <div className="flex justify-end"><Button type="submit" disabled={busy || !canUpdate} className="gap-2"><Save className="h-4 w-4" />{busy ? t("paymentSaving") : t("paymentSave")}</Button></div>
+          </form>
+          <div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400"><Badge variant="muted">{t("paymentCallbackOnly")}</Badge><span>{t("paymentSecurityHint")}</span></div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function StripeEndpointInfo({ t, successURL, cancelURL }: { t: (key: TranslationKey) => string; successURL: string; cancelURL: string }) {
+  return (
+    <div className="space-y-3 rounded-xl border border-indigo-500/20 bg-indigo-50/60 p-4 dark:bg-indigo-500/10">
+      <div className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-300" /><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentStripeEndpointTitle")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("paymentStripeEndpointHint")}</p></div></div>
+      <div className="space-y-2"><EndpointRow label={t("paymentStripeSuccessURL")} value={successURL} copyLabel={t("paymentCopyURL")} /><EndpointRow label={t("paymentStripeCancelURL")} value={cancelURL} copyLabel={t("paymentCopyURL")} /></div>
+      <div className="flex items-start gap-2 text-xs leading-5 text-slate-600 dark:text-slate-300"><ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />{t("paymentStripeDashboardHint")}</div>
+    </div>
+  );
+}
+
+function StripePaymentMethods({ t, value, update, disabled }: { t: (key: TranslationKey) => string; value: string; update: (method: string, checked: boolean) => void; disabled: boolean }) {
+  const selected = parseStripeMethods(value);
+  return (
+    <div className="space-y-3 rounded-xl border border-emerald-500/20 bg-emerald-50/50 p-4 dark:bg-emerald-500/10">
+      <div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentStripePaymentMethods")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("paymentStripePaymentMethodsHint")}</p></div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {stripeMethodOptions.map((method) => <label key={method.value} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950/50 dark:text-slate-200"><input type="checkbox" checked={selected.includes(method.value)} onChange={(event) => update(method.value, event.target.checked)} disabled={disabled} />{t(method.label)}</label>)}
+      </div>
+      <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{selected.length === 0 ? t("paymentStripeAutomatic") : t("paymentStripeWallets")}</p>
+    </div>
+  );
+}
+
+function EndpointRow({ label, value, copyLabel }: { label: string; value: string; copyLabel: string }) {
+  return <div className="flex min-w-0 items-center gap-2"><span className="w-28 shrink-0 text-xs font-semibold text-slate-600 dark:text-slate-300">{label}</span><code className="min-w-0 flex-1 break-all rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-950/50 dark:text-slate-200">{value}</code><Button type="button" variant="outline" size="icon" onClick={() => void navigator.clipboard?.writeText(value)} title={copyLabel} aria-label={copyLabel}><Copy className="h-4 w-4" /></Button></div>;
+}
+
+function parseStripeMethods(value: string | undefined) {
+  return (value || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+}
+
+function absoluteURL(value: string) {
+  try {
+    return new URL(value, window.location.origin).toString();
+  } catch {
+    return value;
+  }
 }

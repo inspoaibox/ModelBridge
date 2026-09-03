@@ -90,6 +90,12 @@ function isAdminEntryLocation() {
   return adminEntryPathPattern.test(window.location.pathname);
 }
 
+function paymentReturnURL() {
+  const url = new URL(window.location.origin + "/");
+  url.hash = "#console/billing";
+  return url.toString();
+}
+
 function parseRoute(hash: string): SectionRoute {
   const raw = hash.replace(/^#/, "");
   if (isAdminEntryLocation() && (raw === "" || raw === "admin-login")) {
@@ -1081,6 +1087,21 @@ export default function App() {
     refreshConsoleBilling();
     refreshPaymentProviders();
   }, [signedIn, audience, route.view, consoleSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing") return;
+    const query = new URLSearchParams(window.location.search);
+    const orderID = query.get("payment_order_id")?.trim();
+    const provider = query.get("provider")?.trim().toLowerCase();
+    if (!orderID || (provider !== "stripe" && provider !== "paypal")) return;
+    const cancelledByUser = query.get("cancelled") === "1";
+    const cleanURL = new URL(window.location.href);
+    cleanURL.searchParams.delete("payment_order_id");
+    cleanURL.searchParams.delete("provider");
+    cleanURL.searchParams.delete("cancelled");
+    window.history.replaceState({}, document.title, `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+    void loadPaymentOrder(orderID, cancelledByUser);
+  }, [signedIn, audience, route.view, consoleSection, principal?.tenant_id]);
 
   useEffect(() => {
     if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "enterprise") return;
@@ -2589,7 +2610,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json", "Idempotency-Key": idempotencyKey },
         credentials: "same-origin",
-        body: JSON.stringify({ provider, amount, currency, return_url: window.location.origin }),
+        body: JSON.stringify({ provider, amount, currency, return_url: paymentReturnURL() }),
       });
       const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
       if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
@@ -2602,20 +2623,32 @@ export default function App() {
     }
   }
 
-  async function refreshPaymentOrder() {
-    if (!principal?.tenant_id || !paymentOrder?.id) return;
+  async function loadPaymentOrder(orderID: string, cancelledByUser = false) {
+    if (!principal?.tenant_id || !orderID) return;
+    setPaymentBusy(true);
     try {
-      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(paymentOrder.id)}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(orderID)}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
       const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
       if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
       setPaymentOrder(result);
       if (result.status === "paid") {
         await refreshConsoleBilling();
         setPaymentMessage({ kind: "success", text: t("rechargePaid") });
+      } else if (cancelledByUser) {
+        setPaymentMessage({ kind: "pending", text: t("rechargeCancelled") });
+      } else {
+        setPaymentMessage({ kind: "pending", text: t("rechargeReturnPending") });
       }
     } catch (error) {
       setPaymentMessage({ kind: "error", text: error instanceof Error ? error.message : t("rechargeFailed") });
+    } finally {
+      setPaymentBusy(false);
     }
+  }
+
+  async function refreshPaymentOrder() {
+    if (!principal?.tenant_id || !paymentOrder?.id) return;
+    await loadPaymentOrder(paymentOrder.id);
   }
 
   async function capturePayPal() {

@@ -119,7 +119,7 @@ POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture
 创建请求：
 
 ```json
-{"provider":"stripe","amount":"10.00","currency":"USD","return_url":"https://gateway.example.com/console/billing"}
+{"provider":"stripe","amount":"10.00","currency":"USD","return_url":"https://gateway.example.com/#console/billing"}
 ```
 
 当前支付方式和配置字段：
@@ -138,7 +138,17 @@ GET /admin/v1/settings/payments
 PUT /admin/v1/settings/payments/{provider}
 ```
 
-支付配置的私钥、证书、API Key 和 Webhook Secret 使用 SecretBox 加密；读取接口仅返回非敏感字段及是否已配置。禁用方式不会删除已保存配置；开启前必须满足该方式的完整字段校验。回调地址必须是无凭据、无 query、无 fragment 的 HTTPS 地址，并且只能使用平台公开来源。微信支付和支付宝当面付只接受 CNY 租户账户；Stripe 和 PayPal 使用租户预付账户币种，平台不会在未配置汇率的情况下自动换算。Stripe 可选配置 `payment_method_types`，填入逗号分隔的 `card`、`alipay`、`wechat_pay`；留空时由 Stripe Dashboard 的动态支付方式决定，实际可用性仍受 Stripe 账户、地区、币种和风控资格限制。
+支付配置的私钥、证书、API Key 和 Webhook Secret 使用 SecretBox 加密；读取接口仅返回非敏感字段及是否已配置。禁用方式不会删除已保存配置；开启前必须满足该方式的完整字段校验。微信支付和支付宝当面付只接受 CNY 租户账户；Stripe 和 PayPal 使用租户预付账户币种，平台不会在未配置汇率的情况下自动换算。
+
+Stripe 不使用 `notify_url` 字段。后台会显示真实的 Webhook 地址，例如：
+
+```text
+https://gateway.example.com/payments/webhooks/stripe
+```
+
+管理员需要把这个地址添加到 Stripe Dashboard 的 Webhook endpoint，并把该 endpoint 的 signing secret 填入 `webhook_secret`。Stripe Checkout 的成功/取消返回地址由平台创建 Checkout Session 时自动传入，形式为 `https://gateway.example.com/?payment_order_id={order_id}&provider=stripe#console/billing` 和带 `cancelled=1` 的取消地址；它们只负责把用户带回充值页，不能作为入账依据。
+
+Stripe 支付方式可以在后台按需勾选 `card`、`alipay`、`wechat_pay`。全部不勾选时平台启用 Stripe 的动态支付方式。Apple Pay 和 Google Pay 是卡支付钱包能力，不是需要单独提交的 Stripe `payment_method_types`；是否展示还取决于 Stripe 账户、客户设备、域名验证、币种和地区资格。当前平台的勾选配置是全局配置，不按国家保存独立规则；如需不同国家使用不同固定白名单，应在充值时收集国家并增加国家规则表和服务端匹配逻辑，不能仅靠前端隐藏选项实现。
 
 支付回调由平台接收：
 
@@ -149,7 +159,7 @@ POST /payments/webhooks/stripe
 POST /payments/webhooks/paypal
 ```
 
-支付回调不是前端传入成功状态的依据。服务端会校验平台签名、订单号、金额、币种、支付方式和订单有效期，验证成功后使用 `payment:credit:<order_id>` 写入不可变账务流水；重复回调不会重复增加余额。Stripe 的信用卡、微信和支付宝是否可用，取决于 Stripe 账户地区、币种、风控资格和 Dashboard 中启用的 Payment Methods，不能仅通过本平台配置强行开启。
+支付回调不是前端传入成功状态的依据。服务端会校验平台签名、订单号、金额、币种、支付方式和订单有效期，验证成功后使用 `payment:credit:<order_id>` 写入不可变账务流水；重复回调不会重复增加余额。充值页返回后会按订单 ID 重新读取订单并轮询待支付订单，避免回跳后丢失状态。
 
 ## 注册与邮箱验证
 

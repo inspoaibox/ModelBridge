@@ -186,9 +186,9 @@ GET  /v1/videos/{videoID}/content
 
 用户控制台的“企业认证”用于提交企业名称、统一社会信用代码、营业执照和对公账户资料。营业执照与银行账号在服务端加密保存；用户端只返回银行账号脱敏值，管理员审核详情才可查看完整账号。申请状态为待审核、已通过或未通过；未通过后允许重新提交，已通过后不能重复提交。管理员在“企业认证”页面按状态筛选并通过或拒绝申请，拒绝必须填写原因。
 
-用户控制台的“账单与额度”包含余额充值入口。管理员在“系统设置 -> 支付设置”分别配置并启用微信支付、支付宝、Stripe 或 PayPal。微信支付使用 Native 二维码，支付宝使用当面付预创建二维码，Stripe 使用 Checkout，PayPal 使用 Orders 创建和 Capture；充值订单必须携带 `Idempotency-Key`，余额只由经过官方签名/官方 API 验证的支付结果入账。Stripe 的信用卡、微信和支付宝可用性还取决于 Stripe 账户、地区、币种及 Stripe Dashboard 中已启用的 Payment Methods，平台不会绕过 Stripe 的资格限制。
+用户控制台的“账单与额度”包含余额充值入口。管理员在“系统设置 -> 支付设置”分别配置并启用微信支付、支付宝、Stripe 或 PayPal。微信支付使用 Native 二维码，支付宝使用当面付预创建二维码，Stripe 使用 Checkout，PayPal 使用 Orders 创建和 Capture；充值订单必须携带 `Idempotency-Key`，余额只由经过官方签名/官方 API 验证的支付结果入账。Stripe Webhook 地址为 `https://当前域名/payments/webhooks/stripe`，后台会显示并支持复制；成功/取消返回地址由 Checkout Session 自动生成并回到 `#console/billing`，不参与入账判断。
 
-Stripe 支付方式可在支付配置中按需填写逗号分隔的 `card`、`alipay`、`wechat_pay`；留空时使用 Stripe Dashboard 动态支付方式。实际可用性仍以 Stripe 账户、地区、币种和已启用的 Payment Methods 为准。
+Stripe 支付方式可在支付配置中按需勾选 `card`、`alipay`、`wechat_pay`；全部不勾选时使用 Stripe Dashboard 动态支付方式。Apple Pay 和 Google Pay 属于卡支付钱包能力，不作为独立类型配置。当前白名单是全局配置；不同国家的固定支付方式规则需要额外的国家采集和服务端规则配置。
 
 支付配置中的密钥、私钥、证书和 Webhook Secret 使用应用 SecretBox 加密保存；读取接口只返回非敏感字段和“已配置”标记。微信回调必须校验平台证书序列号、时间戳、签名、AES-256-GCM、AppID 和商户号；支付宝回调必须校验 RSA2、AppID 和可选商户身份；Stripe 校验签名时间窗；PayPal 通过官方 `verify-webhook-signature` 验证并只接受 `PAYMENT.CAPTURE.COMPLETED`。上线前必须在各支付平台配置 HTTPS 回调地址并完成沙箱/小额真实支付验收。
 
