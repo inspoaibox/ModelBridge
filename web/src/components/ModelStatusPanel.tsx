@@ -81,7 +81,7 @@ export function ModelStatusPanel({ language, report, busy, message, refresh }: M
 
       {busy && !report ? <EmptyState icon={RefreshCw} label={t("consoleModelStatusLoading")} spinning /> : null}
       {!busy && groups.length === 0 ? <EmptyState icon={CircleOff} label={t("consoleModelStatusEmpty")} /> : null}
-      <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
         {groups.map((group) => <GroupHealthCard key={group.group_id} group={group} language={language} t={t} />)}
       </div>
     </div>
@@ -142,7 +142,7 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHovering(false);
       }}
     >
-      <Card className="overflow-hidden border-slate-200/90 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
+      <Card className="h-full overflow-hidden border-slate-200/90 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
         <CardContent className="p-0">
           <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 dark:border-slate-800/80 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <GroupHeading group={group} t={t} />
