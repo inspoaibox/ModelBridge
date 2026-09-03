@@ -160,7 +160,7 @@ export function TokenCreateModal({
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="token-name">{t("tokensName")}</Label>
                   <Input id="token-name" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder={t("tokensNamePlaceholder")} maxLength={100} />
@@ -168,6 +168,11 @@ export function TokenCreateModal({
                 <div className="space-y-2">
                   <Label htmlFor="token-expires-at">{t("tokensExpiresAt")}</Label>
                   <Input id="token-expires-at" type="datetime-local" value={form.expires_at} onChange={(event) => setForm((current) => ({ ...current, expires_at: event.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="token-spend-limit">{t("tokensSpendLimit")}</Label>
+                  <Input id="token-spend-limit" type="number" min="0" step="any" inputMode="decimal" value={form.spend_limit} onChange={(event) => setForm((current) => ({ ...current, spend_limit: event.target.value }))} placeholder="0" />
+                  <p className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">{t("tokensSpendLimitHint")}</p>
                 </div>
               </div>
 

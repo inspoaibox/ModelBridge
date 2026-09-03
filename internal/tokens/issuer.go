@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,24 @@ func (i *Issuer) IssueInGroup(
 	rateLimit any,
 	expiresAt *time.Time,
 	groupID string,
+) (IssuedToken, error) {
+	return i.IssueInGroupWithSpendLimit(ctx, tenantID, projectID, createdBy, name, scopes, allowedModels, allowedIPs, allowedDomains, rateLimit, expiresAt, groupID, "0")
+}
+
+func (i *Issuer) IssueInGroupWithSpendLimit(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	createdBy string,
+	name string,
+	scopes []string,
+	allowedModels []string,
+	allowedIPs []string,
+	allowedDomains []string,
+	rateLimit any,
+	expiresAt *time.Time,
+	groupID string,
+	spendLimit string,
 ) (IssuedToken, error) {
 	if i == nil || i.db == nil || i.hasher == nil {
 		return IssuedToken{}, errors.New("token issuer is not configured")
@@ -170,6 +189,10 @@ func (i *Issuer) IssueInGroup(
 	if err != nil {
 		return IssuedToken{}, err
 	}
+	normalizedSpendLimit, err := normalizeSpendLimit(spendLimit)
+	if err != nil {
+		return IssuedToken{}, err
+	}
 
 	var groupValue any
 	if strings.TrimSpace(groupID) != "" {
@@ -187,10 +210,10 @@ func (i *Issuer) IssueInGroup(
 		INSERT INTO api_tokens (
 			id, tenant_id, project_id, created_by, name, token_prefix,
 			 token_hash, scopes_json, allowed_models_json, allowed_ips_json,
-			allowed_domains_json, rate_limit_json, expires_at, group_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::uuid)
+			allowed_domains_json, rate_limit_json, expires_at, group_id, spend_limit
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::uuid, $15::numeric)
 	`, tokenID, tenantID, projectID, createdBy, name, prefix, digest,
-		scopesJSON, modelsJSON, ipsJSON, domainsJSON, rateLimitJSON, expiresAt, groupValue)
+		scopesJSON, modelsJSON, ipsJSON, domainsJSON, rateLimitJSON, expiresAt, groupValue, normalizedSpendLimit)
 	if err != nil {
 		return IssuedToken{}, err
 	}
@@ -201,6 +224,50 @@ func (i *Issuer) IssueInGroup(
 		Prefix:    prefix,
 		ExpiresAt: expiresAt,
 	}, nil
+}
+
+func normalizeSpendLimit(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "0", nil
+	}
+	if strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
+		return "", ErrTokenSpendLimitInvalid
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || (parts[0] == "" && (len(parts) == 1 || parts[1] == "")) {
+		return "", ErrTokenSpendLimitInvalid
+	}
+	for _, part := range parts {
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return "", ErrTokenSpendLimitInvalid
+			}
+		}
+	}
+	if len(parts) == 2 && len(parts[1]) > 30 {
+		return "", ErrTokenSpendLimitInvalid
+	}
+	integerPart := strings.TrimLeft(parts[0], "0")
+	if integerPart == "" {
+		integerPart = "0"
+	}
+	if len(integerPart) > 10 {
+		return "", ErrTokenSpendLimitInvalid
+	}
+	canonical := integerPart
+	if len(parts) == 2 && parts[1] != "" {
+		canonical += "." + parts[1]
+	}
+	rational, ok := new(big.Rat).SetString(canonical)
+	if !ok || rational.Sign() < 0 {
+		return "", ErrTokenSpendLimitInvalid
+	}
+	result := strings.TrimRight(strings.TrimRight(rational.FloatString(30), "0"), ".")
+	if result == "" {
+		return "0", nil
+	}
+	return result, nil
 }
 
 func normalizeRateLimit(value any) (map[string]int64, error) {

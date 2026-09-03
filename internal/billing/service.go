@@ -17,19 +17,20 @@ import (
 const defaultReservationTTL = 10 * time.Minute
 
 var (
-	ErrUnavailable          = errors.New("billing service is unavailable")
-	ErrInvalidRequest       = errors.New("invalid billing request")
-	ErrPriceNotConfigured   = errors.New("price is not configured")
-	ErrInsufficientBalance  = errors.New("insufficient balance")
-	ErrAccountNotFound      = errors.New("billing account is not found")
-	ErrDuplicateRequest     = errors.New("duplicate idempotency key")
-	ErrDuplicateTransaction = errors.New("duplicate billing transaction")
-	ErrReservationNotFound  = errors.New("billing reservation is not found")
-	ErrReservationClosed    = errors.New("billing reservation is already closed")
-	ErrSettlementPending    = errors.New("billing settlement is pending reconciliation")
-	ErrUsageUnavailable     = errors.New("billable usage is unavailable")
-	ErrModelNotFound        = errors.New("billing model is not found")
-	ErrInvalidPrice         = errors.New("invalid price")
+	ErrUnavailable            = errors.New("billing service is unavailable")
+	ErrInvalidRequest         = errors.New("invalid billing request")
+	ErrPriceNotConfigured     = errors.New("price is not configured")
+	ErrInsufficientBalance    = errors.New("insufficient balance")
+	ErrAccountNotFound        = errors.New("billing account is not found")
+	ErrDuplicateRequest       = errors.New("duplicate idempotency key")
+	ErrDuplicateTransaction   = errors.New("duplicate billing transaction")
+	ErrReservationNotFound    = errors.New("billing reservation is not found")
+	ErrReservationClosed      = errors.New("billing reservation is already closed")
+	ErrSettlementPending      = errors.New("billing settlement is pending reconciliation")
+	ErrUsageUnavailable       = errors.New("billable usage is unavailable")
+	ErrModelNotFound          = errors.New("billing model is not found")
+	ErrInvalidPrice           = errors.New("invalid price")
+	ErrTokenSpendLimitReached = errors.New("api token spend limit reached")
 )
 
 type Service interface {
@@ -1342,6 +1343,25 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		return Reservation{}, err
 	}
 
+	// Lock the token before calculating the reservation so concurrent
+	// requests cannot reserve more than its configured spend limit.
+	var tokenSpendLimit, tokenSpentAmount string
+	err = tx.QueryRowContext(ctx, `
+		SELECT spend_limit::text, spent_amount::text
+		FROM api_tokens
+		WHERE id = $1::uuid
+		  AND status = 'active'
+		  AND deleted_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > now())
+		FOR UPDATE
+	`, request.TokenID).Scan(&tokenSpendLimit, &tokenSpentAmount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Reservation{}, ErrInvalidRequest
+	}
+	if err != nil {
+		return Reservation{}, err
+	}
+
 	currency, err := tenantCurrency(ctx, tx, request.TenantID)
 	if err != nil {
 		return Reservation{}, err
@@ -1367,6 +1387,9 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	}
 	reservedAmount, err := multiplyAmount(ctx, tx, reservedCharge.Amount, request.GroupMultiplier)
 	if err != nil {
+		return Reservation{}, err
+	}
+	if err := checkTokenSpendLimit(ctx, tx, request.TokenID, tokenSpendLimit, tokenSpentAmount, reservedAmount); err != nil {
 		return Reservation{}, err
 	}
 	upstreamPrice, upstreamPriceBasis, err := resolveUpstreamPrice(
@@ -1515,6 +1538,36 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		Currency:       currency,
 		ReservedAmount: reservedAmount,
 	}, nil
+}
+
+func checkTokenSpendLimit(
+	ctx context.Context,
+	tx *sql.Tx,
+	tokenID, spendLimit, spentAmount, reservedAmount string,
+) error {
+	if isZeroAmount(spendLimit) {
+		return nil
+	}
+	var pendingAmount string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(br.reserved_amount), 0)::text
+		FROM billing_reservations br
+		JOIN model_requests mr ON mr.id = br.request_id
+		WHERE mr.token_id = $1::uuid
+		  AND br.status IN ('held', 'pending')
+	`, tokenID).Scan(&pendingAmount); err != nil {
+		return err
+	}
+	var allowed bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT $1::numeric + $2::numeric + $3::numeric <= $4::numeric
+	`, spentAmount, pendingAmount, reservedAmount, spendLimit).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrTokenSpendLimitReached
+	}
+	return nil
 }
 
 func (s *SQLService) StartFreeRequest(ctx context.Context, request Request) (string, error) {
@@ -2240,6 +2293,7 @@ func (s *SQLService) Settle(
 
 	var (
 		modelRequestID           string
+		tokenID                  string
 		accountID                string
 		reservedAmount           string
 		currency                 string
@@ -2253,7 +2307,7 @@ func (s *SQLService) Settle(
 		upstreamPriceSnapshotRaw []byte
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT br.request_id::text, br.account_id::text, br.reserved_amount::text,
+		SELECT br.request_id::text, mr.token_id::text, br.account_id::text, br.reserved_amount::text,
 		       br.currency, br.status, mr.price_version_id::text,
 		       mr.official_price_version_id::text,
 		       mr.group_multiplier::text, mr.upstream_cost_discount::text,
@@ -2264,7 +2318,7 @@ func (s *SQLService) Settle(
 		WHERE br.id = $1
 		FOR UPDATE
 	`, reservationID).Scan(
-		&modelRequestID, &accountID, &reservedAmount, &currency, &status, &priceID,
+		&modelRequestID, &tokenID, &accountID, &reservedAmount, &currency, &status, &priceID,
 		&officialPriceID, &groupMultiplier, &upstreamCostDiscount,
 		&estimatedUpstreamCost, &priceSnapshotRaw, &upstreamPriceSnapshotRaw,
 	)
@@ -2279,6 +2333,17 @@ func (s *SQLService) Settle(
 	}
 	if status != "held" && status != "pending" {
 		return ErrReservationClosed
+	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id::text
+		FROM api_tokens
+		WHERE id = $1::uuid
+		FOR UPDATE
+	`, tokenID).Scan(&tokenID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidRequest
+		}
+		return err
 	}
 	var requestPricingTier string
 	if len(priceSnapshotRaw) > 0 && string(priceSnapshotRaw) != "null" {
@@ -2402,6 +2467,13 @@ func (s *SQLService) Settle(
 		)
 	}
 	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE api_tokens
+		SET spent_amount = spent_amount + $2::numeric
+		WHERE id = $1::uuid
+	`, tokenID, actualAmount); err != nil {
 		return err
 	}
 	usageMetricsJSON := marshalJSON(usage.Metrics, []byte(`{}`))

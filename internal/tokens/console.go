@@ -25,6 +25,7 @@ type CreateRequest struct {
 	AllowedIPs     []string
 	AllowedDomains []string
 	RateLimit      any
+	SpendLimit     string
 	ExpiresAt      *time.Time
 	GroupID        string
 }
@@ -39,6 +40,7 @@ type UpdateRequest struct {
 	AllowedIPs     []string
 	AllowedDomains []string
 	RateLimit      any
+	SpendLimit     string
 	ExpiresAt      *time.Time
 	GroupID        string
 }
@@ -90,7 +92,7 @@ func (s *SQLConsoleService) Create(ctx context.Context, request CreateRequest) (
 	if !ids.Valid(request.TenantID) || !ids.Valid(request.ProjectID) || !ids.Valid(request.CreatedBy) || request.Name == "" || len(request.Name) > 100 {
 		return IssuedToken{}, ErrConsoleInvalid
 	}
-	return s.issuer.IssueInGroup(
+	return s.issuer.IssueInGroupWithSpendLimit(
 		ctx,
 		request.TenantID,
 		request.ProjectID,
@@ -103,6 +105,7 @@ func (s *SQLConsoleService) Create(ctx context.Context, request CreateRequest) (
 		request.RateLimit,
 		request.ExpiresAt,
 		request.GroupID,
+		request.SpendLimit,
 	)
 }
 
@@ -132,6 +135,10 @@ func (s *SQLConsoleService) UpdateOwned(ctx context.Context, request UpdateReque
 		return Summary{}, err
 	}
 	rateLimit, err := normalizeRateLimit(request.RateLimit)
+	if err != nil {
+		return Summary{}, err
+	}
+	spendLimit, err := normalizeSpendLimit(request.SpendLimit)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -185,15 +192,16 @@ func (s *SQLConsoleService) UpdateOwned(ctx context.Context, request UpdateReque
 		    allowed_ips_json = $7,
 		    allowed_domains_json = $8,
 		    rate_limit_json = $9,
-		    expires_at = $10,
-		    group_id = $11::uuid
+		    spend_limit = $10::numeric,
+		    expires_at = $11,
+		    group_id = $12::uuid
 		WHERE id = $1::uuid
 		  AND tenant_id = $2::uuid
 		  AND created_by = $3::uuid
 		  AND deleted_at IS NULL
 		  AND status IN ('active', 'disabled')
 	`, request.TokenID, request.TenantID, request.CreatedBy, request.ProjectID, request.Name,
-		modelsJSON, ipsJSON, domainsJSON, rateLimitJSON, request.ExpiresAt, request.GroupID)
+		modelsJSON, ipsJSON, domainsJSON, rateLimitJSON, spendLimit, request.ExpiresAt, request.GroupID)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -308,7 +316,7 @@ func listSummaries(ctx context.Context, db *sql.DB, predicate string, args ...an
 		       jsonb_array_length(COALESCE(t.allowed_ips_json, '[]'::jsonb)),
 		       jsonb_array_length(COALESCE(t.allowed_domains_json, '[]'::jsonb)),
 		       t.allowed_models_json, t.allowed_ips_json, t.allowed_domains_json,
-		       t.rate_limit_json, t.expires_at,
+		       t.rate_limit_json, t.spend_limit::text, t.spent_amount::text, t.expires_at,
 		       t.last_used_at, t.created_at, t.created_by::text
 		FROM api_tokens t
 		LEFT JOIN routing_groups rg ON rg.id = t.group_id AND rg.deleted_at IS NULL
@@ -332,6 +340,8 @@ func listSummaries(ctx context.Context, db *sql.DB, predicate string, args ...an
 			allowedIPsRaw      []byte
 			allowedDomainsRaw  []byte
 			rateLimitRaw       []byte
+			spendLimit         string
+			spentAmount        string
 		)
 		if err := rows.Scan(
 			&item.ID,
@@ -348,6 +358,8 @@ func listSummaries(ctx context.Context, db *sql.DB, predicate string, args ...an
 			&allowedIPsRaw,
 			&allowedDomainsRaw,
 			&rateLimitRaw,
+			&spendLimit,
+			&spentAmount,
 			&expiresAt,
 			&lastUsedAt,
 			&item.CreatedAt,
@@ -370,6 +382,8 @@ func listSummaries(ctx context.Context, db *sql.DB, predicate string, args ...an
 		_ = json.Unmarshal(allowedIPsRaw, &item.AllowedIPs)
 		_ = json.Unmarshal(allowedDomainsRaw, &item.AllowedDomains)
 		_ = json.Unmarshal(rateLimitRaw, &item.RateLimit)
+		item.SpendLimit = spendLimit
+		item.SpentAmount = spentAmount
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

@@ -3157,6 +3157,7 @@ type tokenCreatePayload struct {
 	AllowedIPs     []string       `json:"allowed_ips"`
 	AllowedDomains []string       `json:"allowed_domains"`
 	RateLimit      map[string]any `json:"rate_limit"`
+	SpendLimit     string         `json:"spend_limit"`
 	ExpiresAt      *time.Time     `json:"expires_at"`
 	GroupID        string         `json:"group_id"`
 }
@@ -3607,6 +3608,7 @@ func tokenConsoleCreateHandler(service tokens.ConsoleService) http.Handler {
 			AllowedIPs:     payload.AllowedIPs,
 			AllowedDomains: payload.AllowedDomains,
 			RateLimit:      payload.RateLimit,
+			SpendLimit:     payload.SpendLimit,
 			ExpiresAt:      payload.ExpiresAt,
 			GroupID:        payload.GroupID,
 		})
@@ -3653,6 +3655,7 @@ func tokenConsoleUpdateHandler(service tokens.ConsoleService) http.Handler {
 			AllowedIPs:     payload.AllowedIPs,
 			AllowedDomains: payload.AllowedDomains,
 			RateLimit:      payload.RateLimit,
+			SpendLimit:     payload.SpendLimit,
 			ExpiresAt:      payload.ExpiresAt,
 			GroupID:        payload.GroupID,
 		})
@@ -3733,6 +3736,8 @@ func writeTokenConsoleError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_REQUEST"})
 	case errors.Is(err, tokens.ErrNetworkAllowlistInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_NETWORK_ALLOWLIST"})
+	case errors.Is(err, tokens.ErrTokenSpendLimitInvalid):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_SPEND_LIMIT"})
 	case errors.Is(err, tokens.ErrTokenNotFound), errors.Is(err, tokens.ErrGroupNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TOKEN_RESOURCE_NOT_FOUND"})
 	case errors.Is(err, tokens.ErrConsoleUnavailable):
@@ -4249,6 +4254,8 @@ func writeModelDiscoveryError(w http.ResponseWriter, err error) {
 
 func writeRelayError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, billing.ErrTokenSpendLimitReached):
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "TOKEN_SPEND_LIMIT_REACHED"})
 	case errors.Is(err, billing.ErrInsufficientBalance):
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "INSUFFICIENT_BALANCE"})
 	case errors.Is(err, billing.ErrAccountNotFound):

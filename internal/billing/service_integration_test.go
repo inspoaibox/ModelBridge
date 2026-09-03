@@ -435,6 +435,58 @@ func TestSQLServiceReserveSettleAndRelease(t *testing.T) {
 	if err := service.SettleByModelRequestID(ctx, pendingReservation.ModelRequestID, Usage{InputTokens: 99, OutputTokens: 99}, "duplicate-reconciliation"); err != nil {
 		t.Fatalf("reconciling an already settled request should be idempotent: %v", err)
 	}
+
+	// A token quota includes the amount reserved by the current request and
+	// accumulates the final customer charge after settlement.
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE api_tokens
+		SET spend_limit = 0.07, spent_amount = 0
+		WHERE id = $1
+	`, tokenID); err != nil {
+		t.Fatal(err)
+	}
+	quotaReservation, err := service.Reserve(ctx, Request{
+		RequestID:             "billing-test-request-quota-" + testSuffix,
+		IdempotencyKey:        "billing-test-idempotency-quota-" + testSuffix,
+		TenantID:              tenantID,
+		ProjectID:             projectID,
+		TokenID:               tokenID,
+		Model:                 modelName,
+		Provider:              "openai",
+		ChannelID:             channelID,
+		GroupMultiplier:       "2",
+		EstimatedInputTokens:  1,
+		EstimatedOutputTokens: 1,
+	})
+	if err != nil {
+		t.Fatalf("request within token quota should reserve: %v", err)
+	}
+	if err := service.Settle(ctx, quotaReservation.ID, Usage{InputTokens: 1, OutputTokens: 1}, "provider-request-quota"); err != nil {
+		t.Fatalf("quota request should settle: %v", err)
+	}
+	var spentAmount string
+	if err := conn.QueryRowContext(ctx, `SELECT spent_amount::text FROM api_tokens WHERE id = $1`, tokenID).Scan(&spentAmount); err != nil {
+		t.Fatal(err)
+	}
+	if normalizeDecimal(spentAmount) != "0.06" {
+		t.Fatalf("expected token spent amount 0.06, got %s", spentAmount)
+	}
+	_, err = service.Reserve(ctx, Request{
+		RequestID:             "billing-test-request-quota-blocked-" + testSuffix,
+		IdempotencyKey:        "billing-test-idempotency-quota-blocked-" + testSuffix,
+		TenantID:              tenantID,
+		ProjectID:             projectID,
+		TokenID:               tokenID,
+		Model:                 modelName,
+		Provider:              "openai",
+		ChannelID:             channelID,
+		GroupMultiplier:       "2",
+		EstimatedInputTokens:  1,
+		EstimatedOutputTokens: 1,
+	})
+	if !errors.Is(err, ErrTokenSpendLimitReached) {
+		t.Fatalf("expected token spend limit error, got %v", err)
+	}
 }
 
 func newTestID(t *testing.T) string {

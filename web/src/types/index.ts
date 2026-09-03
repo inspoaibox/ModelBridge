@@ -451,6 +451,8 @@ export interface TokenSummary {
   allowed_ips?: string[];
   allowed_domains?: string[];
   rate_limit?: Record<string, number>;
+  spend_limit: string;
+  spent_amount: string;
   status: "active" | "disabled" | "revoked" | "expired";
   expires_at?: string;
   last_used_at?: string;
@@ -465,6 +467,7 @@ export interface TokenCreateFormState {
   group_id: string;
   allowed_ips: string;
   allowed_domains: string;
+  spend_limit: string;
 }
 
 export interface TokenGroupOption {

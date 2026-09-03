@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	ErrAdminUnavailable = errors.New("token admin service is unavailable")
-	ErrTokenNotFound    = errors.New("api token is not found")
-	ErrGroupNotFound    = errors.New("token group is not found")
-	ErrAdminInvalid     = errors.New("invalid token admin request")
-	ErrTokenRateLimited = errors.New("api token rate limit exceeded")
+	ErrAdminUnavailable       = errors.New("token admin service is unavailable")
+	ErrTokenNotFound          = errors.New("api token is not found")
+	ErrGroupNotFound          = errors.New("token group is not found")
+	ErrAdminInvalid           = errors.New("invalid token admin request")
+	ErrTokenRateLimited       = errors.New("api token rate limit exceeded")
+	ErrTokenSpendLimitInvalid = errors.New("invalid api token spend limit")
 )
 
 type Summary struct {
@@ -35,6 +36,8 @@ type Summary struct {
 	AllowedIPs              []string         `json:"allowed_ips,omitempty"`
 	AllowedDomains          []string         `json:"allowed_domains,omitempty"`
 	RateLimit               map[string]int64 `json:"rate_limit,omitempty"`
+	SpendLimit              string           `json:"spend_limit"`
+	SpentAmount             string           `json:"spent_amount"`
 	ExpiresAt               *time.Time       `json:"expires_at,omitempty"`
 	LastUsedAt              *time.Time       `json:"last_used_at,omitempty"`
 	CreatedAt               time.Time        `json:"created_at"`

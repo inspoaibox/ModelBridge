@@ -381,6 +381,7 @@ function defaultTokenCreateForm(): TokenCreateFormState {
     group_id: "",
     allowed_ips: "",
     allowed_domains: "",
+    spend_limit: "0",
   };
 }
 
@@ -3264,6 +3265,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       group_id: token.group_id || "",
       allowed_ips: (token.allowed_ips || []).join("\n"),
       allowed_domains: (token.allowed_domains || []).join("\n"),
+      spend_limit: token.spend_limit || "0",
     });
     setTokenCreateMessage({ kind: "", text: "" });
     setIssuedToken(null);
@@ -3300,6 +3302,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         rate_limit: editingToken?.rate_limit || {},
         allowed_ips: parseTokenList(tokenCreateForm.allowed_ips),
         allowed_domains: parseTokenList(tokenCreateForm.allowed_domains),
+        spend_limit: tokenCreateForm.spend_limit.trim() || "0",
       };
       if (tokenCreateForm.expires_at) {
         payload.expires_at = new Date(tokenCreateForm.expires_at).toISOString();
@@ -3328,8 +3331,14 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         setTokenCreateMessage({ kind: "success", text: t("tokensCreateSuccess") });
         await refreshConsoleTokens(false);
       }
-    } catch {
-      setTokenCreateMessage({ kind: "error", text: editingToken ? t("tokensSaveFailed") : t("tokensCreateValidation") });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      const message = code === "INVALID_TOKEN_SPEND_LIMIT"
+        ? t("tokensSpendLimitInvalid")
+        : editingToken
+          ? t("tokensSaveFailed")
+          : t("tokensCreateValidation");
+      setTokenCreateMessage({ kind: "error", text: message });
     } finally {
       setTokenCreateBusy(false);
     }

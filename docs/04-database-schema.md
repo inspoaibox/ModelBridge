@@ -370,6 +370,8 @@ created_at
 
 `api_token_rate_windows`、`api_token_concurrency` 分别保存 Token 的 RPM/TPM/并发窗口。管理员 Step-up 失败复用 `login_throttles` 的独立哈希命名空间，不保存 TOTP 码；达到阈值后短时锁定。
 
+`api_tokens.spend_limit` 是单个 Token 的客户侧累计消费上限，`0` 表示不限制；`api_tokens.spent_amount` 是已成功结算的累计客户侧费用。付费请求预留时会锁定 Token 行并合并未完成预留金额进行额度判断，结算时在同一事务中累加 `spent_amount`。失败释放的预留不会累加，额度耗尽后的新请求返回 `TOKEN_SPEND_LIMIT_REACHED`。
+
 ### `ledger_accounts`
 
 ```text

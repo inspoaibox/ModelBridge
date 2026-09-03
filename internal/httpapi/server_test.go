@@ -1381,22 +1381,22 @@ func TestConsoleTokenRoutesAreTenantAndOwnerScoped(t *testing.T) {
 		t.Fatalf("expected owner-scoped token list, got %d: %s", listRec.Code, listRec.Body.String())
 	}
 
-	createReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens", strings.NewReader(`{"project_id":"project-1","name":"local-dev","group_id":"group-1","allowed_ips":["203.0.113.10"],"allowed_domains":["app.example.com"]}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens", strings.NewReader(`{"project_id":"project-1","name":"local-dev","group_id":"group-1","spend_limit":"500","allowed_ips":["203.0.113.10"],"allowed_domains":["app.example.com"]}`))
 	createReq.Header.Set("Authorization", "Bearer console-user")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
-	if createRec.Code != http.StatusCreated || service.createdBy != "user-1" || service.createdProject != "project-1" || service.createdGroup != "group-1" || len(service.createdIPs) != 1 || service.createdIPs[0] != "203.0.113.10" || len(service.createdDomains) != 1 || service.createdDomains[0] != "app.example.com" {
+	if createRec.Code != http.StatusCreated || service.createdBy != "user-1" || service.createdProject != "project-1" || service.createdGroup != "group-1" || service.createdSpendLimit != "500" || len(service.createdIPs) != 1 || service.createdIPs[0] != "203.0.113.10" || len(service.createdDomains) != 1 || service.createdDomains[0] != "app.example.com" {
 		t.Fatalf("expected console token create 201, got %d: %s", createRec.Code, createRec.Body.String())
 	}
 	if !strings.Contains(createRec.Body.String(), `"token":"sk-test-once"`) {
 		t.Fatalf("expected one-time token in create response: %s", createRec.Body.String())
 	}
 
-	updateReq := httptest.NewRequest(http.MethodPut, "/console/v1/tenants/tenant-1/tokens/token-1", strings.NewReader(`{"project_id":"project-1","name":"edited-token","group_id":"group-2","allowed_ips":["198.51.100.10"],"allowed_domains":["client.example.com"],"expires_at":"2030-01-01T00:00:00Z"}`))
+	updateReq := httptest.NewRequest(http.MethodPut, "/console/v1/tenants/tenant-1/tokens/token-1", strings.NewReader(`{"project_id":"project-1","name":"edited-token","group_id":"group-2","spend_limit":"250.5","allowed_ips":["198.51.100.10"],"allowed_domains":["client.example.com"],"expires_at":"2030-01-01T00:00:00Z"}`))
 	updateReq.Header.Set("Authorization", "Bearer console-user")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
-	if updateRec.Code != http.StatusOK || service.updated.TokenID != "token-1" || service.updated.TenantID != "tenant-1" || service.updated.CreatedBy != "user-1" || service.updated.Name != "edited-token" || service.updated.GroupID != "group-2" || len(service.updated.AllowedIPs) != 1 || service.updated.AllowedIPs[0] != "198.51.100.10" {
+	if updateRec.Code != http.StatusOK || service.updated.TokenID != "token-1" || service.updated.TenantID != "tenant-1" || service.updated.CreatedBy != "user-1" || service.updated.Name != "edited-token" || service.updated.GroupID != "group-2" || service.updated.SpendLimit != "250.5" || len(service.updated.AllowedIPs) != 1 || service.updated.AllowedIPs[0] != "198.51.100.10" {
 		t.Fatalf("expected owner-scoped token update 200, got %d: %s (%#v)", updateRec.Code, updateRec.Body.String(), service.updated)
 	}
 
@@ -2526,22 +2526,23 @@ type fakeTokenAdminService struct {
 }
 
 type fakeTokenConsoleService struct {
-	listTenant      string
-	listOwner       string
-	createdBy       string
-	createdProject  string
-	createdGroup    string
-	createdIPs      []string
-	createdDomains  []string
-	updated         tokens.UpdateRequest
-	status          string
-	statusTokenID   string
-	statusTenantID  string
-	statusOwnerID   string
-	deleted         bool
-	deletedTokenID  string
-	deletedTenantID string
-	deletedOwnerID  string
+	listTenant        string
+	listOwner         string
+	createdBy         string
+	createdProject    string
+	createdGroup      string
+	createdSpendLimit string
+	createdIPs        []string
+	createdDomains    []string
+	updated           tokens.UpdateRequest
+	status            string
+	statusTokenID     string
+	statusTenantID    string
+	statusOwnerID     string
+	deleted           bool
+	deletedTokenID    string
+	deletedTenantID   string
+	deletedOwnerID    string
 }
 
 type fakeModelCatalog struct{}
@@ -2579,6 +2580,7 @@ func (s *fakeTokenConsoleService) Create(_ context.Context, request tokens.Creat
 	s.createdBy = request.CreatedBy
 	s.createdProject = request.ProjectID
 	s.createdGroup = request.GroupID
+	s.createdSpendLimit = request.SpendLimit
 	s.createdIPs = request.AllowedIPs
 	s.createdDomains = request.AllowedDomains
 	return tokens.IssuedToken{ID: "token-1", Plaintext: "sk-test-once", Prefix: "sk-test"}, nil
