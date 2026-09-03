@@ -108,11 +108,12 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		           rg.updated_at,
 		           m.id AS model_id,
 		           m.model_name,
-		           m.provider
+		           m.provider,
+		           m.status AS model_status
 		    FROM model_monitor_configs mmc
 		    JOIN routing_groups rg ON rg.id = mmc.group_id
 		      AND rg.deleted_at IS NULL
-		    JOIN models m ON m.status = 'active'
+		    JOIN models m ON true
 		    WHERE mmc.enabled = true
 		      AND (rg.status = 'active' OR EXISTS (
 		          SELECT 1
@@ -130,7 +131,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		            AND (tok.expires_at IS NULL OR tok.expires_at > now())
 		      ))
 		      AND (
-		          (mmc.selection_mode = 'all' AND EXISTS (
+		          (mmc.selection_mode = 'all' AND m.status = 'active' AND EXISTS (
 		              SELECT 1
 		              FROM routing_group_channels rgc0
 		              JOIN channels c0 ON c0.id = rgc0.channel_id
@@ -153,7 +154,8 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		       mm.recent_request_limit,
 		       mm.model_id::text, mm.model_name, mm.provider,
 		       COUNT(cm.model_id)::int,
-		       COUNT(cm.model_id) FILTER (WHERE cm.enabled = true
+		       COUNT(cm.model_id) FILTER (WHERE mm.model_status = 'active'
+		           AND cm.enabled = true
 		           AND c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
@@ -209,7 +211,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		GROUP BY mm.group_id, mm.code, mm.name, mm.status, mm.multiplier,
 		         mm.rpm_limit, mm.billing_type, mm.metering_mode, mm.priority,
 		         mm.updated_at, mm.recent_request_limit, mm.model_id,
-		         mm.model_name, mm.provider
+		         mm.model_name, mm.provider, mm.model_status
 		ORDER BY mm.priority DESC, mm.code ASC, mm.provider ASC, mm.model_name ASC
 		`, tenantID)
 	if err != nil {
@@ -384,14 +386,14 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			       mmc.last_probe_status, mmc.last_probe_error,
 			       rg.id AS group_id, rg.code, rg.name, rg.status,
 			       rg.multiplier, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.updated_at,
-			       m.id AS model_id, m.model_name, m.provider
+			       m.id AS model_id, m.model_name, m.provider, m.status AS model_status
 			FROM model_monitor_configs mmc
 			JOIN routing_groups rg ON rg.id = mmc.group_id
 			  AND rg.deleted_at IS NULL
-			JOIN models m ON m.status = 'active'
+			JOIN models m ON true
 			WHERE mmc.enabled = true
 			  AND (
-			      (mmc.selection_mode = 'all' AND EXISTS (
+			      (mmc.selection_mode = 'all' AND m.status = 'active' AND EXISTS (
 			          SELECT 1
 			          FROM routing_group_channels rgc0
 			          JOIN channels c0 ON c0.id = rgc0.channel_id
@@ -416,7 +418,8 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.updated_at,
 		       mm.model_name, mm.provider,
 		       COUNT(cm.model_id)::int,
-		       COUNT(cm.model_id) FILTER (WHERE cm.enabled = true
+		       COUNT(cm.model_id) FILTER (WHERE mm.model_status = 'active'
+		           AND cm.enabled = true
 		           AND c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
@@ -474,7 +477,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		         mm.last_probe_finished_at, mm.last_probe_status,
 		         mm.last_probe_error, mm.group_id, mm.code, mm.name,
 		         mm.status, mm.multiplier, mm.rpm_limit, mm.billing_type, mm.metering_mode,
-		         mm.updated_at, mm.model_id, mm.model_name, mm.provider
+		         mm.updated_at, mm.model_id, mm.model_name, mm.provider, mm.model_status
 		ORDER BY mm.code ASC, mm.provider ASC, mm.model_name ASC
 	`)
 	if err != nil {

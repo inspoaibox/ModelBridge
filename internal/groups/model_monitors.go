@@ -24,7 +24,7 @@ func (s *SQLService) ListAdminModelMonitors(ctx context.Context) ([]ModelMonitor
 		       COALESCE((
 		           SELECT jsonb_agg(DISTINCT m.model_name ORDER BY m.model_name)
 		           FROM model_monitor_config_models cmm
-		           JOIN models m ON m.id = cmm.model_id AND m.status = 'active'
+		           JOIN models m ON m.id = cmm.model_id
 		           WHERE cmm.config_id = mmc.id
 		       ), '[]'::jsonb),
 		       COALESCE((
@@ -228,7 +228,7 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 
 					SELECT cmm.model_id
 					FROM model_monitor_config_models cmm
-					JOIN models m ON m.id = cmm.model_id AND m.status = 'active'
+					JOIN models m ON m.id = cmm.model_id
 					WHERE cmm.config_id = $1::uuid
 					  AND $4::boolean
 					  AND m.model_name = $3
