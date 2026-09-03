@@ -42,6 +42,30 @@ func TestGroupRouteStatus(t *testing.T) {
 	}
 }
 
+func TestRouteAvailability(t *testing.T) {
+	tests := []struct {
+		name                         string
+		totalRoutes, availableRoutes int
+		want                         float64
+	}{
+		{name: "all available", totalRoutes: 2, availableRoutes: 2, want: 100},
+		{name: "half available", totalRoutes: 4, availableRoutes: 2, want: 50},
+		{name: "none available", totalRoutes: 2, availableRoutes: 0, want: 0},
+		{name: "clamp over total", totalRoutes: 2, availableRoutes: 3, want: 100},
+		{name: "no routes", totalRoutes: 0, availableRoutes: 0, want: 0},
+	}
+	for _, item := range tests {
+		t.Run(item.name, func(t *testing.T) {
+			if got := routeAvailability(StatusActive, item.totalRoutes, item.availableRoutes); got != item.want {
+				t.Fatalf("route availability = %v, want %v", got, item.want)
+			}
+		})
+	}
+	if got := routeAvailability(StatusDisabled, 2, 2); got != 0 {
+		t.Fatalf("disabled group route availability = %v, want 0", got)
+	}
+}
+
 func TestModelMonitorRecentRequestLimits(t *testing.T) {
 	for _, limit := range []int{30, 60, 120} {
 		request := ModelMonitorMutation{

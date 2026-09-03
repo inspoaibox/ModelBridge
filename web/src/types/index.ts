@@ -355,6 +355,9 @@ export interface ModelStatus {
   last_success_at?: string;
   last_failure_at?: string;
   last_latency_ms: number;
+  availability_realtime: number;
+  availability_24h: number;
+  request_count_24h: number;
   availability_7d: number;
   request_count_7d: number;
   recent_statuses?: string[];

@@ -136,18 +136,12 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
 
           <div className="grid grid-cols-2 gap-px bg-slate-100 dark:bg-slate-800">
             <MetricCell icon={Gauge} label={t("consoleModelStatusLatency")} value={primary.last_latency_ms > 0 ? formatLatency(primary.last_latency_ms) : "-"} />
-            <MetricCell icon={Server} label={t("consoleModelStatusRoutes")} value={`${primary.available_routes} / ${primary.total_routes}`} />
-            <MetricCell
-              icon={HeartPulse}
-              label={`${t("consoleModelStatusHealth")} ${t("consoleModelStatusLast7Days")}`}
-              value={primary.request_count_7d > 0 ? `${formatPercent(primary.availability_7d)}%` : "-"}
-              valueClassName={healthTone(primary)}
-            />
             <MetricCell
               icon={Activity}
               label={t("consoleModelStatusRecentRequests")}
               value={primary.recent_statuses?.length ? `${primary.recent_statuses.length} / ${group.recent_request_limit || 60}` : "-"}
             />
+            <HealthMetricCell model={primary} t={t} />
           </div>
 
           <div className="px-4 py-3.5 sm:px-5">
@@ -220,6 +214,26 @@ function MetricCell({
   );
 }
 
+function HealthMetricCell({ model, t }: { model: ModelStatus; t: (key: TranslationKey) => string }) {
+  return (
+    <div className="col-span-2 min-w-0 bg-white px-3 py-2.5 dark:bg-slate-900/70 sm:px-4">
+      <div className="flex min-h-8 items-start gap-1.5 text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+        <HeartPulse className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{t("consoleModelStatusHealth")}</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-sm font-semibold tabular-nums">
+        <HealthValue label={t("consoleModelStatusRealtime")} value={formatRealtimeAvailability(model)} tone={realtimeHealthTone(model)} />
+        <HealthValue label={t("consoleModelStatusLast24Hours")} value={formatWindowAvailability(model.request_count_24h, model.availability_24h)} tone={windowHealthTone(model.request_count_24h, model.availability_24h)} />
+        <HealthValue label={t("consoleModelStatusLast7Days")} value={formatWindowAvailability(model.request_count_7d, model.availability_7d)} tone={windowHealthTone(model.request_count_7d, model.availability_7d)} />
+      </div>
+    </div>
+  );
+}
+
+function HealthValue({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return <span className={cn("whitespace-nowrap", tone)}><span className="mr-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">{label}</span>{value}</span>;
+}
+
 function RequestHistory({ statuses, t }: { statuses: string[]; t: (key: TranslationKey) => string }) {
   if (statuses.length === 0) return <div className="mt-2 flex h-8 items-center justify-center rounded-md border border-dashed border-slate-200 text-xs text-slate-400 dark:border-slate-800 dark:text-slate-500">{t("consoleModelStatusNoData")}</div>;
   return <div className="mt-2 grid h-8 grid-flow-col auto-cols-fr items-end gap-0.5" title={t("consoleModelStatusRecentRequestsHint")}>{statuses.map((status, index) => <span key={`${status}:${index}`} className={cn("min-w-0 rounded-sm", requestStatusTone(status), requestStatusHeight(status, index))} title={status} />)}</div>;
@@ -246,11 +260,30 @@ function providerLabel(provider: string) {
   return { initials: normalized.slice(0, 1) || "AI", tone: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300" };
 }
 
-function healthTone(model: ModelStatus) {
-  if (model.request_count_7d === 0) return "text-slate-500 dark:text-slate-400";
-  if (model.availability_7d >= 99) return "text-emerald-600 dark:text-emerald-400";
-  if (model.availability_7d >= 95) return "text-amber-600 dark:text-amber-400";
+function formatRealtimeAvailability(model: ModelStatus) {
+  return model.total_routes > 0 && Number.isFinite(model.availability_realtime) ? `${formatHealthPercent(model.availability_realtime)}%` : "-";
+}
+
+function formatWindowAvailability(requestCount: number, availability: number) {
+  return requestCount > 0 && Number.isFinite(availability) ? `${formatHealthPercent(availability)}%` : "-";
+}
+
+function realtimeHealthTone(model: ModelStatus) {
+  if (model.total_routes === 0 || !Number.isFinite(model.availability_realtime)) return "text-slate-500 dark:text-slate-400";
+  if (model.availability_realtime >= 99) return "text-emerald-600 dark:text-emerald-400";
+  if (model.availability_realtime >= 50) return "text-amber-600 dark:text-amber-400";
   return "text-rose-600 dark:text-rose-400";
+}
+
+function windowHealthTone(requestCount: number, availability: number) {
+  if (requestCount === 0 || !Number.isFinite(availability)) return "text-slate-500 dark:text-slate-400";
+  if (availability >= 99) return "text-emerald-600 dark:text-emerald-400";
+  if (availability >= 95) return "text-amber-600 dark:text-amber-400";
+  return "text-rose-600 dark:text-rose-400";
+}
+
+function formatHealthPercent(value: number) {
+  return value.toFixed(1);
 }
 
 function StatusBadge({ status, t }: { status: ModelRouteStatus; t: (key: TranslationKey) => string }) {
@@ -276,8 +309,4 @@ function formatTime(value: string | undefined, language: Language) {
 function formatLatency(value: number) {
   if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 2)} s`;
   return `${value} ms`;
-}
-
-function formatPercent(value: number) {
-  return value.toFixed(value >= 99.95 ? 2 : value >= 99 ? 1 : 2).replace(/\.?0+$/, "");
 }

@@ -14,22 +14,25 @@ import (
 // derived from channel routing state; upstream credentials and endpoints are
 // intentionally excluded.
 type ModelStatus struct {
-	Model               string     `json:"model"`
-	Provider            string     `json:"provider"`
-	Status              string     `json:"status"`
-	TotalRoutes         int        `json:"total_routes"`
-	AvailableRoutes     int        `json:"available_routes"`
-	ObservedRoutes      int        `json:"observed_routes"`
-	ConsecutiveFailures int        `json:"consecutive_failures"`
-	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
-	LastFailureAt       *time.Time `json:"last_failure_at,omitempty"`
-	LastLatencyMS       int64      `json:"last_latency_ms"`
-	Availability7d      float64    `json:"availability_7d"`
-	RequestCount7d      int        `json:"request_count_7d"`
-	RecentStatuses      []string   `json:"recent_statuses,omitempty"`
-	LastRequestAt       *time.Time `json:"last_request_at,omitempty"`
-	LastRequestStatus   string     `json:"last_request_status,omitempty"`
-	LastFailureReason   string     `json:"last_failure_reason,omitempty"`
+	Model                string     `json:"model"`
+	Provider             string     `json:"provider"`
+	Status               string     `json:"status"`
+	TotalRoutes          int        `json:"total_routes"`
+	AvailableRoutes      int        `json:"available_routes"`
+	ObservedRoutes       int        `json:"observed_routes"`
+	ConsecutiveFailures  int        `json:"consecutive_failures"`
+	LastSuccessAt        *time.Time `json:"last_success_at,omitempty"`
+	LastFailureAt        *time.Time `json:"last_failure_at,omitempty"`
+	LastLatencyMS        int64      `json:"last_latency_ms"`
+	AvailabilityRealtime float64    `json:"availability_realtime"`
+	Availability24h      float64    `json:"availability_24h"`
+	RequestCount24h      int        `json:"request_count_24h"`
+	Availability7d       float64    `json:"availability_7d"`
+	RequestCount7d       int        `json:"request_count_7d"`
+	RecentStatuses       []string   `json:"recent_statuses,omitempty"`
+	LastRequestAt        *time.Time `json:"last_request_at,omitempty"`
+	LastRequestStatus    string     `json:"last_request_status,omitempty"`
+	LastFailureReason    string     `json:"last_failure_reason,omitempty"`
 }
 
 type ModelStatusGroup struct {
@@ -172,6 +175,16 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		           FROM model_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
+		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
+		       COALESCE((SELECT COUNT(*)::int
+		           FROM model_requests mr
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
+		             AND mr.status IN ('settled', 'settlement_pending')
+		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
+		       COALESCE((SELECT COUNT(*)::int
+		           FROM model_requests mr
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
+		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
 		           FROM model_requests mr
@@ -230,24 +243,25 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 	byID := make(map[string]groupIndex)
 	for rows.Next() {
 		var (
-			group                                                        ModelStatusGroup
-			groupStatus                                                  string
-			modelID                                                      sql.NullString
-			modelName, provider                                          sql.NullString
-			totalRoutes, availableRoutes, degradedRoutes, observedRoutes int
-			failures, requestCount7d, successfulCount7d                  int
-			lastSuccess, lastFailure, lastRequestAt                      sql.NullTime
-			lastLatency                                                  sql.NullInt64
-			lastRequestStatus, lastFailureReason                         sql.NullString
-			primaryModel                                                 sql.NullString
-			recentStatusesRaw                                            []byte
+			group                                                                            ModelStatusGroup
+			groupStatus                                                                      string
+			modelID                                                                          sql.NullString
+			modelName, provider                                                              sql.NullString
+			totalRoutes, availableRoutes, degradedRoutes, observedRoutes                     int
+			failures, requestCount24h, successfulCount24h, requestCount7d, successfulCount7d int
+			lastSuccess, lastFailure, lastRequestAt                                          sql.NullTime
+			lastLatency                                                                      sql.NullInt64
+			lastRequestStatus, lastFailureReason                                             sql.NullString
+			primaryModel                                                                     sql.NullString
+			recentStatusesRaw                                                                []byte
 		)
 		if err := rows.Scan(
 			&group.ID, &group.Code, &group.Name, &groupStatus,
 			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.MeteringMode, &group.UpdatedAt,
 			&group.RecentRequestLimit, &primaryModel, &modelID, &modelName, &provider,
 			&totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
-			&failures, &lastSuccess, &lastFailure, &requestCount7d, &successfulCount7d,
+			&failures, &lastSuccess, &lastFailure, &requestCount24h, &successfulCount24h,
+			&requestCount7d, &successfulCount7d,
 			&recentStatusesRaw, &lastLatency, &lastRequestStatus, &lastRequestAt, &lastFailureReason,
 		); err != nil {
 			return ModelStatusReport{}, err
@@ -274,7 +288,12 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 			ObservedRoutes:      observedRoutes,
 			ConsecutiveFailures: failures,
 			Status:              modelRouteStatus(group.GroupStatus, totalRoutes, availableRoutes, degradedRoutes, observedRoutes),
+			RequestCount24h:     requestCount24h,
 			RequestCount7d:      requestCount7d,
+		}
+		model.AvailabilityRealtime = routeAvailability(group.GroupStatus, totalRoutes, availableRoutes)
+		if requestCount24h > 0 {
+			model.Availability24h = float64(successfulCount24h) / float64(requestCount24h) * 100
 		}
 		if requestCount7d > 0 {
 			model.Availability7d = float64(successfulCount7d) / float64(requestCount7d) * 100
@@ -312,6 +331,19 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		groups[index].Status = groupRouteStatus(groups[index].GroupStatus, groups[index].Models)
 	}
 	return ModelStatusReport{UpdatedAt: time.Now().UTC(), Groups: groups}, nil
+}
+
+func routeAvailability(groupStatus string, totalRoutes, availableRoutes int) float64 {
+	if strings.TrimSpace(groupStatus) != StatusActive || totalRoutes <= 0 {
+		return 0
+	}
+	if availableRoutes < 0 {
+		availableRoutes = 0
+	}
+	if availableRoutes > totalRoutes {
+		availableRoutes = totalRoutes
+	}
+	return float64(availableRoutes) / float64(totalRoutes) * 100
 }
 
 func modelRouteStatus(groupStatus string, totalRoutes, availableRoutes, degradedRoutes, observedRoutes int) string {
@@ -442,6 +474,16 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		           FROM model_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
+		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
+		       COALESCE((SELECT COUNT(*)::int
+		           FROM model_requests mr
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
+		             AND mr.status IN ('settled', 'settlement_pending')
+		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
+		       COALESCE((SELECT COUNT(*)::int
+		           FROM model_requests mr
+		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
+		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
 		           FROM model_requests mr
@@ -499,20 +541,20 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 	byID := make(map[string]int)
 	for rows.Next() {
 		var (
-			group                                                        ModelStatusGroup
-			monitorID, monitorName, selectionMode                        string
-			monitorMode, lastProbeStatus, lastProbeError                 string
-			probeInterval, recentRequestLimit                            int
-			lastProbeStarted, lastProbeFinished                          sql.NullTime
-			groupStatus                                                  string
-			modelName, provider                                          sql.NullString
-			primaryModel                                                 sql.NullString
-			totalRoutes, availableRoutes, degradedRoutes, observedRoutes int
-			failures, requestCount7d, successfulCount7d                  int
-			lastSuccess, lastFailure, lastRequestAt                      sql.NullTime
-			lastLatency                                                  sql.NullInt64
-			lastRequestStatus, lastFailureReason                         sql.NullString
-			recentStatusesRaw                                            []byte
+			group                                                                            ModelStatusGroup
+			monitorID, monitorName, selectionMode                                            string
+			monitorMode, lastProbeStatus, lastProbeError                                     string
+			probeInterval, recentRequestLimit                                                int
+			lastProbeStarted, lastProbeFinished                                              sql.NullTime
+			groupStatus                                                                      string
+			modelName, provider                                                              sql.NullString
+			primaryModel                                                                     sql.NullString
+			totalRoutes, availableRoutes, degradedRoutes, observedRoutes                     int
+			failures, requestCount24h, successfulCount24h, requestCount7d, successfulCount7d int
+			lastSuccess, lastFailure, lastRequestAt                                          sql.NullTime
+			lastLatency                                                                      sql.NullInt64
+			lastRequestStatus, lastFailureReason                                             sql.NullString
+			recentStatusesRaw                                                                []byte
 		)
 		if err := rows.Scan(
 			&monitorID, &monitorName, &selectionMode, &monitorMode,
@@ -521,7 +563,7 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			&group.ID, &group.Code, &group.Name, &groupStatus,
 			&group.Multiplier, &group.RPMLimit, &group.BillingType, &group.MeteringMode, &group.UpdatedAt,
 			&primaryModel, &modelName, &provider, &totalRoutes, &availableRoutes, &degradedRoutes, &observedRoutes,
-			&failures, &lastSuccess, &lastFailure, &requestCount7d,
+			&failures, &lastSuccess, &lastFailure, &requestCount24h, &successfulCount24h, &requestCount7d,
 			&successfulCount7d, &recentStatusesRaw, &lastLatency,
 			&lastRequestStatus, &lastRequestAt, &lastFailureReason,
 		); err != nil {
@@ -565,7 +607,12 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			ObservedRoutes:      observedRoutes,
 			ConsecutiveFailures: failures,
 			Status:              modelRouteStatus(group.GroupStatus, totalRoutes, availableRoutes, degradedRoutes, observedRoutes),
+			RequestCount24h:     requestCount24h,
 			RequestCount7d:      requestCount7d,
+		}
+		model.AvailabilityRealtime = routeAvailability(group.GroupStatus, totalRoutes, availableRoutes)
+		if requestCount24h > 0 {
+			model.Availability24h = float64(successfulCount24h) / float64(requestCount24h) * 100
 		}
 		if requestCount7d > 0 {
 			model.Availability7d = float64(successfulCount7d) / float64(requestCount7d) * 100
