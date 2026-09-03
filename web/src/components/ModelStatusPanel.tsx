@@ -167,9 +167,20 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
             </div>
           </div>
 
-          <div className="grid gap-px bg-slate-100 dark:bg-slate-800 sm:grid-cols-2">
+          <div className="grid gap-px bg-slate-100 dark:bg-slate-800 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCell icon={Gauge} label={t("consoleModelStatusLatency")} value={primary.last_latency_ms > 0 ? formatLatency(primary.last_latency_ms) : "-"} />
             <MetricCell icon={Server} label={t("consoleModelStatusRoutes")} value={`${primary.available_routes} / ${primary.total_routes}`} />
+            <MetricCell
+              icon={HeartPulse}
+              label={`${t("consoleModelStatusHealth")} ${t("consoleModelStatusLast7Days")}`}
+              value={primary.request_count_7d > 0 ? `${formatPercent(primary.availability_7d)}%` : "-"}
+              valueClassName={healthTone(primary)}
+            />
+            <MetricCell
+              icon={Activity}
+              label={t("consoleModelStatusRecentRequests")}
+              value={primary.recent_statuses?.length ? `${primary.recent_statuses.length} / ${group.recent_request_limit || 60}` : "-"}
+            />
           </div>
 
           <div className="px-4 pb-5 pt-4 sm:px-5">
@@ -187,28 +198,16 @@ function GroupHealthCard({ group, language, t }: { group: ModelStatusGroup; lang
               <StatusBadge status={group.status} t={t} />
             </div>
 
-            <div className="mt-5 flex items-end justify-between gap-3">
-              <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                <HeartPulse className="h-3.5 w-3.5" />
-                {t("consoleModelStatusHealth")}
-                <span className="hidden sm:inline">{t("consoleModelStatusLast7Days")}</span>
+            <div className="mt-4">
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
+                <span>{t("consoleModelStatusRecentRequests")} {group.recent_request_limit || 60}</span>
+                <span>{primary.recent_statuses?.length ? `${primary.recent_statuses.length} ${t("consoleModelStatusRecorded")}` : t("consoleModelStatusNoData")}</span>
               </div>
-              <div className={cn("text-2xl font-extrabold tabular-nums", healthTone(primary))}>
-                {primary.request_count_7d > 0 ? `${formatPercent(primary.availability_7d)}%` : "-"}
+              <RequestHistory statuses={primary.recent_statuses || []} t={t} />
+              <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-slate-400 dark:text-slate-500">
+                <span>{t("consoleModelStatusEarlier")}</span>
+                <span>{primary.last_request_at ? formatTime(primary.last_request_at, language) : t("consoleModelStatusNow")}</span>
               </div>
-            </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-              <div className={cn("h-full rounded-full", healthBarTone(primary))} style={{ width: `${primary.request_count_7d > 0 ? Math.min(100, primary.availability_7d) : 0}%` }} />
-            </div>
-
-            <div className="mt-5 flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
-              <span>{t("consoleModelStatusRecentRequests")} {group.recent_request_limit || 60}</span>
-              <span>{primary.recent_statuses?.length ? `${primary.recent_statuses.length} ${t("consoleModelStatusRecorded")}` : t("consoleModelStatusNoData")}</span>
-            </div>
-            <RequestHistory statuses={primary.recent_statuses || []} t={t} />
-            <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-slate-400 dark:text-slate-500">
-              <span>{t("consoleModelStatusEarlier")}</span>
-              <span>{primary.last_request_at ? formatTime(primary.last_request_at, language) : t("consoleModelStatusNow")}</span>
             </div>
             {primary.last_failure_reason ? <p className="mt-3 truncate text-xs text-rose-600 dark:text-rose-300" title={primary.last_failure_reason}>{primary.last_failure_reason}</p> : null}
           </div>
@@ -259,11 +258,21 @@ function FallbackModels({ models, t }: { models: ModelStatus[]; t: (key: Transla
   );
 }
 
-function MetricCell({ icon: Icon, label, value }: { icon: typeof Gauge; label: string; value: string }) {
+function MetricCell({
+  icon: Icon,
+  label,
+  value,
+  valueClassName,
+}: {
+  icon: typeof Gauge;
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
   return (
     <div className="min-w-0 bg-white px-4 py-3 dark:bg-slate-900/70 sm:px-5">
       <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400"><Icon className="h-3.5 w-3.5" />{label}</div>
-      <div className="mt-1 truncate font-mono text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{value}</div>
+      <div className={cn("mt-1 truncate font-mono text-sm font-semibold tabular-nums text-slate-900 dark:text-white", valueClassName)}>{value}</div>
     </div>
   );
 }
@@ -299,13 +308,6 @@ function healthTone(model: ModelStatus) {
   if (model.availability_7d >= 99) return "text-emerald-600 dark:text-emerald-400";
   if (model.availability_7d >= 95) return "text-amber-600 dark:text-amber-400";
   return "text-rose-600 dark:text-rose-400";
-}
-
-function healthBarTone(model: ModelStatus) {
-  if (model.request_count_7d === 0) return "bg-slate-300 dark:bg-slate-700";
-  if (model.availability_7d >= 99) return "bg-emerald-500";
-  if (model.availability_7d >= 95) return "bg-amber-500";
-  return "bg-rose-500";
 }
 
 function StatusBadge({ status, t }: { status: ModelRouteStatus; t: (key: TranslationKey) => string }) {
