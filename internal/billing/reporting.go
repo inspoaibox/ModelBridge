@@ -125,6 +125,31 @@ type FinanceTransaction struct {
 	PriceSnapshot   map[string]any `json:"price_snapshot,omitempty"`
 }
 
+// FinanceRechargeOrder is the customer-facing payment order snapshot used by
+// finance staff. It intentionally excludes checkout URLs, QR payloads and
+// provider client secrets.
+type FinanceRechargeOrder struct {
+	ID              string     `json:"id"`
+	TenantID        string     `json:"tenant_id"`
+	TenantName      string     `json:"tenant_name"`
+	TenantSlug      string     `json:"tenant_slug"`
+	UserID          string     `json:"user_id"`
+	UserEmail       string     `json:"user_email"`
+	Provider        string     `json:"provider"`
+	MerchantOrderNo string     `json:"merchant_order_no"`
+	ProviderOrderID string     `json:"provider_order_id,omitempty"`
+	Amount          string     `json:"amount"`
+	CreditedAmount  string     `json:"credited_amount"`
+	RechargeRate    string     `json:"recharge_rate"`
+	Currency        string     `json:"currency"`
+	Status          string     `json:"status"`
+	FailureReason   string     `json:"failure_reason,omitempty"`
+	PaidAt          *time.Time `json:"paid_at,omitempty"`
+	ExpiresAt       time.Time  `json:"expires_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
 type FinanceQuery struct {
 	Limit    int
 	Offset   int
@@ -136,13 +161,15 @@ type FinanceQuery struct {
 }
 
 type FinanceReport struct {
-	Summaries         []FinanceCurrencySummary `json:"summaries"`
-	Accounts          []FinanceAccount         `json:"accounts"`
-	Transactions      []FinanceTransaction     `json:"transactions"`
-	TotalAccounts     int64                    `json:"total_accounts"`
-	TotalTransactions int64                    `json:"total_transactions"`
-	Limit             int                      `json:"limit"`
-	Offset            int                      `json:"offset"`
+	Summaries           []FinanceCurrencySummary `json:"summaries"`
+	Accounts            []FinanceAccount         `json:"accounts"`
+	Transactions        []FinanceTransaction     `json:"transactions"`
+	RechargeOrders      []FinanceRechargeOrder   `json:"recharge_orders"`
+	TotalAccounts       int64                    `json:"total_accounts"`
+	TotalTransactions   int64                    `json:"total_transactions"`
+	TotalRechargeOrders int64                    `json:"total_recharge_orders"`
+	Limit               int                      `json:"limit"`
+	Offset              int                      `json:"offset"`
 }
 
 type UsageReporter interface {
@@ -466,11 +493,94 @@ func (s *SQLService) ListFinanceReport(ctx context.Context, query FinanceQuery) 
 	if err := transactionRows.Err(); err != nil {
 		return FinanceReport{}, err
 	}
+	if err := transactionRows.Close(); err != nil {
+		return FinanceReport{}, err
+	}
 	accounts, err := s.financeAccounts(ctx, query)
 	if err != nil {
 		return FinanceReport{}, err
 	}
-	return FinanceReport{Summaries: summaries, Accounts: accounts, Transactions: transactions, TotalAccounts: accountCount, TotalTransactions: transactionCount, Limit: query.Limit, Offset: query.Offset}, nil
+	rechargeOrderCount, err := s.countFinanceRechargeOrders(ctx, query)
+	if err != nil {
+		return FinanceReport{}, err
+	}
+	rechargeOrders, err := s.financeRechargeOrders(ctx, query)
+	if err != nil {
+		return FinanceReport{}, err
+	}
+	return FinanceReport{
+		Summaries: summaries, Accounts: accounts, Transactions: transactions,
+		RechargeOrders: rechargeOrders,
+		TotalAccounts:  accountCount, TotalTransactions: transactionCount,
+		TotalRechargeOrders: rechargeOrderCount,
+		Limit:               query.Limit, Offset: query.Offset,
+	}, nil
+}
+
+func (s *SQLService) countFinanceRechargeOrders(ctx context.Context, query FinanceQuery) (int64, error) {
+	where, args := financeRechargeOrderWhere(query)
+	var count int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)::bigint
+		FROM payment_orders po
+		JOIN tenants ten ON ten.id = po.tenant_id
+		LEFT JOIN users u ON u.id = po.user_id
+		WHERE `+where, args...).Scan(&count)
+	return count, err
+}
+
+func (s *SQLService) financeRechargeOrders(ctx context.Context, query FinanceQuery) ([]FinanceRechargeOrder, error) {
+	where, args := financeRechargeOrderWhere(query)
+	listArgs := append([]any{}, args...)
+	limitPosition := len(listArgs) + 1
+	offsetPosition := len(listArgs) + 2
+	listArgs = append(listArgs, query.Limit, query.Offset)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT po.id::text, po.tenant_id::text, ten.name, ten.slug,
+		       po.user_id::text, COALESCE(u.email, ''), po.provider,
+		       po.merchant_order_no, COALESCE(po.provider_order_id, ''),
+		       po.amount::text, po.credited_amount::text, po.recharge_rate::text,
+		       po.currency, po.status, COALESCE(po.failure_reason, ''),
+		       po.paid_at, po.expires_at, po.created_at, po.updated_at
+		FROM payment_orders po
+		JOIN tenants ten ON ten.id = po.tenant_id
+		LEFT JOIN users u ON u.id = po.user_id
+		WHERE `+where+fmt.Sprintf(`
+		ORDER BY po.created_at DESC, po.id DESC
+		LIMIT $%d OFFSET $%d`, limitPosition, offsetPosition), listArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	orders := make([]FinanceRechargeOrder, 0, query.Limit)
+	for rows.Next() {
+		var item FinanceRechargeOrder
+		var paidAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.TenantName, &item.TenantSlug,
+			&item.UserID, &item.UserEmail, &item.Provider,
+			&item.MerchantOrderNo, &item.ProviderOrderID,
+			&item.Amount, &item.CreditedAmount, &item.RechargeRate,
+			&item.Currency, &item.Status, &item.FailureReason,
+			&paidAt, &item.ExpiresAt, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Provider = strings.ToLower(strings.TrimSpace(item.Provider))
+		item.Currency = strings.ToUpper(strings.TrimSpace(item.Currency))
+		item.Amount = normalizeDecimalText(item.Amount)
+		item.CreditedAmount = normalizeDecimalText(item.CreditedAmount)
+		item.RechargeRate = normalizeDecimalText(item.RechargeRate)
+		if paidAt.Valid {
+			value := paidAt.Time
+			item.PaidAt = &value
+		}
+		orders = append(orders, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return orders, nil
 }
 
 func (s *SQLService) countFinanceAccounts(ctx context.Context, query FinanceQuery) (int64, error) {
@@ -686,6 +796,35 @@ func financeTransactionWhere(query FinanceQuery) (string, []any) {
 	if query.To != nil {
 		args = append(args, *query.To)
 		clauses = append(clauses, fmt.Sprintf("lt.created_at < $%d", len(args)))
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+func financeRechargeOrderWhere(query FinanceQuery) (string, []any) {
+	// Orders are a payment audit trail. Keep records for suspended, closed, and
+	// soft-deleted tenants so finance staff can reconcile historical payments.
+	clauses := []string{"1 = 1"}
+	args := make([]any, 0, 5)
+	if query.TenantID != "" {
+		args = append(args, query.TenantID)
+		clauses = append(clauses, fmt.Sprintf("po.tenant_id = $%d::uuid", len(args)))
+	}
+	if query.Currency != "" {
+		args = append(args, query.Currency)
+		clauses = append(clauses, fmt.Sprintf("po.currency = $%d", len(args)))
+	}
+	if query.Search != "" {
+		args = append(args, "%"+query.Search+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, "(ten.name ILIKE "+placeholder+" OR ten.slug ILIKE "+placeholder+" OR COALESCE(u.email, '') ILIKE "+placeholder+" OR po.merchant_order_no ILIKE "+placeholder+" OR po.provider ILIKE "+placeholder+" OR po.status ILIKE "+placeholder+")")
+	}
+	if query.From != nil {
+		args = append(args, *query.From)
+		clauses = append(clauses, fmt.Sprintf("po.created_at >= $%d", len(args)))
+	}
+	if query.To != nil {
+		args = append(args, *query.To)
+		clauses = append(clauses, fmt.Sprintf("po.created_at < $%d", len(args)))
 	}
 	return strings.Join(clauses, " AND "), args
 }

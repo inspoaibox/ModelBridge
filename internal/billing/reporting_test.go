@@ -3,6 +3,7 @@ package billing
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUsageWhereUsesDistinctSearchParameters(t *testing.T) {
@@ -43,6 +44,32 @@ func TestNormalizeDecimalTextRemovesScalePadding(t *testing.T) {
 		if actual := normalizeDecimalText(input); actual != expected {
 			t.Fatalf("normalizeDecimalText(%q) = %q, want %q", input, actual, expected)
 		}
+	}
+}
+
+func TestFinanceRechargeOrderWhereSupportsFinanceFilters(t *testing.T) {
+	from := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	to := from.AddDate(0, 0, 1)
+	where, args := financeRechargeOrderWhere(FinanceQuery{
+		TenantID: "11111111-1111-4111-8111-111111111111",
+		Currency: "USD",
+		Search:   "alice",
+		From:     &from,
+		To:       &to,
+	})
+	for _, clause := range []string{
+		"po.tenant_id = $1::uuid",
+		"po.currency = $2",
+		"ten.name ILIKE $3",
+		"po.created_at >= $4",
+		"po.created_at < $5",
+	} {
+		if !strings.Contains(where, clause) {
+			t.Fatalf("missing recharge order filter %q in %s", clause, where)
+		}
+	}
+	if len(args) != 5 || args[2] != "%alice%" {
+		t.Fatalf("unexpected recharge order query args: %#v", args)
 	}
 }
 

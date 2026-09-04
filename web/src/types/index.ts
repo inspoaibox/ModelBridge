@@ -829,12 +829,36 @@ export interface FinanceTransaction {
   price_snapshot?: Record<string, unknown>;
 }
 
+export interface FinanceRechargeOrder {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
+  tenant_slug: string;
+  user_id: string;
+  user_email: string;
+  provider: "wechat" | "alipay" | "stripe" | "paypal" | string;
+  merchant_order_no: string;
+  provider_order_id?: string;
+  amount: string;
+  credited_amount: string;
+  recharge_rate: string;
+  currency: string;
+  status: "pending" | "paid" | "failed" | "cancelled" | "expired" | string;
+  failure_reason?: string;
+  paid_at?: string;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface FinanceReport {
   summaries: FinanceCurrencySummary[];
   accounts: FinanceAccount[];
   transactions: FinanceTransaction[];
+  recharge_orders: FinanceRechargeOrder[];
   total_accounts: number;
   total_transactions: number;
+  total_recharge_orders: number;
   limit: number;
   offset: number;
 }
