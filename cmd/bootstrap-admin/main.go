@@ -26,6 +26,8 @@ var platformPermissions = []string{
 	"usage:read",
 	"billing:read",
 	"billing:refund",
+	"payment:read",
+	"payment:update",
 	"channel:read",
 	"channel:update",
 	"channel:read_secret",

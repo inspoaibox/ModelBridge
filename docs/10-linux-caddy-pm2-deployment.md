@@ -224,9 +224,11 @@ npm run build
 cd ..
 mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token-migrate ./cmd/migrate
 chmod 0755 deploy/pm2/start.sh
 
 test -x "$RELEASE_DIR/bin/ai-token"
+test -x "$RELEASE_DIR/bin/ai-token-migrate"
 test -f "$RELEASE_DIR/web/dist/index.html"
 git rev-parse --short HEAD
 
@@ -351,9 +353,43 @@ runuser -u postgres -- psql -tAc 'SHOW config_file'
 runuser -u postgres -- psql -tAc 'SHOW hba_file'
 ```
 
-## 7. 启动 PM2 和应用
+## 7. 执行数据库迁移并启动 PM2
 
-应用第一次启动会自动执行数据库迁移。PM2 状态和日志只放在
+### 7.1 显式执行数据库迁移
+
+安装阶段先显式执行一次迁移。该命令只读取 `DATABASE_URL` 和
+`MIGRATIONS_DIR`，不会因为 CORS、管理员入口或其他网页配置错误而跳过迁移：
+
+```bash
+(
+set -e
+set -a
+source /etc/ai-token/ai-token.env
+set +a
+cd /opt/ai-token/current
+/opt/ai-token/current/bin/ai-token-migrate
+)
+```
+
+成功时会显示：
+
+```text
+database migrations completed: /opt/ai-token/current/migrations
+```
+
+然后检查迁移记录：
+
+```bash
+runuser -u postgres -- psql -d ai_token -c \
+  'SELECT version, applied_at FROM public.schema_migrations ORDER BY version DESC LIMIT 5;'
+```
+
+不需要手动逐个执行 `047_payments.sql`、`048_payment_idempotency_scope.sql` 或其他
+迁移文件。迁移器会按文件名顺序执行所有未执行的 SQL，并在同一个数据库事务中记录版本。
+
+### 7.2 启动 PM2 和应用
+
+应用启动时仍会自动执行数据库迁移，作为更新和异常恢复时的兜底。PM2 状态和日志只放在
 `/opt/ai-token/.pm2`，不会覆盖服务器上的其他 PM2 项目。
 
 ```bash
@@ -552,6 +588,12 @@ cd ..
 
 mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token-migrate ./cmd/migrate
+
+set -a
+source /etc/ai-token/ai-token.env
+set +a
+/opt/ai-token/current/bin/ai-token-migrate
 
 PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
   /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
@@ -561,7 +603,8 @@ curl -fsS http://127.0.0.1:8080/healthz
 )
 ```
 
-这是每次更新都执行的一组命令。`go build` 会自动下载新增的 Go 依赖，因此不需要额外
+这是每次更新都执行的一组命令。更新时先显式执行迁移，再重启 PM2；服务启动时仍会再次
+自动检查迁移，已执行的版本会跳过。`go build` 会自动下载新增的 Go 依赖，因此不需要额外
 执行 `go mod download`；`npm ci` 会严格按照 `package-lock.json` 安装前端依赖；Git 会保留
 `deploy/pm2/start.sh` 的可执行权限，因此不需要重复 `chmod`；PM2 首次安装后会由 systemd
 恢复，不需要每次更新都执行 `pm2 save`。
@@ -588,7 +631,8 @@ PM2_HOME=/opt/ai-token/.pm2 pm2 logs ai-token --lines 100 --nostream
 | PM2 日志提示 `ADMIN_ENTRY_PATH must be explicitly configured in production` | 旧环境文件缺少管理员独立入口。执行第 11 节的“一次性兼容处理”，保存输出的管理员地址后再重启 PM2。 |
 | PM2 日志提示 `CORS_ALLOWED_ORIGINS must contain valid origins only` | 检查 `/etc/ai-token/ai-token.env`，必须是类似 `CORS_ALLOWED_ORIGINS=https://你的域名` 的完整来源，不能是 `https://`、带方括号或带路径的地址；修改后重启 PM2。 |
 | PM2 日志提示 `function regexp_replace(...) does not exist` | 使用了包含错误迁移文件的旧版本。先更新到包含 `migrations/040_api_endpoint_protocols.sql` 修复的 `main`，再重新构建并重启；不要手动创建 `schema_migrations`。 |
-| `relation "schema_migrations" does not exist` | 通常是迁移事务因前一个 SQL 错误回滚，表也随事务回滚。先看 PM2 最新错误，修复首个迁移错误后重启，应用会自动重新执行全部迁移。 |
+| `relation "schema_migrations" does not exist` | 先按第 7.1 节执行独立迁移程序。若失败，查看它输出的第一条 SQL 错误；不要手动创建 `schema_migrations`。 |
+| 支付设置页返回 `403` | 首次安装时支付权限可能在 `platform_owner` 创建前执行，更新到包含 `057_payment_permissions_backfill.sql` 的版本后重新执行迁移并重新登录管理员。 |
 | PM2 显示 `online`，但 `curl http://127.0.0.1:8080/healthz` 返回 `Connection refused` | PM2 守护进程在线不等于应用在线。执行 `pm2 describe ai-token`，如果是 `waiting restart`、重启次数增加或内存为 `0b`，继续查看 `pm2 logs ai-token --err --lines 100 --nostream`，先修复日志中的首个启动错误，再重启应用。 |
 | Caddy 提示同域名站点已存在 | 该域名已有业务配置。不要追加、不要覆盖；读取原站点块后再决定如何把反代加入其中。 |
 | `caddy validate` 失败 | 只修改刚追加的 AI Token 站点块，修复后重新 validate；验证通过前不要 reload。 |
