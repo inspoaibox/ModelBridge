@@ -99,10 +99,84 @@ func TestRunModelMonitorProberDoesNotBlockOtherGroupsBehindSlowGroup(t *testing.
 	}
 }
 
+func TestShouldSyncUpstreamAccount(t *testing.T) {
+	tests := []struct {
+		name        string
+		integration string
+		hasSecret   bool
+		want        bool
+	}{
+		{name: "newapi with secret", integration: relay.UpstreamIntegrationNewAPI, hasSecret: true, want: true},
+		{name: "sub2api with secret", integration: " SUB2API ", hasSecret: true, want: true},
+		{name: "official with secret", integration: relay.UpstreamIntegrationOfficial, hasSecret: true, want: false},
+		{name: "other with secret", integration: relay.UpstreamIntegrationOther, hasSecret: true, want: false},
+		{name: "newapi without secret", integration: relay.UpstreamIntegrationNewAPI, hasSecret: false, want: false},
+		{name: "unknown with secret", integration: "custom", hasSecret: true, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			channel := relay.ChannelSummary{
+				UpstreamIntegration:          test.integration,
+				HasUpstreamAccountCredential: test.hasSecret,
+			}
+			if got := shouldSyncUpstreamAccount(channel); got != test.want {
+				t.Fatalf("shouldSyncUpstreamAccount() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunUpstreamAccountSyncOnceOnlySyncsSupportedConfiguredChannels(t *testing.T) {
+	service := &upstreamAccountSyncServiceFake{
+		channels: []relay.ChannelSummary{
+			{ID: "newapi", UpstreamIntegration: relay.UpstreamIntegrationNewAPI, HasUpstreamAccountCredential: true},
+			{ID: "sub2api", UpstreamIntegration: relay.UpstreamIntegrationSub2API, HasUpstreamAccountCredential: true},
+			{ID: "official", UpstreamIntegration: relay.UpstreamIntegrationOfficial, HasUpstreamAccountCredential: true},
+			{ID: "other", UpstreamIntegration: relay.UpstreamIntegrationOther, HasUpstreamAccountCredential: true},
+			{ID: "missing-secret", UpstreamIntegration: relay.UpstreamIntegrationNewAPI},
+		},
+	}
+
+	runUpstreamAccountSyncOnce(context.Background(), service)
+
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if len(service.syncedIDs) != 2 {
+		t.Fatalf("synced IDs = %v, want two supported configured channels", service.syncedIDs)
+	}
+	synced := map[string]bool{}
+	for _, id := range service.syncedIDs {
+		synced[id] = true
+	}
+	for _, id := range []string{"newapi", "sub2api"} {
+		if !synced[id] {
+			t.Fatalf("synced IDs = %v, missing %q", service.syncedIDs, id)
+		}
+	}
+}
+
 type modelMonitorProbeFunc func(context.Context, string, string) error
 
 func (f modelMonitorProbeFunc) ProbeModel(ctx context.Context, groupID, model string) error {
 	return f(ctx, groupID, model)
+}
+
+type upstreamAccountSyncServiceFake struct {
+	mu        sync.Mutex
+	channels  []relay.ChannelSummary
+	syncedIDs []string
+}
+
+func (s *upstreamAccountSyncServiceFake) ListChannels(context.Context) ([]relay.ChannelSummary, error) {
+	return append([]relay.ChannelSummary(nil), s.channels...), nil
+}
+
+func (s *upstreamAccountSyncServiceFake) SyncChannelAccount(_ context.Context, _, channelID string) (relay.ChannelSummary, error) {
+	s.mu.Lock()
+	s.syncedIDs = append(s.syncedIDs, channelID)
+	s.mu.Unlock()
+	return relay.ChannelSummary{ID: channelID}, nil
 }
 
 type modelMonitorServiceFake struct {

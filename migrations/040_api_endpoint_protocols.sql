@@ -5,7 +5,7 @@
 WITH candidates AS (
     SELECT
         id,
-        regexp_replace(base_url, '/v1/?$', '', 1, 1, 'i') AS root
+        regexp_replace(base_url, '/v1/?$', '', 'i') AS root
     FROM api_endpoints
     WHERE base_url ~* '/v1/?$'
 ),

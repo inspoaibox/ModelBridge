@@ -232,6 +232,9 @@ func main() {
 				go runModelMonitorProber(ctx, monitorService, prober)
 			}
 		}
+		if accountSyncService, ok := relayService.(upstreamAccountSyncService); ok {
+			go runUpstreamAccountSync(ctx, accountSyncService)
+		}
 		tokenResolver = resolver
 		sessionResolver = resolver
 		services = auth.Services{
@@ -288,6 +291,99 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
+	}
+}
+
+type upstreamAccountSyncService interface {
+	ListChannels(context.Context) ([]relay.ChannelSummary, error)
+	relay.ChannelAccountSyncer
+}
+
+func runUpstreamAccountSync(ctx context.Context, service upstreamAccountSyncService) {
+	if service == nil {
+		return
+	}
+
+	run := func() {
+		runUpstreamAccountSyncOnce(ctx, service)
+	}
+
+	// Refresh immediately after the server starts, then keep the operational
+	// snapshot current once per minute. Account sync is intentionally isolated
+	// from relay traffic, billing, and channel health.
+	run()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
+}
+
+func runUpstreamAccountSyncOnce(ctx context.Context, service upstreamAccountSyncService) {
+	if service == nil {
+		return
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	channels, err := service.ListChannels(listCtx)
+	cancel()
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			log.Printf("upstream account list failed: %v", err)
+		}
+		return
+	}
+
+	const workerCount = 4
+	jobs := make(chan relay.ChannelSummary)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			defer workers.Done()
+			for channel := range jobs {
+				if !shouldSyncUpstreamAccount(channel) {
+					continue
+				}
+				syncCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				_, syncErr := service.SyncChannelAccount(syncCtx, "", channel.ID)
+				cancel()
+				if syncErr != nil && !errors.Is(syncErr, context.Canceled) {
+					log.Printf("upstream account sync failed for channel %s: %v", channel.ID, syncErr)
+				}
+			}
+		}()
+	}
+
+	for _, channel := range channels {
+		if !shouldSyncUpstreamAccount(channel) {
+			continue
+		}
+		select {
+		case jobs <- channel:
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			return
+		}
+	}
+	close(jobs)
+	workers.Wait()
+}
+
+func shouldSyncUpstreamAccount(channel relay.ChannelSummary) bool {
+	if !channel.HasUpstreamAccountCredential {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(channel.UpstreamIntegration)) {
+	case relay.UpstreamIntegrationNewAPI, relay.UpstreamIntegrationSub2API:
+		return true
+	default:
+		return false
 	}
 }
 

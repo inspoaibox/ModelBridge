@@ -1112,6 +1112,14 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
+    if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "channels") {
+      return;
+    }
+    const interval = window.setInterval(() => void refreshChannels(false), 60_000);
+    return () => window.clearInterval(interval);
+  }, [signedIn, audience, route.view, adminSection, language]);
+
+  useEffect(() => {
     if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "users" && adminSection !== "roles")) {
       return;
     }
