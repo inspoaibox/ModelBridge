@@ -39,6 +39,25 @@ test("home hash route is wired into the application", () => {
   assert.match(app, /currentView === "home"/);
 });
 
+test("image and video testing labs are available from the model plaza", () => {
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  const types = readFileSync(resolve(root, "src", "types", "index.ts"), "utf8");
+  const plaza = readFileSync(resolve(root, "src", "components", "ModelPlazaView.tsx"), "utf8");
+  const labs = readFileSync(resolve(root, "src", "components", "MediaLabsView.tsx"), "utf8");
+  assert.match(types, /"image-lab"/);
+  assert.match(types, /"video-lab"/);
+  assert.match(app, /raw === "image-lab"/);
+  assert.match(app, /raw === "video-lab"/);
+  assert.match(app, /<ImageLabView/);
+  assert.match(app, /<VideoLabView/);
+  assert.match(plaza, /routeTo\("#image-lab"\)/);
+  assert.match(plaza, /routeTo\("#video-lab"\)/);
+  assert.match(labs, /kind === "image" \? "images\/generations" : "videos"/);
+  assert.match(labs, /\/v1\/videos/);
+  assert.match(labs, /navigator\.clipboard\.writeText/);
+  assert.doesNotMatch(labs, /localStorage/);
+});
+
 test("feature settings updates do not send read-only audit metadata", () => {
   const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
   assert.match(app, /function featureSettingsUpdatePayload\(settings: FeatureSettings\)/);

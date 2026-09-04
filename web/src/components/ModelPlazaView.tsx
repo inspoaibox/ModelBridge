@@ -14,6 +14,7 @@ interface ModelPlazaViewProps {
   busy: boolean;
   message: LoginMessage;
   refresh: (showPending?: boolean) => Promise<void>;
+  routeTo: (target: string) => void;
 }
 
 type ModelCategory = "all" | "text" | "image" | "video" | "audio" | "embedding";
@@ -65,7 +66,7 @@ function matchesModelSearch(model: PublicModelSummary, query: string) {
   return !query || `${model.name} ${model.display_name} ${model.provider} ${model.protocol_family}`.toLowerCase().includes(query);
 }
 
-export function ModelPlazaView({ language, models, busy, message, refresh }: ModelPlazaViewProps) {
+export function ModelPlazaView({ language, models, busy, message, refresh, routeTo }: ModelPlazaViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
@@ -150,6 +151,27 @@ export function ModelPlazaView({ language, models, busy, message, refresh }: Mod
               <div className="hidden rounded-2xl border border-indigo-500/20 bg-indigo-500/5 px-5 py-4 sm:block"><div className="text-2xl font-bold text-indigo-700 dark:text-indigo-300">{providers.length}</div><div className="mt-1 text-xs text-indigo-700/70 dark:text-indigo-300/70">{t("modelsProviders")}</div></div>
             </div>
           </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-2">
+          <Card className="border-fuchsia-500/20 bg-white shadow-sm dark:border-fuchsia-400/20 dark:bg-slate-900/70">
+            <CardContent className="flex h-full flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-300"><Image className="h-5 w-5" /></div>
+                <div><div className="text-base font-bold text-slate-950 dark:text-white">{t("modelsImageLabTitle")}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t("modelsImageLabDescription")}</p></div>
+              </div>
+              <Button type="button" variant="outline" onClick={() => routeTo("#image-lab")} className="shrink-0">{t("modelsOpenImageLab")}</Button>
+            </CardContent>
+          </Card>
+          <Card className="border-cyan-500/20 bg-white shadow-sm dark:border-cyan-400/20 dark:bg-slate-900/70">
+            <CardContent className="flex h-full flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-600 dark:text-cyan-300"><Video className="h-5 w-5" /></div>
+                <div><div className="text-base font-bold text-slate-950 dark:text-white">{t("modelsVideoLabTitle")}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t("modelsVideoLabDescription")}</p></div>
+              </div>
+              <Button type="button" variant="outline" onClick={() => routeTo("#video-lab")} className="shrink-0">{t("modelsOpenVideoLab")}</Button>
+            </CardContent>
+          </Card>
         </section>
 
         <div className="space-y-3 rounded-2xl border border-slate-200/80 bg-white/70 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
