@@ -1160,7 +1160,7 @@ func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.
 	models, err := service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID: "channel-1",
 		Provider:  ProviderOpenAI,
-		BaseURL:   "https://api.openai.com/v1",
+		BaseURL:   "https://new-upstream.example/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1171,9 +1171,12 @@ func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.
 	if provider.modelAPIKey != "sk-stored" {
 		t.Fatalf("stored credential was not used: %q", provider.modelAPIKey)
 	}
+	if provider.modelBaseURL != "https://new-upstream.example/v1" {
+		t.Fatalf("submitted endpoint was not used: %q", provider.modelBaseURL)
+	}
 }
 
-func TestServiceDiscoverModelsIgnoresExistingChannelEndpointFromRequest(t *testing.T) {
+func TestServiceDiscoverModelsUsesSubmittedEndpointWithReplacementCredential(t *testing.T) {
 	router := &fakeChannelRouter{
 		discoveryConfig: ChannelDiscoveryConfig{
 			Provider:      ProviderOpenAI,
@@ -1199,13 +1202,17 @@ func TestServiceDiscoverModelsIgnoresExistingChannelEndpointFromRequest(t *testi
 	_, err = service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID: "channel-1",
 		Provider:  ProviderOpenAI,
-		BaseURL:   "https://attacker.example.invalid/v1",
+		BaseURL:   "https://new-upstream.example/v1",
+		APIKey:    "sk-new",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.modelAPIKey != "sk-stored" {
-		t.Fatalf("stored credential was not used: %q", provider.modelAPIKey)
+	if provider.modelAPIKey != "sk-new" {
+		t.Fatalf("replacement credential was not used: %q", provider.modelAPIKey)
+	}
+	if provider.modelBaseURL != "https://new-upstream.example/v1" {
+		t.Fatalf("submitted endpoint was not used: %q", provider.modelBaseURL)
 	}
 }
 
@@ -1218,6 +1225,7 @@ type recordingProvider struct {
 	attempts      []string
 	models        []DiscoveredModel
 	modelAPIKey   string
+	modelBaseURL  string
 }
 
 type streamRecordingProvider struct {
@@ -1341,8 +1349,9 @@ func (p *recordingProvider) ChatCompletions(
 	return p.response, nil
 }
 
-func (p *recordingProvider) ListModels(_ context.Context, _ string, apiKey string) ([]DiscoveredModel, error) {
+func (p *recordingProvider) ListModels(_ context.Context, baseURL, apiKey string) ([]DiscoveredModel, error) {
 	p.modelAPIKey = apiKey
+	p.modelBaseURL = baseURL
 	return p.models, p.err
 }
 

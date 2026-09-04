@@ -3868,7 +3868,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         }),
       });
       if (!response.ok) {
-        throw new Error("model discovery failed");
+        const result = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(result.error || "MODEL_DISCOVERY_FAILED");
       }
       const result = (await response.json()) as { models?: DiscoveredModel[] };
       const models = result.models || [];
@@ -3886,9 +3887,18 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
               )}`
             : t("channelsFormDiscoverEmpty"),
       });
-    } catch {
+    } catch (error) {
       setDiscoveredModels([]);
-      setModelDiscoveryMessage({ kind: "error", text: t("channelsUnavailable") });
+      const errorCode = error instanceof Error ? error.message : "";
+      const message =
+        errorCode === "CHANNEL_CREDENTIAL_REQUIRED"
+          ? t("channelsCredentialRequired")
+          : errorCode === "CHANNEL_CREDENTIAL_INVALID"
+            ? t("channelsCredentialInvalid")
+            : errorCode === "INVALID_REQUEST"
+              ? t("channelsSaveInvalid")
+              : t("channelsFormDiscoverFailed");
+      setModelDiscoveryMessage({ kind: "error", text: message });
     } finally {
       setModelDiscoveryBusy(false);
     }
