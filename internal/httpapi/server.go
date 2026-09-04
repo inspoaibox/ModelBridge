@@ -4284,6 +4284,16 @@ func writeModelDiscoveryError(w http.ResponseWriter, err error) {
 }
 
 func writeRelayError(w http.ResponseWriter, err error) {
+	var insufficient *billing.InsufficientBalanceError
+	if errors.As(err, &insufficient) {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{
+			"error":             "INSUFFICIENT_BALANCE",
+			"currency":          insufficient.Currency,
+			"available_balance": insufficient.Available,
+			"required_balance":  insufficient.Required,
+		})
+		return
+	}
 	switch {
 	case errors.Is(err, billing.ErrTokenSpendLimitReached):
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "TOKEN_SPEND_LIMIT_REACHED"})

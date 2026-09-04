@@ -1,6 +1,10 @@
 package billing
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestIsZeroAmount(t *testing.T) {
 	for _, value := range []string{"0", "0.0", "0.000000000000"} {
@@ -36,6 +40,16 @@ func TestPricePerMillionTokens(t *testing.T) {
 		if actual := pricePerMillionTokens(input); actual != expected {
 			t.Fatalf("pricePerMillionTokens(%q) = %q, want %q", input, actual, expected)
 		}
+	}
+}
+
+func TestInsufficientBalanceErrorKeepsStableSentinel(t *testing.T) {
+	err := &InsufficientBalanceError{Currency: "USD", Available: "0.01", Required: "0.01536"}
+	if !errors.Is(err, ErrInsufficientBalance) {
+		t.Fatal("detailed insufficient balance error must unwrap to the stable sentinel")
+	}
+	if !strings.Contains(err.Error(), "available=0.01") || !strings.Contains(err.Error(), "required=0.01536") {
+		t.Fatalf("detailed insufficient balance error lost reservation figures: %v", err)
 	}
 }
 

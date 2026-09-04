@@ -146,6 +146,7 @@ func newUpstreamRequest(ctx context.Context, baseURL, apiKey, path string, body 
 	}
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", relayUserAgent)
 	return request, nil
 }
 

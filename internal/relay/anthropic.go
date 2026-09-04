@@ -367,6 +367,7 @@ func newAnthropicRequest(ctx context.Context, baseURL, apiKey string, body []byt
 	request.Header.Set("x-api-key", strings.TrimSpace(apiKey))
 	request.Header.Set("anthropic-version", "2023-06-01")
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", relayUserAgent)
 	return request, nil
 }
 
@@ -577,7 +578,10 @@ func decodeAnthropicCompletion(data []byte) (ChatCompletionResponse, error) {
 }
 
 func newAnthropicClient(ctx context.Context, baseURL, apiKey string) (*anthropic.Client, error) {
-	opts := []anthropicoption.RequestOption{anthropicoption.WithAPIKey(strings.TrimSpace(apiKey))}
+	opts := []anthropicoption.RequestOption{
+		anthropicoption.WithAPIKey(strings.TrimSpace(apiKey)),
+		anthropicoption.WithHeader("User-Agent", relayUserAgent),
+	}
 	httpClient, err := providerHTTPClient(baseURL)
 	if err != nil {
 		return nil, err

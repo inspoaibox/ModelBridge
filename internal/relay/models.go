@@ -72,6 +72,9 @@ func (AnthropicProvider) ListModels(ctx context.Context, baseURL, apiKey string)
 	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
 		opts = append(opts, anthropicoption.WithBaseURL(baseURL))
 	}
+	// Some upstream WAF rules block the Anthropic SDK's generated User-Agent.
+	// Keep discovery identifiable without exposing the SDK brand.
+	opts = append(opts, anthropicoption.WithHeader("User-Agent", relayUserAgent))
 
 	client := anthropic.NewClient(opts...)
 	page, err := client.Models.List(ctx, anthropic.ModelListParams{})

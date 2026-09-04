@@ -188,6 +188,9 @@ func TestAnthropicProviderConvertsToolsAndStreamsMessages(t *testing.T) {
 		if r.URL.Path != "/v1/messages" || r.Header.Get("x-api-key") != "sk-ant-test" {
 			t.Fatalf("unexpected Anthropic request: %s %q", r.URL.Path, r.Header.Get("x-api-key"))
 		}
+		if got := r.Header.Get("User-Agent"); got != relayUserAgent {
+			t.Fatalf("unexpected Anthropic user-agent: %q", got)
+		}
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)

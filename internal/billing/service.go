@@ -40,6 +40,24 @@ var (
 	ErrTokenSpendLimitReached = errors.New("api token spend limit reached")
 )
 
+// InsufficientBalanceError preserves the reservation figures needed by API
+// clients to distinguish a real balance shortage from a pricing or routing error.
+// It unwraps to ErrInsufficientBalance for stable error handling.
+type InsufficientBalanceError struct {
+	Currency  string
+	Available string
+	Required  string
+}
+
+func (e *InsufficientBalanceError) Error() string {
+	if e == nil {
+		return ErrInsufficientBalance.Error()
+	}
+	return "insufficient balance: available=" + e.Available + " required=" + e.Required + " " + e.Currency
+}
+
+func (e *InsufficientBalanceError) Unwrap() error { return ErrInsufficientBalance }
+
 type Service interface {
 	Reserve(context.Context, Request) (Reservation, error)
 	Settle(context.Context, string, Usage, string) error
@@ -1463,16 +1481,16 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 		[]byte(`{}`),
 	)
 
-	var accountID, accountCurrency string
+	var accountID, accountCurrency, accountBalance string
 	err = tx.QueryRowContext(ctx, `
-		SELECT id::text, currency
+		SELECT id::text, currency, balance::text
 		FROM ledger_accounts
 		WHERE tenant_id = $1
 		  AND account_type = 'prepaid_balance'
 		  AND status = 'active'
 		  AND currency = $2
 		FOR UPDATE
-	`, request.TenantID, currency).Scan(&accountID, &accountCurrency)
+	`, request.TenantID, currency).Scan(&accountID, &accountCurrency, &accountBalance)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Reservation{}, ErrAccountNotFound
 	}
@@ -1495,7 +1513,7 @@ func (s *SQLService) Reserve(ctx context.Context, request Request) (Reservation,
 	if affected, err := result.RowsAffected(); err != nil {
 		return Reservation{}, err
 	} else if affected != 1 {
-		return Reservation{}, ErrInsufficientBalance
+		return Reservation{}, &InsufficientBalanceError{Currency: currency, Available: accountBalance, Required: reservedAmount}
 	}
 
 	modelRequestID, err := ids.New()

@@ -13,6 +13,8 @@ import (
 
 var errUnsafeUpstreamURL = errors.New("unsafe upstream URL")
 
+const relayUserAgent = "ai-token-relay"
+
 func parseAndValidateBaseURL(value string) (*url.URL, error) {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" ||

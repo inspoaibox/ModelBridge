@@ -618,6 +618,9 @@ func TestAnthropicProviderListsModels(t *testing.T) {
 		if r.Header.Get("x-api-key") != "sk-ant-test" {
 			t.Fatalf("unexpected api key header: %q", r.Header.Get("x-api-key"))
 		}
+		if got := r.Header.Get("User-Agent"); got != relayUserAgent {
+			t.Fatalf("unexpected user-agent: %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"data":[
