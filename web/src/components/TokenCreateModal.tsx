@@ -162,8 +162,14 @@ export function TokenCreateModal({
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="space-y-2">
-                  <Label htmlFor="token-name">{t("tokensName")}</Label>
-                  <Input id="token-name" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder={t("tokensNamePlaceholder")} maxLength={100} />
+                  <Label htmlFor="token-name">{editing ? t("tokensName") : t("tokensNameOptional")}</Label>
+                  <Input
+                    id="token-name"
+                    value={form.name}
+                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                    placeholder={editing ? t("tokensNamePlaceholder") : t("tokensNameAutoPlaceholder")}
+                    maxLength={100}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="token-expires-at">{t("tokensExpiresAt")}</Label>

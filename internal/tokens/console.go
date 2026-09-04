@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -89,7 +90,17 @@ func (s *SQLConsoleService) Create(ctx context.Context, request CreateRequest) (
 	request.ProjectID = strings.TrimSpace(request.ProjectID)
 	request.CreatedBy = strings.TrimSpace(request.CreatedBy)
 	request.Name = strings.TrimSpace(request.Name)
-	if !ids.Valid(request.TenantID) || !ids.Valid(request.ProjectID) || !ids.Valid(request.CreatedBy) || request.Name == "" || len(request.Name) > 100 {
+	if !ids.Valid(request.TenantID) || !ids.Valid(request.ProjectID) || !ids.Valid(request.CreatedBy) {
+		return IssuedToken{}, ErrConsoleInvalid
+	}
+	if request.Name == "" {
+		name, err := s.nextDefaultTokenName(ctx, request.TenantID, request.CreatedBy)
+		if err != nil {
+			return IssuedToken{}, err
+		}
+		request.Name = name
+	}
+	if len(request.Name) > 100 {
 		return IssuedToken{}, ErrConsoleInvalid
 	}
 	return s.issuer.IssueInGroupWithSpendLimit(
@@ -107,6 +118,23 @@ func (s *SQLConsoleService) Create(ctx context.Context, request CreateRequest) (
 		request.GroupID,
 		request.SpendLimit,
 	)
+}
+
+func (s *SQLConsoleService) nextDefaultTokenName(ctx context.Context, tenantID, createdBy string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", ErrConsoleUnavailable
+	}
+	var next int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX((substring(name FROM '^令牌 ([0-9]+)$'))::bigint), 0) + 1
+		FROM api_tokens
+		WHERE tenant_id = $1::uuid
+		  AND created_by = $2::uuid
+		  AND name ~ '^令牌 [0-9]+$'
+	`, tenantID, createdBy).Scan(&next); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("令牌 %d", next), nil
 }
 
 func (s *SQLConsoleService) UpdateOwned(ctx context.Context, request UpdateRequest) (Summary, error) {

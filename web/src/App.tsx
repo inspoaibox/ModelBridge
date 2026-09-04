@@ -3347,18 +3347,31 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
     const name = tokenCreateForm.name.trim();
     const tenantID = tokenCreateForm.tenant_id.trim();
     const projectID = tokenCreateForm.project_id.trim();
-    if (!name || !projectID || !tokenCreateForm.group_id || !tenantID) {
-      setTokenCreateMessage({ kind: "error", text: t("tokensCreateValidation") });
+    const groupID = tokenCreateForm.group_id.trim();
+    const editingToken = tokenEditingID ? tokens.find((token) => token.id === tokenEditingID) : undefined;
+    if (!tenantID) {
+      setTokenCreateMessage({ kind: "error", text: t("tokensUnavailable") });
       return;
     }
-    const editingToken = tokenEditingID ? tokens.find((token) => token.id === tokenEditingID) : undefined;
+    if (!projectID) {
+      setTokenCreateMessage({ kind: "error", text: t("tokensProjectRequired") });
+      return;
+    }
+    if (!groupID) {
+      setTokenCreateMessage({ kind: "error", text: t("tokensGroupRequired") });
+      return;
+    }
+    if (editingToken && !name) {
+      setTokenCreateMessage({ kind: "error", text: t("tokensNameRequired") });
+      return;
+    }
     setTokenCreateBusy(true);
     setTokenCreateMessage({ kind: "pending", text: editingToken ? t("tokensSaving") : t("tokensCreating") });
     try {
       const payload: Record<string, unknown> = {
         name,
         project_id: projectID,
-        group_id: tokenCreateForm.group_id,
+        group_id: groupID,
         allowed_models: editingToken?.allowed_models || [],
         rate_limit: editingToken?.rate_limit || {},
         allowed_ips: parseTokenList(tokenCreateForm.allowed_ips),
