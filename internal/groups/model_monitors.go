@@ -289,13 +289,10 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 			ORDER BY m.model_name ASC, m.id ASC
 			LIMIT 1
 		`, monitorIDValue, request.PrimaryModel).Scan(&primaryModelID)
-		if request.PrimaryModel != "" && errors.Is(err, sql.ErrNoRows) {
-			return ModelMonitor{}, ErrInvalidRequest
-		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return ModelMonitor{}, err
 		}
-		if request.PrimaryModel == "" {
+		if primaryModelID == "" {
 			primaryModelID = ""
 			_ = tx.QueryRowContext(ctx, `
 				SELECT m.id::text
@@ -321,9 +318,6 @@ func (s *SQLService) saveAdminModelMonitor(ctx context.Context, actorID, monitor
 			ORDER BY m.model_name ASC, m.id ASC
 			LIMIT 1
 		`, request.GroupID, request.PrimaryModel).Scan(&primaryModelID)
-		if request.PrimaryModel != "" && errors.Is(err, sql.ErrNoRows) {
-			return ModelMonitor{}, ErrInvalidRequest
-		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return ModelMonitor{}, err
 		}

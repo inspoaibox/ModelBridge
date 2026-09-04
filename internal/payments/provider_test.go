@@ -52,6 +52,19 @@ func TestNormalizeAmountUsesCurrencyPrecision(t *testing.T) {
 	}
 }
 
+func TestRechargeRateCalculatesCreditedAmount(t *testing.T) {
+	got, err := applyRechargeRate("100", "0.98", "USD")
+	if err != nil || got != "98" {
+		t.Fatalf("applyRechargeRate() = %q, %v; want 98", got, err)
+	}
+	if _, err := normalizeRechargeRate("0"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("zero recharge rate must be rejected, got %v", err)
+	}
+	if _, err := applyRechargeRate("10", "1.0001", "USD"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("sub-cent credited amount must be rejected, got %v", err)
+	}
+}
+
 func TestDisabledProviderCanBeSavedWithIncompleteConfiguration(t *testing.T) {
 	if err := validateProviderConfig(ProviderWechat, map[string]string{}); err != nil {
 		t.Fatalf("disabling an incomplete WeChat provider must remain possible: %v", err)

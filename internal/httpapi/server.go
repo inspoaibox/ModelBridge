@@ -654,6 +654,9 @@ func newHandler(
 		mux.Handle("GET /console/v1/tenants/{tenantID}/billing/recharge/{orderID}", authMiddleware.Protect(
 			auth.AudienceConsole, "billing:read",
 		)(auth.RequireTenantPath("tenantID")(paymentGetOrderHandler(paymentService))))
+		mux.Handle("GET /console/v1/tenants/{tenantID}/billing/recharge", authMiddleware.Protect(
+			auth.AudienceConsole, "billing:read",
+		)(auth.RequireTenantPath("tenantID")(paymentListOrdersHandler(paymentService))))
 		mux.Handle("POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture", authMiddleware.Protect(
 			auth.AudienceConsole, "billing:read",
 		)(auth.RequireTenantPath("tenantID")(paymentPayPalCaptureHandler(paymentService))))
@@ -3467,6 +3470,7 @@ func adminModelMonitorCreateHandler(service groups.Service) http.Handler {
 		}
 		item, err := monitors.CreateAdminModelMonitor(r.Context(), principalID(r), payload)
 		if err != nil {
+			log.Printf("admin model monitor create failed request_id=%s error=%v", r.Header.Get("X-Request-ID"), err)
 			writeModelMonitorError(w, err)
 			return
 		}
@@ -3488,6 +3492,7 @@ func adminModelMonitorUpdateHandler(service groups.Service) http.Handler {
 		}
 		item, err := monitors.UpdateAdminModelMonitor(r.Context(), principalID(r), r.PathValue("monitorID"), payload)
 		if err != nil {
+			log.Printf("admin model monitor update failed request_id=%s monitor_id=%s error=%v", r.Header.Get("X-Request-ID"), r.PathValue("monitorID"), err)
 			writeModelMonitorError(w, err)
 			return
 		}

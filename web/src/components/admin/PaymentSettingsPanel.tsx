@@ -24,6 +24,7 @@ type Field = { key: string; label: TranslationKey; secret?: boolean; multiline?:
 
 const fields: Record<Provider, Field[]> = {
   wechat: [
+    { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
     { key: "app_id", label: "paymentWechatAppID" },
     { key: "mch_id", label: "paymentWechatMchID" },
     { key: "serial_no", label: "paymentWechatSerial" },
@@ -35,6 +36,7 @@ const fields: Record<Provider, Field[]> = {
     { key: "api_base_url", label: "paymentAPIBaseURL" },
   ],
   alipay: [
+    { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
     { key: "app_id", label: "paymentAlipayAppID" },
     { key: "seller_id", label: "paymentAlipaySellerID" },
     { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true },
@@ -43,12 +45,14 @@ const fields: Record<Provider, Field[]> = {
     { key: "gateway", label: "paymentGateway" },
   ],
   stripe: [
+    { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
     { key: "secret_key", label: "paymentStripeSecretKey", secret: true },
     { key: "publishable_key", label: "paymentStripePublishableKey" },
     { key: "webhook_secret", label: "paymentStripeWebhookSecret", secret: true },
     { key: "api_base_url", label: "paymentAPIBaseURL", hint: "paymentStripeAPIBaseURLHint" },
   ],
   paypal: [
+    { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
     { key: "client_id", label: "paymentPayPalClientID" },
     { key: "client_secret", label: "paymentPayPalClientSecret", secret: true },
     { key: "webhook_id", label: "paymentPayPalWebhookID" },

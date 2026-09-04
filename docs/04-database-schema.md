@@ -506,7 +506,7 @@ published_at
 
 ### `payment_provider_configs` 与 `payment_orders`
 
-`payment_provider_configs` 保存 `wechat`、`alipay`、`stripe`、`paypal` 四类支付方式的启用状态和加密配置 JSON。Stripe 的 `payment_method_types` 是可选的非敏感字段，只允许 `card`、`alipay`、`wechat_pay`，留空表示使用 Stripe Dashboard 动态支付方式；Apple Pay 和 Google Pay 不作为独立字段。Stripe 的 Webhook 路由是固定的 `/payments/webhooks/stripe`，后台接口返回该路径供管理员配置，成功/取消返回地址不落库，而是在创建 Checkout Session 时按充值页路由生成。私钥、证书、API v3 Key、Secret Key、Webhook Secret 和 PayPal Client Secret 不会明文落库或通过读取接口返回。`payment_orders` 保存租户、用户、支付方式、平台商户订单号、上游订单号、币种、金额、订单状态、回调/支付页面信息和幂等键；官方回调或 PayPal Capture 验证成功后才调用账务服务入账，入账使用 `payment:credit:<order_id>` 幂等键。`047_payments.sql` 创建表、索引和 `payment:read`、`payment:update` 权限；`048_payment_idempotency_scope.sql` 将充值幂等键唯一性限定为 `(tenant_id, idempotency_key)`。
+`payment_provider_configs` 保存 `wechat`、`alipay`、`stripe`、`paypal` 四类支付方式的启用状态和加密配置 JSON。`recharge_rate` 是充值到账倍率，默认 1；`payment_method_types` 是 Stripe 可选的非敏感字段，只允许 `card`、`alipay`、`wechat_pay`，留空表示使用 Stripe Dashboard 动态支付方式；Apple Pay 和 Google Pay 不作为独立字段。Stripe 的 Publishable Key 可安全返回租户端，仅用于 Embedded Checkout 初始化；Secret Key、Webhook Secret、私钥、证书、API v3 Key 和 PayPal Client Secret 不会明文返回。Stripe 的 Webhook 路由是固定的 `/payments/webhooks/stripe`，成功/取消返回地址不落库，而是在创建 Checkout Session 时按充值页路由生成。`payment_orders` 保存租户、用户、支付方式、平台商户订单号、上游订单号、支付金额、到账额度、下单费率、Checkout 客户端密钥、订单状态、回调/支付页面信息和幂等键；官方回调或 PayPal Capture 验证支付金额后，按订单保存的到账额度调用账务服务入账，入账使用 `payment:credit:<order_id>` 幂等键。`047_payments.sql` 创建表、索引和 `payment:read`、`payment:update` 权限；`048_payment_idempotency_scope.sql` 将充值幂等键唯一性限定为 `(tenant_id, idempotency_key)`；`058_payment_recharge_rate.sql` 增加费率、到账额度和 Embedded Checkout 字段。
 
 ### `model_monitor_configs`
 

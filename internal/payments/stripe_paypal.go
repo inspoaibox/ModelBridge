@@ -38,8 +38,14 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 	}
 	form := url.Values{}
 	form.Set("mode", "payment")
-	form.Set("success_url", successURL)
-	form.Set("cancel_url", cancelURL)
+	embedded := strings.HasPrefix(strings.TrimSpace(config["publishable_key"]), "pk_")
+	if embedded {
+		form.Set("ui_mode", "embedded")
+		form.Set("return_url", successURL)
+	} else {
+		form.Set("success_url", successURL)
+		form.Set("cancel_url", cancelURL)
+	}
 	form.Set("client_reference_id", order.MerchantOrderNo)
 	form.Set("metadata[order_id]", order.ID)
 	form.Set("metadata[merchant_order_no]", order.MerchantOrderNo)
@@ -80,13 +86,14 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 		return providerOrder{}, fmt.Errorf("stripe checkout returned HTTP %d", resp.StatusCode)
 	}
 	var payload struct {
-		ID  string `json:"id"`
-		URL string `json:"url"`
+		ID           string `json:"id"`
+		URL          string `json:"url"`
+		ClientSecret string `json:"client_secret"`
 	}
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.ID == "" || payload.URL == "" {
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.ID == "" || (!embedded && payload.URL == "") || (embedded && payload.ClientSecret == "") {
 		return providerOrder{}, ErrCallbackInvalid
 	}
-	return providerOrder{ProviderOrderID: payload.ID, CheckoutURL: payload.URL, Raw: raw}, nil
+	return providerOrder{ProviderOrderID: payload.ID, CheckoutURL: payload.URL, CheckoutClientSecret: payload.ClientSecret, Raw: raw}, nil
 }
 
 func verifyStripeWebhook(config map[string]string, headers http.Header, body []byte) (callbackPayment, error) {

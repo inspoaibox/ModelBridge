@@ -163,6 +163,7 @@ GET  /console/v1/tenants/{tenantID}/billing/account
 GET  /console/v1/tenants/{tenantID}/enterprise-verification
 POST /console/v1/tenants/{tenantID}/enterprise-verification
 POST /console/v1/tenants/{tenantID}/billing/recharge
+GET  /console/v1/tenants/{tenantID}/billing/recharge
 GET  /console/v1/tenants/{tenantID}/billing/recharge/{orderID}
 POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture
 POST /v1/chat/completions
@@ -188,7 +189,7 @@ GET  /v1/videos/{videoID}/content
 
 用户控制台的“企业认证”用于提交企业名称、统一社会信用代码、营业执照和对公账户资料。营业执照与银行账号在服务端加密保存；用户端只返回银行账号脱敏值，管理员审核详情才可查看完整账号。申请状态为待审核、已通过或未通过；未通过后允许重新提交，已通过后不能重复提交。管理员在“企业认证”页面按状态筛选并通过或拒绝申请，拒绝必须填写原因。
 
-用户控制台的“账单与额度”包含余额充值入口。管理员在“系统设置 -> 支付设置”分别配置并启用微信支付、支付宝、Stripe 或 PayPal。微信支付使用 Native 二维码，支付宝使用当面付预创建二维码，Stripe 使用 Checkout，PayPal 使用 Orders 创建和 Capture；充值订单必须携带 `Idempotency-Key`，余额只由经过官方签名/官方 API 验证的支付结果入账。Stripe Webhook 地址为 `https://当前域名/payments/webhooks/stripe`，后台会显示并支持复制；成功/取消返回地址由 Checkout Session 自动生成并回到 `#console/billing`，不参与入账判断。
+用户控制台将“账单记录”“费用中心”“订单中心”分开。费用中心提供余额、预设充值金额和支付入口；账单记录展示模型调用费用，订单中心展示充值订单及到账额度。管理员在“系统设置 -> 支付设置”分别配置并启用微信支付、支付宝、Stripe 或 PayPal，并可设置充值到账倍率（默认 1，0.98 表示扣除 2% 手续费）。微信支付使用 Native 二维码，支付宝使用当面付预创建二维码并直接显示在费用中心；Stripe 配置 Publishable Key 后使用 Embedded Checkout 在当前页显示卡、微信支付和支付宝，否则自动进入 Hosted Checkout；PayPal 使用 Orders 创建和 Capture。充值订单必须携带 `Idempotency-Key`，余额只由经过官方签名/官方 API 验证的支付结果入账。Stripe Webhook 地址为 `https://当前域名/payments/webhooks/stripe`，后台会显示并支持复制；成功/取消返回地址由 Checkout Session 自动生成并回到 `#console/billing`，不参与入账判断。
 
 Stripe 支付方式可在支付配置中按需勾选 `card`、`alipay`、`wechat_pay`；全部不勾选时使用 Stripe Dashboard 动态支付方式。Apple Pay 和 Google Pay 属于卡支付钱包能力，不作为独立类型配置。当前白名单是全局配置；不同国家的固定支付方式规则需要额外的国家采集和服务端规则配置。
 
@@ -237,7 +238,7 @@ migrations/
 - 生产在 Nginx 等反向代理后运行时，必须配置 `TRUSTED_PROXY_CIDRS`，仅信任这些代理追加的 `X-Forwarded-For`；这决定 Token IP 白名单和使用记录中的客户端 IP。
 - 生产应用进程必须监听回环地址（例如 `127.0.0.1:8080`），并按流式与媒体请求配置 `HTTP_READ_TIMEOUT`、`HTTP_WRITE_TIMEOUT`、`HTTP_IDLE_TIMEOUT`；默认写超时为 15 分钟。
 - 审计日志只追加不提供业务删除接口；IP 和 User-Agent 在审计中保存哈希，使用记录中的客户端 IP 用于管理员排障与账务追踪。
-- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `054_model_monitor_next_probe.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。渠道的上游成本折扣、客户扣费快照和上游参考价快照由 `042`、`043`、`044` 迁移创建，企业认证和支付订单由 `046`、`047` 创建，充值幂等键租户隔离由 `048` 创建，Token 消费限额、分组计量方式、模型状态历史窗口、监控主模型和主动探测调度时间由 `049` 至 `054` 创建。
+- `migrations/` 中的迁移按文件名顺序执行，当前发布目录最高版本为 `058_payment_recharge_rate.sql`；所有环境都应通过应用启动自动执行，发布时必须让二进制、前端和迁移来自同一提交。渠道的上游成本折扣、客户扣费快照和上游参考价快照由 `042`、`043`、`044` 迁移创建，企业认证和支付订单由 `046`、`047` 创建，充值幂等键租户隔离由 `048` 创建，Token 消费限额、分组计量方式、模型状态历史窗口、监控主模型和主动探测调度时间由 `049` 至 `054` 创建，充值费率与订单到账额度由 `058` 创建。
 
 ## 重要限制
 

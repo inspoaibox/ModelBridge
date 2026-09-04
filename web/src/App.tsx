@@ -46,6 +46,7 @@ import {
   ProfileFormState,
   PriceMatrixSummary,
   PaymentOrder,
+  PaymentOrderList,
   PaymentProviderConfig,
   PublicPaymentProvider,
   ModelPriceFormState,
@@ -142,7 +143,9 @@ function parseRoute(hash: string): SectionRoute {
 
 function normalizeConsoleSection(value: string): ConsoleSection {
   if (value === "security") return "profile";
-  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "enterprise" || value === "profile" || value === "docs"
+  if (value === "usage") return "billing-records";
+  if (value === "billing-center") return "billing";
+  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "billing-records" || value === "billing-center" || value === "billing-orders" || value === "enterprise" || value === "profile" || value === "docs"
     ? value
     : "dashboard";
 }
@@ -784,6 +787,9 @@ export default function App() {
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [paymentOrder, setPaymentOrder] = useState<PaymentOrder | null>(null);
+  const [paymentOrders, setPaymentOrders] = useState<PaymentOrderList | null>(null);
+  const [paymentOrdersBusy, setPaymentOrdersBusy] = useState(false);
+  const [paymentOrdersOffset, setPaymentOrdersOffset] = useState(0);
   const [paymentConfigs, setPaymentConfigs] = useState<PaymentProviderConfig[]>([]);
   const [paymentSettingsBusy, setPaymentSettingsBusy] = useState(false);
   const [paymentSettingsMessage, setPaymentSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
@@ -1085,7 +1091,7 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens" && consoleSection !== "projects" && consoleSection !== "usage")) return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "tokens" && consoleSection !== "projects" && consoleSection !== "billing-records")) return;
     refreshConsoleTokens(true);
     refreshConsoleTokenGroups();
   }, [signedIn, audience, route.view, consoleSection, language]);
@@ -1131,13 +1137,14 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing") return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || !["billing", "billing-center", "billing-records", "billing-orders"].includes(consoleSection)) return;
     refreshConsoleBilling();
     refreshPaymentProviders();
+    if (consoleSection === "billing-orders") refreshPaymentOrders();
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing") return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || !["billing", "billing-center", "billing-records", "billing-orders"].includes(consoleSection)) return;
     const query = new URLSearchParams(window.location.search);
     const orderID = query.get("payment_order_id")?.trim();
     const provider = query.get("provider")?.trim().toLowerCase();
@@ -1157,13 +1164,13 @@ export default function App() {
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing" || paymentOrder?.status !== "pending") return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || !["billing", "billing-center", "billing-records", "billing-orders"].includes(consoleSection) || paymentOrder?.status !== "pending") return;
     const interval = window.setInterval(() => void refreshPaymentOrder(), 5_000);
     return () => window.clearInterval(interval);
   }, [signedIn, audience, route.view, consoleSection, paymentOrder?.id, paymentOrder?.status]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "usage")) return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "billing-records")) return;
     refreshConsoleUsage();
   }, [signedIn, audience, route.view, consoleSection, language]);
 
@@ -2686,6 +2693,22 @@ export default function App() {
     }
   }
 
+  async function refreshPaymentOrders(offset = paymentOrdersOffset) {
+    if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("billing:read")) return;
+    setPaymentOrdersBusy(true);
+    try {
+      const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge?limit=20&offset=${Math.max(0, offset)}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as PaymentOrderList & { error?: string };
+      if (!response.ok) throw new Error(result.error || "payment orders unavailable");
+      setPaymentOrders(result);
+      setPaymentOrdersOffset(result.offset || 0);
+    } catch {
+      setPaymentOrders({ orders: [], total: 0, limit: 20, offset: 0 });
+    } finally {
+      setPaymentOrdersBusy(false);
+    }
+  }
+
   async function createPaymentOrder(provider: PaymentOrder["provider"], amount: string, currency: string) {
     if (!principal?.tenant_id) return;
     setPaymentBusy(true);
@@ -2702,6 +2725,10 @@ export default function App() {
       if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
       setPaymentOrder(result);
       setPaymentMessage({ kind: "success", text: t("rechargeCreated") });
+      await refreshPaymentOrders(0);
+      if (result.checkout_url && !result.checkout_client_secret) {
+        window.location.assign(result.checkout_url);
+      }
     } catch (error) {
       setPaymentMessage({ kind: "error", text: error instanceof Error ? error.message : t("rechargeFailed") });
     } finally {
@@ -2944,7 +2971,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       ...defaultModelMonitorForm(),
       group_id: firstGroup?.id || "",
       name: firstGroup ? `${firstGroup.name} ${t("adminModelMonitorDefaultName")}` : "",
-      primary_model: firstGroup?.models[0] || "",
+      // Primary model is optional; the server resolves the first current model.
+      primary_model: "",
     });
     setAdminModelMonitorFormOpen(true);
     setAdminModelMonitorsMessage({ kind: "", text: "" });
@@ -3009,6 +3037,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
           ? t("adminModelMonitorGroupNotFound")
           : code === "MODEL_MONITOR_GROUP_INACTIVE"
           ? t("adminModelMonitorGroupInactive")
+          : code === "MODEL_MONITORS_UNAVAILABLE"
+          ? t("adminModelMonitorUnavailable")
           : t("adminModelMonitorValidation"),
       });
       return false;
@@ -4381,6 +4411,9 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             createPaymentOrder={createPaymentOrder}
             refreshPaymentOrder={refreshPaymentOrder}
             capturePayPal={capturePayPal}
+            paymentOrders={paymentOrders}
+            paymentOrdersBusy={paymentOrdersBusy}
+            refreshPaymentOrders={refreshPaymentOrders}
             usageStatus={usageStatus}
             usageBusy={usageBusy}
             usageMessage={usageMessage}

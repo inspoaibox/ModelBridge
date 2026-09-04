@@ -55,8 +55,26 @@ type ProviderConfig struct {
 }
 
 type PublicProvider struct {
-	Provider string `json:"provider"`
-	Enabled  bool   `json:"enabled"`
+	Provider       string `json:"provider"`
+	Enabled        bool   `json:"enabled"`
+	RechargeRate   string `json:"recharge_rate,omitempty"`
+	PublishableKey string `json:"publishable_key,omitempty"`
+}
+
+type OrderQuery struct {
+	Limit  int
+	Offset int
+}
+
+type OrderList struct {
+	Orders []Order `json:"orders"`
+	Total  int64   `json:"total"`
+	Limit  int     `json:"limit"`
+	Offset int     `json:"offset"`
+}
+
+type OrderLister interface {
+	ListOrders(context.Context, string, OrderQuery) (OrderList, error)
 }
 
 // ConfigUpdate accepts only named string fields. Secret values are omitted by
@@ -78,22 +96,25 @@ type CreateRequest struct {
 }
 
 type Order struct {
-	ID              string     `json:"id"`
-	TenantID        string     `json:"tenant_id"`
-	UserID          string     `json:"user_id"`
-	Provider        string     `json:"provider"`
-	MerchantOrderNo string     `json:"merchant_order_no"`
-	ProviderOrderID string     `json:"provider_order_id,omitempty"`
-	Amount          string     `json:"amount"`
-	Currency        string     `json:"currency"`
-	Status          string     `json:"status"`
-	CheckoutURL     string     `json:"checkout_url,omitempty"`
-	QRCode          string     `json:"qr_code,omitempty"`
-	FailureReason   string     `json:"failure_reason,omitempty"`
-	PaidAt          *time.Time `json:"paid_at,omitempty"`
-	ExpiresAt       time.Time  `json:"expires_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                   string     `json:"id"`
+	TenantID             string     `json:"tenant_id"`
+	UserID               string     `json:"user_id"`
+	Provider             string     `json:"provider"`
+	MerchantOrderNo      string     `json:"merchant_order_no"`
+	ProviderOrderID      string     `json:"provider_order_id,omitempty"`
+	Amount               string     `json:"amount"`
+	CreditedAmount       string     `json:"credited_amount"`
+	RechargeRate         string     `json:"recharge_rate"`
+	Currency             string     `json:"currency"`
+	Status               string     `json:"status"`
+	CheckoutURL          string     `json:"checkout_url,omitempty"`
+	CheckoutClientSecret string     `json:"checkout_client_secret,omitempty"`
+	QRCode               string     `json:"qr_code,omitempty"`
+	FailureReason        string     `json:"failure_reason,omitempty"`
+	PaidAt               *time.Time `json:"paid_at,omitempty"`
+	ExpiresAt            time.Time  `json:"expires_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type CreateResult struct {
@@ -159,17 +180,17 @@ var allowedFieldsByProvider = map[string]map[string]struct{}{
 	ProviderWechat: {
 		"app_id": {}, "mch_id": {}, "serial_no": {}, "platform_certificate_serial_no": {},
 		"private_key_pem": {}, "api_v3_key": {}, "platform_certificate_pem": {},
-		"notify_url": {}, "api_base_url": {},
+		"notify_url": {}, "api_base_url": {}, "recharge_rate": {},
 	},
 	ProviderAlipay: {
 		"app_id": {}, "seller_id": {}, "private_key_pem": {}, "alipay_public_key_pem": {},
-		"notify_url": {}, "gateway": {},
+		"notify_url": {}, "gateway": {}, "recharge_rate": {},
 	},
 	ProviderStripe: {
-		"secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "api_base_url": {}, "payment_method_types": {},
+		"secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "api_base_url": {}, "payment_method_types": {}, "recharge_rate": {},
 	},
 	ProviderPayPal: {
-		"client_id": {}, "client_secret": {}, "webhook_id": {}, "environment": {},
+		"client_id": {}, "client_secret": {}, "webhook_id": {}, "environment": {}, "recharge_rate": {},
 	},
 }
 
@@ -210,6 +231,8 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 		if !hasRequiredFields(item.Provider, values) {
 			continue
 		}
+		item.RechargeRate = normalizedRechargeRate(values["recharge_rate"])
+		item.PublishableKey = strings.TrimSpace(values["publishable_key"])
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -238,6 +261,12 @@ func (s *SQLService) AdminUpdate(ctx context.Context, actorID, provider string, 
 		}
 		if provider == ProviderStripe && key == "payment_method_types" {
 			value, err = normalizeStripePaymentMethods(value)
+			if err != nil {
+				return ProviderConfig{}, err
+			}
+		}
+		if key == "recharge_rate" {
+			value, err = normalizeRechargeRate(value)
 			if err != nil {
 				return ProviderConfig{}, err
 			}
@@ -351,6 +380,7 @@ func validConfigKey(provider, key string) bool {
 	known := map[string]struct{}{
 		"app_id": {}, "mch_id": {}, "serial_no": {}, "platform_certificate_serial_no": {}, "private_key_pem": {}, "api_v3_key": {}, "platform_certificate_pem": {}, "notify_url": {}, "api_base_url": {},
 		"gateway": {}, "seller_id": {}, "alipay_public_key_pem": {}, "secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "payment_method_types": {}, "client_id": {}, "client_secret": {}, "environment": {}, "webhook_id": {},
+		"recharge_rate": {},
 	}
 	if _, ok := known[key]; !ok || !supportedProvider(provider) {
 		return false
@@ -409,6 +439,9 @@ func validateProviderConfig(provider string, values map[string]string) error {
 			return err
 		}
 	}
+	if _, err := normalizeRechargeRate(values["recharge_rate"]); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -443,6 +476,46 @@ func normalizeStripePaymentMethods(value string) (string, error) {
 	return strings.Join(normalized, ","), nil
 }
 
+func normalizeRechargeRate(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "1", nil
+	}
+	rat, ok := new(big.Rat).SetString(value)
+	if !ok || rat.Sign() <= 0 || rat.Cmp(new(big.Rat).SetInt64(1000000)) > 0 {
+		return "", ErrInvalidRequest
+	}
+	return strings.TrimRight(strings.TrimRight(rat.FloatString(12), "0"), "."), nil
+}
+
+func normalizedRechargeRate(value string) string {
+	normalized, err := normalizeRechargeRate(value)
+	if err != nil || normalized == "" {
+		return "1"
+	}
+	return normalized
+}
+
+func applyRechargeRate(amount, rate, currency string) (string, error) {
+	base, err := normalizeAmount(amount, currency)
+	if err != nil {
+		return "", err
+	}
+	rateValue, ok := new(big.Rat).SetString(normalizedRechargeRate(rate))
+	if !ok || rateValue.Sign() <= 0 {
+		return "", ErrInvalidRequest
+	}
+	value, _ := new(big.Rat).SetString(base)
+	value.Mul(value, rateValue)
+	decimals := decimalPlaces(currency)
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	scaled := new(big.Rat).Mul(value, new(big.Rat).SetInt(scale))
+	if scaled.Denom().Cmp(big.NewInt(1)) != 0 {
+		return "", ErrInvalidRequest
+	}
+	return trimDecimal(value.FloatString(12)), nil
+}
+
 func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (CreateResult, error) {
 	if s == nil || s.db == nil || s.biller == nil {
 		return CreateResult{}, ErrUnavailable
@@ -452,7 +525,7 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	if !ids.Valid(request.TenantID) || !ids.Valid(request.UserID) || !supportedProvider(request.Provider) || request.IdempotencyKey == "" || len(request.IdempotencyKey) > 128 || !validHTTPSURL(request.ReturnURL) {
 		return CreateResult{}, ErrInvalidRequest
 	}
-	amount, err := normalizeAmount(request.Amount, request.Currency)
+	paidAmount, err := normalizeAmount(request.Amount, request.Currency)
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -482,6 +555,11 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	if !hasRequiredFields(request.Provider, config) {
 		return CreateResult{}, ErrProviderUnconfig
 	}
+	rate := normalizedRechargeRate(config["recharge_rate"])
+	creditedAmount, err := applyRechargeRate(paidAmount, rate, request.Currency)
+	if err != nil {
+		return CreateResult{}, err
+	}
 	var existing Order
 	if err := s.scanOrder(s.db.QueryRowContext(ctx, orderSelect+` WHERE po.idempotency_key = $1 AND po.tenant_id = $2::uuid`, request.IdempotencyKey, request.TenantID), &existing); err == nil {
 		return CreateResult{Order: existing}, nil
@@ -494,7 +572,7 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	}
 	merchant := "recharge_" + strings.ReplaceAll(id, "-", "")
 	expires := s.clock().Add(orderLifetime)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO payment_orders (id, tenant_id, user_id, provider, merchant_order_no, amount, currency, expires_at, idempotency_key) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::numeric, $7, $8, $9)`, id, request.TenantID, request.UserID, request.Provider, merchant, amount, request.Currency, expires, request.IdempotencyKey)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO payment_orders (id, tenant_id, user_id, provider, merchant_order_no, amount, credited_amount, recharge_rate, currency, expires_at, idempotency_key) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::numeric, $7::numeric, $8::numeric, $9, $10, $11)`, id, request.TenantID, request.UserID, request.Provider, merchant, paidAmount, creditedAmount, rate, request.Currency, expires, request.IdempotencyKey)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return s.getExistingByIdempotency(ctx, request.TenantID, request.IdempotencyKey)
@@ -552,13 +630,49 @@ func (s *SQLService) getOrderByID(ctx context.Context, tenantID, orderID string)
 	return order, err
 }
 
-const orderSelect = `SELECT po.id::text, po.tenant_id::text, po.user_id::text, po.provider, po.merchant_order_no, COALESCE(po.provider_order_id, ''), po.amount::text, po.currency, po.status, COALESCE(po.checkout_url, ''), COALESCE(po.qr_code, ''), COALESCE(po.failure_reason, ''), po.paid_at, po.expires_at, po.created_at, po.updated_at FROM payment_orders po`
+func (s *SQLService) ListOrders(ctx context.Context, tenantID string, query OrderQuery) (OrderList, error) {
+	if s == nil || s.db == nil || !ids.Valid(strings.TrimSpace(tenantID)) {
+		return OrderList{}, ErrInvalidRequest
+	}
+	if query.Limit <= 0 {
+		query.Limit = 20
+	}
+	if query.Limit > 100 {
+		query.Limit = 100
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	var total int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM payment_orders WHERE tenant_id = $1::uuid`, tenantID).Scan(&total); err != nil {
+		return OrderList{}, err
+	}
+	rows, err := s.db.QueryContext(ctx, orderSelect+` WHERE po.tenant_id = $1::uuid ORDER BY po.created_at DESC LIMIT $2 OFFSET $3`, tenantID, query.Limit, query.Offset)
+	if err != nil {
+		return OrderList{}, err
+	}
+	defer rows.Close()
+	orders := make([]Order, 0, query.Limit)
+	for rows.Next() {
+		var order Order
+		if err := s.scanOrder(rows, &order); err != nil {
+			return OrderList{}, err
+		}
+		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		return OrderList{}, err
+	}
+	return OrderList{Orders: orders, Total: total, Limit: query.Limit, Offset: query.Offset}, nil
+}
+
+const orderSelect = `SELECT po.id::text, po.tenant_id::text, po.user_id::text, po.provider, po.merchant_order_no, COALESCE(po.provider_order_id, ''), po.amount::text, po.credited_amount::text, po.recharge_rate::text, po.currency, po.status, COALESCE(po.checkout_url, ''), COALESCE(po.checkout_client_secret, ''), COALESCE(po.qr_code, ''), COALESCE(po.failure_reason, ''), po.paid_at, po.expires_at, po.created_at, po.updated_at FROM payment_orders po`
 
 type scanner interface{ Scan(...any) error }
 
 func (s *SQLService) scanOrder(row scanner, order *Order) error {
 	var paid sql.NullTime
-	err := row.Scan(&order.ID, &order.TenantID, &order.UserID, &order.Provider, &order.MerchantOrderNo, &order.ProviderOrderID, &order.Amount, &order.Currency, &order.Status, &order.CheckoutURL, &order.QRCode, &order.FailureReason, &paid, &order.ExpiresAt, &order.CreatedAt, &order.UpdatedAt)
+	err := row.Scan(&order.ID, &order.TenantID, &order.UserID, &order.Provider, &order.MerchantOrderNo, &order.ProviderOrderID, &order.Amount, &order.CreditedAmount, &order.RechargeRate, &order.Currency, &order.Status, &order.CheckoutURL, &order.CheckoutClientSecret, &order.QRCode, &order.FailureReason, &paid, &order.ExpiresAt, &order.CreatedAt, &order.UpdatedAt)
 	if paid.Valid {
 		order.PaidAt = &paid.Time
 	}
@@ -566,8 +680,8 @@ func (s *SQLService) scanOrder(row scanner, order *Order) error {
 }
 
 type providerOrder struct {
-	ProviderOrderID, CheckoutURL, QRCode string
-	Raw                                  json.RawMessage
+	ProviderOrderID, CheckoutURL, QRCode, CheckoutClientSecret string
+	Raw                                                        json.RawMessage
 }
 
 func (s *SQLService) createProviderOrder(ctx context.Context, order Order, config map[string]string, returnURL string) (providerOrder, error) {
@@ -586,7 +700,7 @@ func (s *SQLService) createProviderOrder(ctx context.Context, order Order, confi
 }
 
 func (s *SQLService) updateProviderOrder(ctx context.Context, order Order, result providerOrder) (Order, error) {
-	_, err := s.db.ExecContext(ctx, `UPDATE payment_orders SET provider_order_id = NULLIF($2, ''), checkout_url = NULLIF($3, ''), qr_code = NULLIF($4, ''), response_payload_json = $5::jsonb, updated_at = now() WHERE id = $1::uuid`, order.ID, result.ProviderOrderID, result.CheckoutURL, result.QRCode, []byte(orEmptyJSON(result.Raw)))
+	_, err := s.db.ExecContext(ctx, `UPDATE payment_orders SET provider_order_id = NULLIF($2, ''), checkout_url = NULLIF($3, ''), qr_code = NULLIF($4, ''), checkout_client_secret = NULLIF($5, ''), response_payload_json = $6::jsonb, updated_at = now() WHERE id = $1::uuid`, order.ID, result.ProviderOrderID, result.CheckoutURL, result.QRCode, result.CheckoutClientSecret, []byte(orEmptyJSON(result.Raw)))
 	if err != nil {
 		return Order{}, err
 	}
@@ -681,7 +795,7 @@ func (s *SQLService) settleCallback(ctx context.Context, payment callbackPayment
 		_, _ = s.db.ExecContext(ctx, `UPDATE payment_orders SET status = 'expired', updated_at = now() WHERE id = $1::uuid AND status = 'pending'`, order.ID)
 		return ErrOrderClosed
 	}
-	if _, err := s.biller.Credit(ctx, "payment:"+order.Provider, billing.CreditRequest{TenantID: order.TenantID, Currency: order.Currency, Amount: order.Amount, IdempotencyKey: "payment:credit:" + order.ID, Reason: "online recharge " + order.MerchantOrderNo}); err != nil && !errors.Is(err, billing.ErrDuplicateTransaction) {
+	if _, err := s.biller.Credit(ctx, "payment:"+order.Provider, billing.CreditRequest{TenantID: order.TenantID, Currency: order.Currency, Amount: order.CreditedAmount, IdempotencyKey: "payment:credit:" + order.ID, Reason: "online recharge " + order.MerchantOrderNo}); err != nil && !errors.Is(err, billing.ErrDuplicateTransaction) {
 		return err
 	}
 	now := s.clock()

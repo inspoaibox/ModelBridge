@@ -54,7 +54,7 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "selected primary model must be monitored",
+			name: "selected primary model validation is deferred to save",
 			request: ModelMonitorMutation{
 				GroupID:       testMonitorGroupID,
 				Name:          "Invalid primary",
@@ -62,7 +62,11 @@ func TestModelMonitorMutationValidation(t *testing.T) {
 				ModelNames:    []string{"gpt-5"},
 				PrimaryModel:  "claude-sonnet",
 			},
-			wantErr: true,
+			assert: func(t *testing.T, got ModelMonitorMutation) {
+				if got.PrimaryModel != "claude-sonnet" {
+					t.Fatalf("primary model = %q", got.PrimaryModel)
+				}
+			},
 		},
 		{
 			name: "selected mode requires a model",

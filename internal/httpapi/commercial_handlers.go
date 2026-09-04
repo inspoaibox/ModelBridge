@@ -293,6 +293,36 @@ func paymentGetOrderHandler(service payments.Service) http.Handler {
 	})
 }
 
+func paymentListOrdersHandler(service payments.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PAYMENTS_UNAVAILABLE"})
+			return
+		}
+		principal, ok := principalFromRequest(r)
+		if !ok || principal.TenantID == "" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "RESOURCE_NOT_FOUND"})
+			return
+		}
+		reader, ok := service.(payments.OrderLister)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PAYMENTS_UNAVAILABLE"})
+			return
+		}
+		limit, offset, err := reportPagination(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PAYMENT_REQUEST"})
+			return
+		}
+		orders, err := reader.ListOrders(r.Context(), principal.TenantID, payments.OrderQuery{Limit: limit, Offset: offset})
+		if err != nil {
+			writePaymentError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, orders)
+	})
+}
+
 func paymentPayPalCaptureHandler(service payments.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {

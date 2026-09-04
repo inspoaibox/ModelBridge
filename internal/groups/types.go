@@ -286,18 +286,6 @@ func (m ModelMonitorMutation) validate() (ModelMonitorMutation, error) {
 	if m.SelectionMode == MonitorSelectionSelected && len(m.ModelNames) == 0 {
 		return ModelMonitorMutation{}, ErrInvalidRequest
 	}
-	if m.SelectionMode == MonitorSelectionSelected && m.PrimaryModel != "" {
-		foundPrimary := false
-		for _, modelName := range m.ModelNames {
-			if modelName == m.PrimaryModel {
-				foundPrimary = true
-				break
-			}
-		}
-		if !foundPrimary {
-			return ModelMonitorMutation{}, ErrInvalidRequest
-		}
-	}
 	if m.SelectionMode == MonitorSelectionAll {
 		m.ModelNames = nil
 	}

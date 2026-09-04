@@ -5,7 +5,7 @@ export type Language = "zh" | "en";
 export type Audience = "admin" | "console";
 export type TranslationKey = keyof (typeof translations)["zh"];
 export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "enterprise" | "settings";
-export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "enterprise" | "profile" | "docs";
+export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "billing-records" | "billing-center" | "billing-orders" | "enterprise" | "profile" | "docs";
 export type View = "home" | "models" | "login" | "admin-login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
 
 export interface Principal {
@@ -659,6 +659,8 @@ export interface PaymentProviderConfig {
 export interface PublicPaymentProvider {
   provider: PaymentProviderConfig["provider"];
   enabled: boolean;
+  recharge_rate?: string;
+  publishable_key?: string;
 }
 
 export interface PaymentOrder {
@@ -669,15 +671,25 @@ export interface PaymentOrder {
   merchant_order_no: string;
   provider_order_id?: string;
   amount: string;
+  credited_amount?: string;
+  recharge_rate?: string;
   currency: string;
   status: "pending" | "paid" | "failed" | "cancelled" | "expired";
   checkout_url?: string;
+  checkout_client_secret?: string;
   qr_code?: string;
   failure_reason?: string;
   paid_at?: string;
   expires_at: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface PaymentOrderList {
+  orders: PaymentOrder[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface OperationsSnapshot {
