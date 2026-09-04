@@ -508,17 +508,16 @@ export function AdminConsole({
     }
   };
 
-  const channelStatusLabel = (status: string) => {
-    switch (status) {
-      case "active":
-        return t("channelsStatusActive");
-      case "draining":
-        return t("channelsStatusDraining");
-      case "disabled":
-        return t("channelsStatusDisabled");
-      default:
-        return t("channelsStatusUnknown");
-    }
+  const channelOperationalStatusLabel = (channel: ChannelSummary) => {
+    const autoDisabled = Boolean(channel.auto_disabled_until && new Date(channel.auto_disabled_until).getTime() > Date.now());
+    return !autoDisabled && channel.status === "active"
+      ? t("channelsStatusNormal")
+      : t("channelsStatusAbnormal");
+  };
+
+  const channelOperationalStatusVariant = (channel: ChannelSummary): "success" | "destructive" => {
+    const autoDisabled = Boolean(channel.auto_disabled_until && new Date(channel.auto_disabled_until).getTime() > Date.now());
+    return !autoDisabled && channel.status === "active" ? "success" : "destructive";
   };
 
   const upstreamIntegrationLabel = (integration: string) => {
@@ -1313,19 +1312,19 @@ export function AdminConsole({
               )}
 
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-x-auto">
-                <Table>
+                <Table className="min-w-[1680px] whitespace-nowrap">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t("channelsColName")}</TableHead>
-                      <TableHead>{t("channelsColProvider")}</TableHead>
-                      <TableHead>{t("channelsColUpstreamIntegration")}</TableHead>
-                      <TableHead>{t("channelsColStatus")}</TableHead>
-                      <TableHead>{t("channelsColPriority")}</TableHead>
-                      <TableHead>{t("channelsColCostDiscount")}</TableHead>
-                      <TableHead>{t("channelsColAccount")}</TableHead>
-                      <TableHead>{t("channelsColModels")}</TableHead>
-                      <TableHead>{t("channelsColCredential")}</TableHead>
-                      <TableHead className="text-right">{t("channelsColAction")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColName")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColProvider")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColUpstreamIntegration")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColStatus")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColPriority")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColCostDiscount")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColAccount")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColModels")}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t("channelsColCredential")}</TableHead>
+                      <TableHead className="whitespace-nowrap text-right">{t("channelsColAction")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1344,19 +1343,18 @@ export function AdminConsole({
                       </TableRow>
                     ) : (
                       filteredChannels.map((channel) => {
-                        const autoDisabled = Boolean(channel.auto_disabled_until && new Date(channel.auto_disabled_until).getTime() > Date.now());
                         return (
                         <TableRow key={channel.id}>
                           {/* Name & URL */}
-                          <TableCell className="min-w-[200px]">
+                          <TableCell className="min-w-[220px] whitespace-nowrap">
                             <div className="font-bold text-slate-900 dark:text-white tracking-tight">{channel.name}</div>
-                            <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono truncate max-w-[220px]">
+                            <div className="mt-0.5 max-w-[260px] truncate text-xs font-mono text-slate-500 dark:text-slate-400">
                               {channel.base_url}
                             </div>
                           </TableCell>
 
                           {/* Provider */}
-                          <TableCell>
+                          <TableCell className="whitespace-nowrap">
                             <Badge
                               variant={channel.provider === "anthropic" ? "purple" : "cyan"}
                               className="font-mono text-[10px] uppercase font-bold"
@@ -1366,28 +1364,21 @@ export function AdminConsole({
                           </TableCell>
 
                           {/* Upstream integration */}
-                          <TableCell className="min-w-[135px]">
+                          <TableCell className="min-w-[135px] whitespace-nowrap">
                             <Badge variant={channel.upstream_integration === "official" ? "cyan" : "purple"} className="text-[10px]">
                               {upstreamIntegrationLabel(channel.upstream_integration)}
                             </Badge>
                           </TableCell>
 
                           {/* Status */}
-                          <TableCell>
-                            <Badge variant={autoDisabled ? "warning" : channel.status === "active" ? "success" : channel.status === "draining" ? "warning" : "muted"}>
-                              <span
-                                className={cn(
-                                  "h-1.5 w-1.5 rounded-full",
-                                  autoDisabled ? "bg-amber-500 animate-pulse" : channel.status === "active" ? "bg-emerald-500 animate-pulse" : "bg-current"
-                                )}
-                              />
-                              <span>{autoDisabled ? t("channelsStatusAutoDisabled") : channelStatusLabel(channel.status)}</span>
+                          <TableCell className="whitespace-nowrap">
+                            <Badge variant={channelOperationalStatusVariant(channel)}>
+                              {channelOperationalStatusLabel(channel)}
                             </Badge>
-                            {channel.consecutive_failures ? <div className="mt-1 text-[10px] font-mono text-amber-600 dark:text-amber-300">{t("channelsFailureCount")}: {channel.consecutive_failures}/3</div> : null}
                           </TableCell>
 
                           {/* Priority & Weight */}
-                          <TableCell>
+                          <TableCell className="min-w-[130px] whitespace-nowrap">
                             <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
                               Priority: <span className="font-mono text-indigo-600 dark:text-indigo-300">{channel.priority}</span>
                             </div>
@@ -1397,7 +1388,7 @@ export function AdminConsole({
                           </TableCell>
 
                           {/* Upstream cost factor */}
-                          <TableCell className="whitespace-nowrap">
+                          <TableCell className="min-w-[125px] whitespace-nowrap">
                             <div className="font-mono text-xs font-semibold text-cyan-700 dark:text-cyan-300">
                               x{formatMultiplier(channel.upstream_cost_discount || "1.000000")}
                             </div>
@@ -1407,11 +1398,22 @@ export function AdminConsole({
                           </TableCell>
 
                           {/* Optional upstream account snapshot */}
-                          <TableCell className="min-w-[190px]">
+                          <TableCell className="min-w-[260px] whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <Badge variant={accountSyncStatusVariant(channel.upstream_account_sync_status)} className="text-[10px]">
                                 {accountSyncStatusLabel(channel.upstream_account_sync_status)}
                               </Badge>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1 px-2 text-[11px] text-cyan-700 hover:bg-cyan-50 dark:text-cyan-300 dark:hover:bg-cyan-500/10"
+                                onClick={() => void syncChannelAccount(channel)}
+                                disabled={!canSeeAdminPermission("channel:read") || Boolean(channelActionBusy)}
+                                title={t("channelsAccountRefresh")}
+                              >
+                                <RefreshCw className={cn("h-3 w-3", channelActionBusy === `account-sync:${channel.id}` ? "animate-spin" : "")} />
+                                <span>{t("channelsAccountRefresh")}</span>
+                              </Button>
                               {channel.upstream_account_sync_status === "failed" && channel.upstream_account_sync_error ? (
                                 <span className="max-w-[140px] truncate text-[10px] text-rose-600 dark:text-rose-300" title={channel.upstream_account_sync_error}>
                                   {channel.upstream_account_sync_error}
@@ -1458,8 +1460,8 @@ export function AdminConsole({
                           </TableCell>
 
                           {/* Credential Reference */}
-                          <TableCell className="min-w-[160px]">
-                            <span className="rounded-lg bg-slate-100 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 px-2.5 py-1 text-[11px] font-mono text-slate-700 dark:text-slate-300">
+                          <TableCell className="min-w-[170px] whitespace-nowrap">
+                            <span className="inline-block max-w-[230px] truncate rounded-lg border border-slate-200 bg-slate-100 px-2.5 py-1 font-mono text-[11px] text-slate-700 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-300" title={channelCredentialLabel(channel)}>
                               {channelCredentialLabel(channel)}
                             </span>
                           </TableCell>
@@ -1467,16 +1469,6 @@ export function AdminConsole({
                           {/* Actions */}
                           <TableCell className="text-right whitespace-nowrap">
                             <div className="inline-flex items-center gap-1.5">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-500/10"
-                                onClick={() => void syncChannelAccount(channel)}
-                                disabled={!canSeeAdminPermission("channel:read") || Boolean(channelActionBusy)}
-                                title={t("channelsAccountSync")}
-                              >
-                                <RefreshCw className={cn("h-3.5 w-3.5", channelActionBusy === `account-sync:${channel.id}` ? "animate-spin" : "")} />
-                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -2100,7 +2092,7 @@ function PriceMatrixTable({
               <Badge variant="outline" className="self-start sm:self-auto">{group.models.length} {t("billingModelsUnit")}</Badge>
             </div>
             <div className="overflow-x-auto">
-              <Table>
+                <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t("billingPriceModel")}</TableHead>

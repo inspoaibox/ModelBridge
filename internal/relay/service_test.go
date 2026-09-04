@@ -113,6 +113,34 @@ func TestChannelMutationAllowsEmptyModelMappings(t *testing.T) {
 	}
 }
 
+func TestChannelMutationNormalizesPersistedCostFactorWithoutTrailingZeros(t *testing.T) {
+	request, err := (ChannelMutation{
+		Name:                  "Existing channel",
+		Provider:              ProviderOpenAI,
+		BaseURL:               "https://api.openai.com/v1",
+		UpstreamCostDiscount: "1.000000000000000000",
+	}).validate(false)
+	if err != nil {
+		t.Fatalf("persisted numeric value must remain editable: %v", err)
+	}
+	if request.UpstreamCostDiscount != "1" {
+		t.Fatalf("expected a compact cost factor, got %q", request.UpstreamCostDiscount)
+	}
+
+	request, err = (ChannelMutation{
+		Name:                  "Discounted channel",
+		Provider:              ProviderOpenAI,
+		BaseURL:               "https://api.openai.com/v1",
+		UpstreamCostDiscount: "0.123456789123456789",
+	}).validate(false)
+	if err != nil {
+		t.Fatalf("18 decimal places should match the database column precision: %v", err)
+	}
+	if request.UpstreamCostDiscount != "0.123456789123456789" {
+		t.Fatalf("unexpected normalized value %q", request.UpstreamCostDiscount)
+	}
+}
+
 func TestServiceRejectsModelOutsideTokenAllowlist(t *testing.T) {
 	provider := &recordingProvider{}
 	service, err := NewService(

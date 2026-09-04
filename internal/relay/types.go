@@ -639,14 +639,27 @@ func normalizeUpstreamCostDiscount(value string) (string, bool) {
 		}
 	}
 	parts := strings.Split(value, ".")
-	if len(parts) > 2 || (len(parts) == 2 && len(parts[1]) > 6) {
+	if len(parts) > 2 || (len(parts) == 2 && len(parts[1]) > 18) {
 		return "", false
 	}
 	rat, ok := new(big.Rat).SetString(value)
 	if !ok || rat.Sign() < 0 || rat.Cmp(new(big.Rat).SetInt64(1000)) > 0 {
 		return "", false
 	}
-	return rat.FloatString(6), true
+	return trimDecimalZeros(rat.FloatString(18)), true
+}
+
+func trimDecimalZeros(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.Contains(value, ".") {
+		return value
+	}
+	value = strings.TrimRight(value, "0")
+	value = strings.TrimRight(value, ".")
+	if value == "" || value == "-0" {
+		return "0"
+	}
+	return value
 }
 
 func (s *Service) ChatCompletions(

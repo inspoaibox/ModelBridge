@@ -11,6 +11,7 @@ import { ResetPasswordView } from "@/components/ResetPasswordView";
 import { EmailVerificationView } from "@/components/EmailVerificationView";
 import { StepUpDialog } from "@/components/StepUpDialog";
 import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
+import { formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import {
   AdminSection,
   APIEndpoint,
@@ -205,7 +206,7 @@ function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini"
     base_url: defaultProviderBaseURL(provider),
     api_key: "",
     status: "active",
-    upstream_cost_discount: "1.000000",
+    upstream_cost_discount: "1",
     upstream_integration: "official",
     upstream_account_credential: "",
     upstream_account_credential_configured: false,
@@ -238,7 +239,7 @@ function channelFormFromSummary(channel: ChannelSummary): ChannelFormState {
         : channel.status === "disabled"
         ? "disabled"
         : "active",
-    upstream_cost_discount: channel.upstream_cost_discount || "1.000000",
+    upstream_cost_discount: formatDecimalWithoutTrailingZeros(channel.upstream_cost_discount, "1"),
     upstream_integration:
       channel.upstream_integration === "newapi" ||
       channel.upstream_integration === "sub2api" ||
@@ -3924,13 +3925,34 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         }
       );
       if (!response.ok) {
-        throw new Error("save failed");
+        const result = (await response.json().catch(() => ({}))) as { error?: string };
+        if (response.status === 400) {
+          throw new Error(
+            result.error === "CHANNEL_CREDENTIAL_REQUIRED"
+              ? t("channelsCredentialRequired")
+              : result.error === "CHANNEL_CREDENTIAL_INVALID"
+                ? t("channelsCredentialInvalid")
+                : t("channelsSaveInvalid")
+          );
+        }
+        throw new Error(result.error || "save failed");
       }
       closeChannelForm();
       await refreshChannels(false);
       setChannelsMessage({ kind: "success", text: t("channelsSaveSuccess") });
-    } catch {
-      setChannelsMessage({ kind: "error", text: t("channelsUnavailable") });
+    } catch (error) {
+      setChannelsMessage({
+        kind: "error",
+        text:
+          error instanceof Error &&
+          ([
+            t("channelsSaveInvalid"),
+            t("channelsCredentialRequired"),
+            t("channelsCredentialInvalid"),
+          ] as string[]).includes(error.message)
+            ? error.message
+            : t("channelsUnavailable"),
+      });
     } finally {
       setChannelActionBusy("");
     }

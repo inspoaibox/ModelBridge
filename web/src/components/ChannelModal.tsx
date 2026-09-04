@@ -372,7 +372,7 @@ export function ChannelModal({
                         upstream_cost_discount: e.target.value,
                       }))
                     }
-                    placeholder="1.000000"
+                    placeholder="1"
                   />
                   <p className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
                     {t("channelsFormUpstreamCostDiscountHint")}

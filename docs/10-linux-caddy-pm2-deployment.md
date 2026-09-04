@@ -34,14 +34,16 @@ test -d /opt/ai-token/current && echo "当前发布目录：存在"
 test -x /opt/ai-token/current/bin/ai-token && echo "后端二进制：存在"
 test -f /opt/ai-token/current/web/dist/index.html && echo "前端构建：存在"
 runuser -u postgres -- psql -d ai_token -c 'SELECT current_database(), current_user;'
+runuser -u postgres -- psql -d ai_token -c \
+  "SELECT to_regclass('public.schema_migrations') AS schema_migrations;"
 ```
 
-若五项都正常，旧脚本已经完成了数据库、构建和环境文件；当前只需要处理 **Caddy
-同域名配置**、PM2 和管理员初始化。跳到第 7 节前，先执行下面的命令，并把输出中的
-`gateway.aokede.com` 站点块完整提供给维护人员：
+若这些检查都正常，旧脚本已经完成了数据库迁移、构建和环境文件；当前只需要处理
+**Caddy 同域名配置**、PM2 和管理员初始化。先设置你自己的域名，再执行下面的命令：
 
 ```bash
-grep -n -B 4 -A 80 -F 'gateway.aokede.com' /etc/caddy/Caddyfile
+export DOMAIN=gateway.example.com
+grep -n -B 4 -A 80 -F "$DOMAIN" /etc/caddy/Caddyfile
 ```
 
 这条命令只读取 Caddy 配置，不会修改任何内容。Caddyfile 不应包含数据库密码、上游
@@ -53,7 +55,7 @@ API Key 或用户 Token；如你的文件确实包含此类值，先删掉这些
 
 ```bash
 ls -ld /etc/ai-token /opt/ai-token /opt/ai-token/current /opt/ai-token/releases 2>&1
-find /opt/ai-token -maxdepth 2 -type f \( -name ai-token -o -name ai-token.env \) -print 2>/dev/null
+find /opt/ai-token -maxdepth 5 -type f \( -name ai-token -o -name ai-token.env \) -print 2>/dev/null
 ```
 
 ## 1. 确认服务器、域名和端口
@@ -111,6 +113,8 @@ systemctl status postgresql --no-pager
 `/usr/local/go`。
 
 ```bash
+(
+set -e
 cd /tmp
 curl -fLO https://go.dev/dl/go1.26.6.linux-amd64.tar.gz
 GO_SHA256="$(curl -fsSL https://go.dev/dl/go1.26.6.linux-amd64.tar.gz.sha256)"
@@ -119,6 +123,7 @@ rm -rf /usr/local/go
 tar -C /usr/local -xzf go1.26.6.linux-amd64.tar.gz
 ln -sf /usr/local/go/bin/go /usr/local/bin/go
 go version
+)
 ```
 
 最后一行应显示 `go version go1.26.6 ...`。如果校验失败，立即停止，不要继续安装。
@@ -128,6 +133,8 @@ go version
 下面步骤显式写入 NodeSource 的 APT 软件源，不执行第三方“快速安装脚本”。
 
 ```bash
+(
+set -e
 curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
   | gpg --dearmor --yes -o /usr/share/keyrings/nodesource.gpg
 printf '%s\n' \
@@ -139,6 +146,7 @@ npm install -g pm2
 node --version
 npm --version
 command -v pm2
+)
 ```
 
 `node --version` 应为 `v22` 或更高版本；最后一行会显示 PM2 命令所在路径。
@@ -148,6 +156,8 @@ command -v pm2
 先安装 Caddy 软件包。此步骤不会改动现有的 `/etc/caddy/Caddyfile`。
 
 ```bash
+(
+set -e
 apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
 curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
   | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -156,6 +166,7 @@ curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
 apt-get update
 apt-get install -y caddy
 caddy version
+)
 ```
 
 ## 4. 先检查 Caddy 是否已占用域名
@@ -163,11 +174,14 @@ caddy version
 在下载应用、创建数据库和环境文件**之前**，先检查目标域名是否已出现在 Caddy 配置中：
 
 ```bash
-grep -n -F "$DOMAIN" /etc/caddy/Caddyfile && {
+if [ ! -f /etc/caddy/Caddyfile ]; then
+  echo "停止：/etc/caddy/Caddyfile 不存在。请先确认 Caddy 安装是否成功。"
+elif grep -n -F "$DOMAIN" /etc/caddy/Caddyfile; then
   echo "停止：该域名已经在 Caddyfile 中配置。不要追加、不要覆盖。"
-  exit 20
-}
-echo "未发现同域名 Caddy 站点，可以继续。"
+  echo "请保留当前 SSH 终端，先查看第 4 节下面的原站点配置。"
+else
+  echo "未发现同域名 Caddy 站点，可以继续。"
+fi
 ```
 
 若输出“停止”，说明这个域名已经被其他 Caddy 站点使用。可能是旧项目、已有网站或已
@@ -180,6 +194,7 @@ grep -n -B 4 -A 80 -F "$DOMAIN" /etc/caddy/Caddyfile
 确认该域名现有站点的用途后再编辑那一个站点块。**绝不新增第二个同域名站点块。**
 
 若输出“未发现同域名 Caddy 站点”，继续下一节。
+本检查不会自动退出 SSH；看到“停止”时，请不要执行下一节，直接保留终端等待处理。
 
 ## 5. 下载并构建应用
 
@@ -187,15 +202,21 @@ grep -n -B 4 -A 80 -F "$DOMAIN" /etc/caddy/Caddyfile
 当前 UTC 时间生成它；不需要手动填写日期或 Git 标签。
 
 ```bash
+(
+set -e
 export REPO_URL=https://github.com/inspoaibox/ModelBridge.git
 export RELEASE="$(date -u +%Y%m%d-%H%M%S)"
 export RELEASE_DIR="/opt/ai-token/releases/$RELEASE"
 
 install -d -m 0755 /opt/ai-token/releases
 git clone --depth 1 --branch main "$REPO_URL" "$RELEASE_DIR"
-ln -sfn "$RELEASE_DIR" /opt/ai-token/current
+if [ -e /opt/ai-token/current ] && [ ! -L /opt/ai-token/current ]; then
+  echo "停止：/opt/ai-token/current 已经是目录，不会自动覆盖。"
+  echo "请先执行第 0 节检查旧安装状态，再继续。"
+  false
+fi
 
-cd /opt/ai-token/current
+cd "$RELEASE_DIR"
 go mod download
 cd web
 npm ci
@@ -205,9 +226,13 @@ mkdir -p bin
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 chmod 0755 deploy/pm2/start.sh
 
-test -x /opt/ai-token/current/bin/ai-token
-test -f /opt/ai-token/current/web/dist/index.html
+test -x "$RELEASE_DIR/bin/ai-token"
+test -f "$RELEASE_DIR/web/dist/index.html"
 git rev-parse --short HEAD
+
+# 只有完整构建成功后，才把 current 切换到新版本。
+ln -sfnT "$RELEASE_DIR" /opt/ai-token/current
+)
 ```
 
 这一节只做编译，不在用户服务器上运行单元测试、竞态测试、漏洞扫描或 `npm audit`。
@@ -217,6 +242,8 @@ git rev-parse --short HEAD
 如果此处出现 `cd: /opt/ai-token/current: No such file or directory`，说明前面的
 `git clone` 没有成功或没有执行；回到本节最开始重新执行，而不是单独复制后面的
 `go mod download`。
+`set -e` 会在下载、安装依赖或构建失败时停止这一组命令，避免继续执行后面的 PM2
+命令。它不会删除数据库、环境文件或 Caddy 配置。
 
 ## 6. 创建数据库和生产环境文件
 
@@ -230,6 +257,7 @@ git rev-parse --short HEAD
 执行本节，因为重新生成 Pepper 会使现有 Session 和 API Token 失效。
 
 ```bash
+(
 set -e
 install -d -m 0700 /etc/ai-token
 
@@ -287,6 +315,7 @@ printf '请保存管理员入口：https://%s/admin-%s\n' "$DOMAIN" "$ADMIN_ENTR
 unset DB_PASSWORD TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY ADMIN_ENTRY_SUFFIX
 
 stat -c '环境文件权限：%a %U:%G' /etc/ai-token/ai-token.env
+)
 ```
 
 最后一行必须显示：
@@ -304,11 +333,14 @@ stat -c '环境文件权限：%a %U:%G' /etc/ai-token/ai-token.env
 验证 PostgreSQL 可通过 TCP 与业务账号连接：
 
 ```bash
+(
+set -e
 set -a
 source /etc/ai-token/ai-token.env
 set +a
 psql "$DATABASE_URL" -c 'SELECT current_database(), current_user;'
 unset DATABASE_URL TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY
+)
 ```
 
 如果这一步报 PostgreSQL 认证或连接错误，不要把 `listen_addresses = ...` 直接粘贴到
@@ -325,20 +357,27 @@ runuser -u postgres -- psql -tAc 'SHOW hba_file'
 `/opt/ai-token/.pm2`，不会覆盖服务器上的其他 PM2 项目。
 
 ```bash
+(
+set -e
 install -d -m 0700 /opt/ai-token/.pm2
 install -m 0644 \
   /opt/ai-token/current/deploy/pm2/ai-token-pm2.service \
   /etc/systemd/system/ai-token-pm2.service
 
 systemctl daemon-reload
+
+# 先让 systemd 接管 PM2。服务首次启动时即使还没有进程清单，也不会影响后续启动。
+systemctl enable --now ai-token-pm2
+
+# 使用当前环境启动应用并保存进程清单，供 systemd 开机恢复。
 PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
   /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs --update-env
 PM2_HOME=/opt/ai-token/.pm2 pm2 save
-PM2_HOME=/opt/ai-token/.pm2 pm2 kill
-systemctl enable --now ai-token-pm2
 
+sleep 3
 systemctl status ai-token-pm2 --no-pager
 curl -fsS http://127.0.0.1:8080/healthz
+)
 ```
 
 最后一条应返回健康响应。如果失败，先看应用日志：
@@ -383,11 +422,14 @@ gateway.example.com {
 在 nano 中按 `Ctrl+O` 保存，回车确认文件名；按 `Ctrl+X` 退出。随后校验并加载：
 
 ```bash
+(
+set -e
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl enable --now caddy
 systemctl reload caddy
 systemctl status caddy --no-pager
 curl -fsS "https://$DOMAIN/healthz"
+)
 ```
 
 `caddy validate` 出错时，不要 reload；先根据报错修复刚追加的站点块。不要覆盖其他
@@ -399,6 +441,8 @@ curl -fsS "https://$DOMAIN/healthz"
 显示字符；首次执行还会输出一次 TOTP Secret，必须立即保存到认证器。
 
 ```bash
+(
+set -e
 set -a
 source /etc/ai-token/ai-token.env
 set +a
@@ -409,15 +453,17 @@ export ADMIN_EMAIL ADMIN_PASSWORD
 cd /opt/ai-token/current
 go run ./cmd/bootstrap-admin
 unset ADMIN_EMAIL ADMIN_PASSWORD DATABASE_URL TOKEN_PEPPER SESSION_PEPPER MFA_ENCRYPTION_KEY
+)
 ```
 
 然后访问：
 
 ```text
-https://你的域名
+https://你的域名/admin-第 6 节输出的随机后缀
 ```
 
-用刚创建的管理员账号登录。SMTP、发件人、模板、邮箱验证、密码重置和邮件总开关均在
+这里必须使用第 6 节输出并保存的**完整管理员入口**，不能使用普通用户首页
+`https://你的域名`。用刚创建的管理员账号登录。SMTP、发件人、模板、邮箱验证、密码重置和邮件总开关均在
 “系统设置 → 邮件设置 / 功能开关”中配置；不需要，也不应该把 SMTP 密码写入
 `/etc/ai-token/ai-token.env`。
 
@@ -434,7 +480,7 @@ curl -fsS "https://$DOMAIN/healthz"
 curl -I "https://$DOMAIN/"
 PM2_HOME=/opt/ai-token/.pm2 pm2 status
 runuser -u postgres -- psql -d ai_token -c \
-  'SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 5;'
+  'SELECT version, applied_at FROM public.schema_migrations ORDER BY version DESC LIMIT 5;'
 ```
 
 完成浏览器验收：
@@ -461,11 +507,11 @@ journalctl -u caddy -u ai-token-pm2 -n 200 --no-pager
 ```bash
 install -d -o postgres -g postgres -m 0700 /var/backups/ai-token
 runuser -u postgres -- pg_dump -Fc -d ai_token \
-  -f "/var/backups/ai-token/ai-token-$(date +%F).dump"
+  -f "/var/backups/ai-token/ai-token-$(date +%F-%H%M%S).dump"
 ```
 
 备份文件中含有用户、渠道加密密文、账务和审计数据，必须加密保存且限制 root/
-PostgreSQL 管理员以外的访问。
+PostgreSQL 管理员以外的访问。文件名包含时分秒，重复执行不会覆盖同一天之前的备份。
 
 ### 更新应用
 
@@ -479,6 +525,8 @@ PostgreSQL 管理员以外的访问。
 追加新值，不会修改已有的管理员入口、数据库、Caddy 或其他环境变量。
 
 ```bash
+(
+set -e
 if ! grep -Eq '^ADMIN_ENTRY_PATH=/admin-[A-Za-z0-9_-]{16,160}$' /etc/ai-token/ai-token.env; then
   ADMIN_ENTRY_SUFFIX="$(openssl rand -hex 16)"
   printf '\nADMIN_ENTRY_PATH=/admin-%s\n' "$ADMIN_ENTRY_SUFFIX" >> /etc/ai-token/ai-token.env
@@ -486,11 +534,14 @@ if ! grep -Eq '^ADMIN_ENTRY_PATH=/admin-[A-Za-z0-9_-]{16,160}$' /etc/ai-token/ai
   printf '请保存管理员入口：https://你的域名/admin-%s\n' "$ADMIN_ENTRY_SUFFIX"
   unset ADMIN_ENTRY_SUFFIX
 fi
+)
 ```
 
 首次完整安装已经在第 6 节自动写入该配置，不需要执行本小节。
 
 ```bash
+(
+set -e
 cd /opt/ai-token/current
 git pull --ff-only origin main
 
@@ -505,7 +556,9 @@ CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/ai-token ./cmd/server
 PM2_HOME=/opt/ai-token/.pm2 pm2 startOrReload \
   /opt/ai-token/current/deploy/pm2/ecosystem.config.cjs
 
+sleep 3
 curl -fsS http://127.0.0.1:8080/healthz
+)
 ```
 
 这是每次更新都执行的一组命令。`go build` 会自动下载新增的 Go 依赖，因此不需要额外
@@ -533,6 +586,10 @@ PM2_HOME=/opt/ai-token/.pm2 pm2 logs ai-token --lines 100 --nostream
 | `/etc/ai-token/ai-token.env already exists` | 旧安装器留下的半安装状态。不要删除和重跑脚本，按第 0 节只读检查，再继续未完成的 Caddy、PM2 和管理员步骤。 |
 | `cd /opt/ai-token/current: No such file or directory` | 下载或软链接步骤没有完成。回到第 5 节从 `git clone` 开始执行，不能只执行构建尾部命令。 |
 | PM2 日志提示 `ADMIN_ENTRY_PATH must be explicitly configured in production` | 旧环境文件缺少管理员独立入口。执行第 11 节的“一次性兼容处理”，保存输出的管理员地址后再重启 PM2。 |
+| PM2 日志提示 `CORS_ALLOWED_ORIGINS must contain valid origins only` | 检查 `/etc/ai-token/ai-token.env`，必须是类似 `CORS_ALLOWED_ORIGINS=https://你的域名` 的完整来源，不能是 `https://`、带方括号或带路径的地址；修改后重启 PM2。 |
+| PM2 日志提示 `function regexp_replace(...) does not exist` | 使用了包含错误迁移文件的旧版本。先更新到包含 `migrations/040_api_endpoint_protocols.sql` 修复的 `main`，再重新构建并重启；不要手动创建 `schema_migrations`。 |
+| `relation "schema_migrations" does not exist` | 通常是迁移事务因前一个 SQL 错误回滚，表也随事务回滚。先看 PM2 最新错误，修复首个迁移错误后重启，应用会自动重新执行全部迁移。 |
+| PM2 显示 `online`，但 `curl http://127.0.0.1:8080/healthz` 返回 `Connection refused` | PM2 守护进程在线不等于应用在线。执行 `pm2 describe ai-token`，如果是 `waiting restart`、重启次数增加或内存为 `0b`，继续查看 `pm2 logs ai-token --err --lines 100 --nostream`，先修复日志中的首个启动错误，再重启应用。 |
 | Caddy 提示同域名站点已存在 | 该域名已有业务配置。不要追加、不要覆盖；读取原站点块后再决定如何把反代加入其中。 |
 | `caddy validate` 失败 | 只修改刚追加的 AI Token 站点块，修复后重新 validate；验证通过前不要 reload。 |
 | 访问返回 502 | 先运行本机 `curl http://127.0.0.1:8080/healthz`，再看 PM2 和 systemd 日志。 |
