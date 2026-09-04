@@ -1431,6 +1431,14 @@ func TestConsoleTokenRoutesAreTenantAndOwnerScoped(t *testing.T) {
 		t.Fatalf("expected one-time token in create response: %s", createRec.Body.String())
 	}
 
+	autoNameReq := httptest.NewRequest(http.MethodPost, "/console/v1/tenants/tenant-1/tokens", strings.NewReader(`{"project_id":"project-1","group_id":"group-1"}`))
+	autoNameReq.Header.Set("Authorization", "Bearer console-user")
+	autoNameRec := httptest.NewRecorder()
+	handler.ServeHTTP(autoNameRec, autoNameReq)
+	if autoNameRec.Code != http.StatusCreated || service.createdName != "" || service.createdProject != "project-1" || service.createdGroup != "group-1" {
+		t.Fatalf("expected unnamed console token create 201, got %d: %s", autoNameRec.Code, autoNameRec.Body.String())
+	}
+
 	updateReq := httptest.NewRequest(http.MethodPut, "/console/v1/tenants/tenant-1/tokens/token-1", strings.NewReader(`{"project_id":"project-1","name":"edited-token","group_id":"group-2","spend_limit":"250.5","allowed_ips":["198.51.100.10"],"allowed_domains":["client.example.com"],"expires_at":"2030-01-01T00:00:00Z"}`))
 	updateReq.Header.Set("Authorization", "Bearer console-user")
 	updateRec := httptest.NewRecorder()
@@ -2592,6 +2600,7 @@ type fakeTokenConsoleService struct {
 	createdBy         string
 	createdProject    string
 	createdGroup      string
+	createdName       string
 	createdSpendLimit string
 	createdIPs        []string
 	createdDomains    []string
@@ -2641,6 +2650,7 @@ func (s *fakeTokenConsoleService) Create(_ context.Context, request tokens.Creat
 	s.createdBy = request.CreatedBy
 	s.createdProject = request.ProjectID
 	s.createdGroup = request.GroupID
+	s.createdName = request.Name
 	s.createdSpendLimit = request.SpendLimit
 	s.createdIPs = request.AllowedIPs
 	s.createdDomains = request.AllowedDomains

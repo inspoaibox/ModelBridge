@@ -126,7 +126,7 @@ func (s *SQLConsoleService) nextDefaultTokenName(ctx context.Context, tenantID, 
 	}
 	var next int64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX((substring(name FROM '^令牌 ([0-9]+)$'))::bigint), 0) + 1
+		SELECT COALESCE(MAX((regexp_replace(name, '^令牌 ([0-9]+)$', '\1'))::bigint), 0) + 1
 		FROM api_tokens
 		WHERE tenant_id = $1::uuid
 		  AND created_by = $2::uuid
