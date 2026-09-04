@@ -1176,7 +1176,7 @@ func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.
 	}
 }
 
-func TestServiceDiscoverModelsRequiresNewCredentialWhenEndpointChanges(t *testing.T) {
+func TestServiceDiscoverModelsUsesStoredCredentialWhenEndpointChanges(t *testing.T) {
 	router := &fakeChannelRouter{
 		discoveryConfig: ChannelDiscoveryConfig{
 			Provider:      ProviderOpenAI,
@@ -1204,13 +1204,16 @@ func TestServiceDiscoverModelsRequiresNewCredentialWhenEndpointChanges(t *testin
 	_, err = service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID: "channel-1",
 		Provider:  ProviderOpenAI,
-		BaseURL:   "https://new-upstream.example/v1",
+		BaseURL:   "https://api.openai.com/alternate/v1",
 	})
-	if !errors.Is(err, ErrCredentialRequired) {
-		t.Fatalf("endpoint changes must require a replacement key, got %v", err)
+	if err != nil {
+		t.Fatalf("stored credential should remain usable when endpoint changes: %v", err)
 	}
-	if provider.modelAPIKey != "" || provider.modelBaseURL != "" {
-		t.Fatalf("provider must not be called without a replacement key: %#v", provider)
+	if provider.modelAPIKey != "sk-stored" {
+		t.Fatalf("stored credential was not used after endpoint change: %q", provider.modelAPIKey)
+	}
+	if provider.modelBaseURL != "https://api.openai.com/alternate/v1" {
+		t.Fatalf("submitted endpoint was not used after endpoint change: %q", provider.modelBaseURL)
 	}
 }
 

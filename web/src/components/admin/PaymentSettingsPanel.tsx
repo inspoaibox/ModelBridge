@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Copy, CreditCard, ExternalLink, Info, Save } from "lucide-react";
+import { BookOpen, CheckCircle2, Copy, CreditCard, ExternalLink, Info, Save } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,7 @@ const fields: Record<Provider, Field[]> = {
     { key: "secret_key", label: "paymentStripeSecretKey", secret: true },
     { key: "publishable_key", label: "paymentStripePublishableKey" },
     { key: "webhook_secret", label: "paymentStripeWebhookSecret", secret: true },
-    { key: "api_base_url", label: "paymentAPIBaseURL" },
+    { key: "api_base_url", label: "paymentAPIBaseURL", hint: "paymentStripeAPIBaseURLHint" },
   ],
   paypal: [
     { key: "client_id", label: "paymentPayPalClientID" },
@@ -115,6 +115,7 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
           <CardDescription>{t("paymentSettingsDescription")}</CardDescription>
         </CardHeader>
         <CardContent>
+          <PaymentSetupGuide provider={provider} t={t} />
           <form className="space-y-5" onSubmit={(event) => void submit(event)}>
             <div className="flex items-center justify-between rounded-xl border border-cyan-500/20 bg-cyan-50/60 p-4 dark:bg-cyan-500/10">
               <div>
@@ -154,6 +155,45 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function PaymentSetupGuide({ provider, t }: { provider: Provider; t: (key: TranslationKey) => string }) {
+  const steps: Record<Provider, TranslationKey[]> = {
+    wechat: ["paymentGuideWechatStep1", "paymentGuideWechatStep2"],
+    alipay: ["paymentGuideAlipayStep1", "paymentGuideAlipayStep2"],
+    stripe: ["paymentGuideStripeStep1", "paymentGuideStripeStep2"],
+    paypal: ["paymentGuidePayPalStep1", "paymentGuidePayPalStep2"],
+  };
+  return (
+    <section className="mb-5 border-b border-slate-200 pb-5 dark:border-slate-800" aria-labelledby="payment-setup-guide-title">
+      <div className="flex items-start gap-2">
+        <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-300" />
+        <div>
+          <h3 id="payment-setup-guide-title" className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentGuideTitle")}</h3>
+          <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{t("paymentGuideDescription")}</p>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {steps[provider].map((step) => (
+          <div key={step} className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-300">
+            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span>{t(step)}</span>
+          </div>
+        ))}
+      </div>
+      {provider === "stripe" ? (
+        <div className="mt-3 rounded-lg border border-indigo-500/20 bg-indigo-50/60 p-3 dark:bg-indigo-500/10">
+          <div className="text-xs font-semibold text-indigo-900 dark:text-indigo-100">{t("paymentGuideStripeEventsTitle")}</div>
+          <p className="mt-1 text-xs leading-5 text-indigo-900/75 dark:text-indigo-100/75">{t("paymentGuideStripeEventsDescription")}</p>
+          <div className="mt-2 grid gap-1 text-xs text-indigo-950 dark:text-indigo-50">
+            <code>checkout.session.completed</code>
+            <code>checkout.session.async_payment_succeeded</code>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-indigo-900/75 dark:text-indigo-100/75">{t("paymentGuideStripeEventsNote")}</p>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

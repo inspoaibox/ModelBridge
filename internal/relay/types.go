@@ -482,9 +482,6 @@ func (s *Service) DiscoverModels(ctx context.Context, request ModelDiscoveryRequ
 			request.BaseURL = strings.TrimSpace(config.BaseURL)
 		}
 		if request.APIKey == "" {
-			if !sameDiscoveryBaseURL(request.BaseURL, config.BaseURL) {
-				return nil, ErrCredentialRequired
-			}
 			request.APIKey, err = s.credentials.Resolve(ctx, strings.TrimSpace(config.CredentialRef))
 			if err != nil {
 				return nil, err
@@ -1850,11 +1847,6 @@ func validChannelStatus(status string) bool {
 
 func validBaseURL(value string) bool {
 	return validUpstreamBaseURL(value)
-}
-
-func sameDiscoveryBaseURL(left, right string) bool {
-	return strings.TrimRight(strings.TrimSpace(left), "/") ==
-		strings.TrimRight(strings.TrimSpace(right), "/")
 }
 
 func cleanChannelModels(models []ChannelModelMutation) []ChannelModelMutation {
