@@ -245,8 +245,12 @@ type ChannelSummary struct {
 	UpstreamCostDiscount         string                `json:"upstream_cost_discount"`
 	UpstreamIntegration          string                `json:"upstream_integration"`
 	HasUpstreamAccountCredential bool                  `json:"has_upstream_account_credential"`
+	UpstreamAccountUserID        string                `json:"upstream_account_user_id"`
 	UpstreamBalance              *string               `json:"upstream_balance,omitempty"`
 	UpstreamBalanceUnit          string                `json:"upstream_balance_unit,omitempty"`
+	UpstreamBalanceTotal         *string               `json:"upstream_balance_total,omitempty"`
+	UpstreamBalanceUsed          *string               `json:"upstream_balance_used,omitempty"`
+	UpstreamAccountPlanName      string                `json:"upstream_account_plan_name,omitempty"`
 	UpstreamRateMultiplier       *string               `json:"upstream_rate_multiplier,omitempty"`
 	UpstreamAccountSyncStatus    string                `json:"upstream_account_sync_status"`
 	UpstreamAccountSyncError     string                `json:"upstream_account_sync_error,omitempty"`
@@ -310,6 +314,7 @@ type ChannelMutation struct {
 	UpstreamCostDiscount           string                 `json:"upstream_cost_discount,omitempty"`
 	UpstreamIntegration            string                 `json:"upstream_integration,omitempty"`
 	UpstreamAccountCredential      string                 `json:"upstream_account_credential,omitempty"`
+	UpstreamAccountUserID          string                 `json:"upstream_account_user_id,omitempty"`
 	ClearUpstreamAccountCredential bool                   `json:"clear_upstream_account_credential,omitempty"`
 	Priority                       int                    `json:"priority"`
 	Weight                         int                    `json:"weight"`
@@ -588,6 +593,7 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	m.Status = normalizeChannelStatus(m.Status)
 	m.UpstreamIntegration = normalizeUpstreamIntegration(m.UpstreamIntegration)
 	m.UpstreamAccountCredential = strings.TrimSpace(m.UpstreamAccountCredential)
+	m.UpstreamAccountUserID = strings.TrimSpace(m.UpstreamAccountUserID)
 	if normalized, ok := normalizeUpstreamCostDiscount(m.UpstreamCostDiscount); ok {
 		m.UpstreamCostDiscount = normalized
 	} else {
@@ -607,7 +613,7 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	if m.Priority < 0 || m.Priority > 10000 || m.Weight < 0 || m.Weight > 10000 {
 		return ChannelMutation{}, ErrInvalidRequest
 	}
-	if len(m.UpstreamAccountCredential) > 4096 {
+	if len(m.UpstreamAccountCredential) > 4096 || len(m.UpstreamAccountUserID) > 256 {
 		return ChannelMutation{}, ErrInvalidRequest
 	}
 	return m, nil

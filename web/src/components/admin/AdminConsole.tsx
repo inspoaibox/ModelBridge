@@ -1424,6 +1424,21 @@ export function AdminConsole({
                               <div>
                                 {t("channelsAccountBalance")}: <span className="font-mono text-slate-700 dark:text-slate-200">{formatAccountValue(channel.upstream_balance)}{channel.upstream_balance ? ` ${channel.upstream_balance_unit || "USD"}` : ""}</span>
                               </div>
+                              {channel.upstream_balance_total ? (
+                                <div>
+                                  {t("channelsAccountTotal")}: <span className="font-mono text-slate-700 dark:text-slate-200">{formatAccountValue(channel.upstream_balance_total)}{channel.upstream_balance_unit ? ` ${channel.upstream_balance_unit}` : ""}</span>
+                                </div>
+                              ) : null}
+                              {channel.upstream_balance_used ? (
+                                <div>
+                                  {t("channelsAccountUsed")}: <span className="font-mono text-slate-700 dark:text-slate-200">{formatAccountValue(channel.upstream_balance_used)}{channel.upstream_balance_unit ? ` ${channel.upstream_balance_unit}` : ""}</span>
+                                </div>
+                              ) : null}
+                              {channel.upstream_account_plan_name ? (
+                                <div>
+                                  {t("channelsAccountPlan")}: <span className="text-slate-700 dark:text-slate-200">{channel.upstream_account_plan_name}</span>
+                                </div>
+                              ) : null}
                               <div>
                                 {t("channelsAccountRate")}: <span className="font-mono text-slate-700 dark:text-slate-200">{channel.upstream_rate_multiplier ? `x${formatAccountValue(channel.upstream_rate_multiplier)}` : "-"}</span>
                               </div>

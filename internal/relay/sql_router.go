@@ -362,18 +362,20 @@ func (r *SQLChannelRouter) CreateChannel(
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO channels (
 			id, name, provider, base_url, credential_ref, status, upstream_cost_discount,
-			upstream_integration, upstream_account_credential_ref, upstream_account_sync_status,
+			upstream_integration, upstream_account_credential_ref, upstream_account_user_id, upstream_account_sync_status,
 			priority, weight,
 			created_by, updated_by
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7::numeric,
-			$8, '', $9,
-			$10, $11,
-			NULLIF($12, '')::uuid, NULLIF($12, '')::uuid
+			$8, '', $9, $10,
+			$11, $12,
+			NULLIF($13, '')::uuid, NULLIF($13, '')::uuid
 		)
 	`, channelID, request.Name, request.Provider, request.BaseURL, "pending:"+channelID,
 		request.Status, request.UpstreamCostDiscount, request.UpstreamIntegration,
-		accountSyncStatus(request.UpstreamAccountCredential), request.Priority, request.Weight, actorID)
+		request.UpstreamAccountUserID,
+		accountSyncStatus(request.UpstreamIntegration, request.UpstreamAccountCredential, request.UpstreamAccountUserID),
+		request.Priority, request.Weight, actorID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
@@ -445,16 +447,17 @@ func (r *SQLChannelRouter) UpdateChannel(
 	if err != nil {
 		return ChannelSummary{}, err
 	}
-	currentAccountRef, currentIntegration, currentAccountStatus, err := r.currentAccountConfig(ctx, tx, channelID)
+	currentAccountRef, currentIntegration, currentAccountUserID, currentAccountStatus, err := r.currentAccountConfig(ctx, tx, channelID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
 	accountCredentialRef := currentAccountRef
+	accountUserID := request.UpstreamAccountUserID
 	accountSyncStatus := currentAccountStatus
 	if accountSyncStatus == "" {
 		accountSyncStatus = "not_configured"
 	}
-	resetAccountSnapshot := currentIntegration != request.UpstreamIntegration
+	resetAccountSnapshot := currentIntegration != request.UpstreamIntegration || currentAccountUserID != accountUserID
 	if request.ClearUpstreamAccountCredential {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE channel_account_secrets
@@ -498,6 +501,15 @@ func (r *SQLChannelRouter) UpdateChannel(
 			accountSyncStatus = "not_configured"
 		}
 	}
+	if request.UpstreamIntegration != UpstreamIntegrationNewAPI {
+		accountUserID = ""
+		resetAccountSnapshot = resetAccountSnapshot || currentAccountUserID != ""
+	}
+	if accountCredentialRef == "" ||
+		(request.UpstreamIntegration == UpstreamIntegrationNewAPI && strings.TrimSpace(accountUserID) == "") {
+		accountSyncStatus = "not_configured"
+		resetAccountSnapshot = true
+	}
 	if request.APIKey != "" {
 		if r.box == nil {
 			return ChannelSummary{}, ErrUnavailable
@@ -526,25 +538,29 @@ func (r *SQLChannelRouter) UpdateChannel(
 		    upstream_cost_discount = $7::numeric,
 		    upstream_integration = $8,
 		    upstream_account_credential_ref = $9,
-		    upstream_account_sync_status = $10,
-		    upstream_account_sync_error = CASE WHEN $10 IN ('pending', 'not_configured') THEN '' ELSE upstream_account_sync_error END,
-		    upstream_balance = CASE WHEN $11::boolean THEN NULL ELSE upstream_balance END,
-		    upstream_balance_unit = CASE WHEN $11::boolean THEN '' ELSE upstream_balance_unit END,
-		    upstream_rate_multiplier = CASE WHEN $11::boolean THEN NULL ELSE upstream_rate_multiplier END,
-		    upstream_account_synced_at = CASE WHEN $11::boolean THEN NULL ELSE upstream_account_synced_at END,
+		    upstream_account_user_id = $10,
+		    upstream_account_sync_status = $11,
+		    upstream_account_sync_error = CASE WHEN $11 IN ('pending', 'not_configured') THEN '' ELSE upstream_account_sync_error END,
+		    upstream_balance = CASE WHEN $12::boolean THEN NULL ELSE upstream_balance END,
+		    upstream_balance_unit = CASE WHEN $12::boolean THEN '' ELSE upstream_balance_unit END,
+		    upstream_balance_total = CASE WHEN $12::boolean THEN NULL ELSE upstream_balance_total END,
+		    upstream_balance_used = CASE WHEN $12::boolean THEN NULL ELSE upstream_balance_used END,
+		    upstream_account_plan_name = CASE WHEN $12::boolean THEN '' ELSE upstream_account_plan_name END,
+		    upstream_rate_multiplier = CASE WHEN $12::boolean THEN NULL ELSE upstream_rate_multiplier END,
+		    upstream_account_synced_at = CASE WHEN $12::boolean THEN NULL ELSE upstream_account_synced_at END,
 		    consecutive_failures = CASE WHEN $6 = 'active' THEN 0 ELSE consecutive_failures END,
 		    auto_disabled_until = CASE WHEN $6 = 'active' THEN NULL ELSE auto_disabled_until END,
 		    last_failure_status = CASE WHEN $6 = 'active' THEN NULL ELSE last_failure_status END,
 		    last_success_at = CASE WHEN $6 = 'active' THEN NULL ELSE last_success_at END,
-		    priority = $12,
-		    weight = $13,
-		    updated_by = NULLIF($14, '')::uuid,
+		    priority = $13,
+		    weight = $14,
+		    updated_by = NULLIF($15, '')::uuid,
 		    updated_at = now()
 		WHERE id = $1
 		  AND deleted_at IS NULL
 	`, channelID, request.Name, request.Provider, request.BaseURL, credentialRef,
 		request.Status, request.UpstreamCostDiscount, request.UpstreamIntegration, accountCredentialRef,
-		accountSyncStatus, resetAccountSnapshot, request.Priority, request.Weight, actorID)
+		accountUserID, accountSyncStatus, resetAccountSnapshot, request.Priority, request.Weight, actorID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
@@ -761,25 +777,27 @@ func (r *SQLChannelRouter) currentCredentialRef(ctx context.Context, tx *sql.Tx,
 	return credentialRef, nil
 }
 
-func (r *SQLChannelRouter) currentAccountConfig(ctx context.Context, tx *sql.Tx, channelID string) (string, string, string, error) {
-	var credentialRef, integration, status string
+func (r *SQLChannelRouter) currentAccountConfig(ctx context.Context, tx *sql.Tx, channelID string) (string, string, string, string, error) {
+	var credentialRef, integration, userID, status string
 	err := tx.QueryRowContext(ctx, `
-		SELECT upstream_account_credential_ref, upstream_integration, upstream_account_sync_status
+		SELECT upstream_account_credential_ref, upstream_integration,
+		       upstream_account_user_id, upstream_account_sync_status
 		FROM channels
 		WHERE id = $1
 		  AND deleted_at IS NULL
-	`, channelID).Scan(&credentialRef, &integration, &status)
+	`, channelID).Scan(&credentialRef, &integration, &userID, &status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", "", ErrChannelNotFound
+		return "", "", "", "", ErrChannelNotFound
 	}
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	return credentialRef, integration, status, nil
+	return credentialRef, integration, userID, status, nil
 }
 
-func accountSyncStatus(credential string) string {
-	if strings.TrimSpace(credential) == "" {
+func accountSyncStatus(integration, credential, userID string) string {
+	if strings.TrimSpace(credential) == "" ||
+		(integration == UpstreamIntegrationNewAPI && strings.TrimSpace(userID) == "") {
 		return "not_configured"
 	}
 	return "pending"
@@ -917,16 +935,18 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 	channels := []ChannelSummary{}
 	for rows.Next() {
 		var (
-			channel           ChannelSummary
-			modelsRaw         []byte
-			createdAt         time.Time
-			updatedAt         time.Time
-			autoDisabledUntil sql.NullTime
-			lastFailureStatus sql.NullInt64
-			upstreamBalance   sql.NullString
-			upstreamRate      sql.NullString
-			upstreamSyncedAt  sql.NullTime
-			upstreamAttemptAt sql.NullTime
+			channel              ChannelSummary
+			modelsRaw            []byte
+			createdAt            time.Time
+			updatedAt            time.Time
+			autoDisabledUntil    sql.NullTime
+			lastFailureStatus    sql.NullInt64
+			upstreamBalance      sql.NullString
+			upstreamBalanceTotal sql.NullString
+			upstreamBalanceUsed  sql.NullString
+			upstreamRate         sql.NullString
+			upstreamSyncedAt     sql.NullTime
+			upstreamAttemptAt    sql.NullTime
 		)
 		if err := rows.Scan(
 			&channel.ID,
@@ -940,9 +960,13 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 			&channel.Status,
 			&channel.UpstreamCostDiscount,
 			&channel.UpstreamIntegration,
+			&channel.UpstreamAccountUserID,
 			&channel.HasUpstreamAccountCredential,
 			&upstreamBalance,
 			&channel.UpstreamBalanceUnit,
+			&upstreamBalanceTotal,
+			&upstreamBalanceUsed,
+			&channel.UpstreamAccountPlanName,
 			&upstreamRate,
 			&channel.UpstreamAccountSyncStatus,
 			&channel.UpstreamAccountSyncError,
@@ -970,6 +994,14 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 		if upstreamBalance.Valid {
 			value := upstreamBalance.String
 			channel.UpstreamBalance = &value
+		}
+		if upstreamBalanceTotal.Valid {
+			value := upstreamBalanceTotal.String
+			channel.UpstreamBalanceTotal = &value
+		}
+		if upstreamBalanceUsed.Valid {
+			value := upstreamBalanceUsed.String
+			channel.UpstreamBalanceUsed = &value
 		}
 		if upstreamRate.Valid {
 			value := upstreamRate.String
@@ -1018,12 +1050,16 @@ func channelListQuery(where string) string {
 		       END AS has_credential,
 		       c.status, c.upstream_cost_discount::text,
 		       c.upstream_integration,
+		       c.upstream_account_user_id,
 		       CASE
 		           WHEN c.upstream_account_credential_ref = '' THEN false
 		           ELSE cas.id IS NOT NULL
 		       END AS has_upstream_account_credential,
 		       c.upstream_balance::text,
 		       c.upstream_balance_unit,
+		       c.upstream_balance_total::text,
+		       c.upstream_balance_used::text,
+		       c.upstream_account_plan_name,
 		       c.upstream_rate_multiplier::text,
 		       c.upstream_account_sync_status,
 		       c.upstream_account_sync_error,
@@ -1060,7 +1096,10 @@ func channelListQuery(where string) string {
 		         cas.id,
 		         c.status, c.upstream_cost_discount, c.priority, c.weight, c.consecutive_failures,
 		         c.upstream_integration, c.upstream_account_credential_ref,
-		         c.upstream_balance, c.upstream_balance_unit, c.upstream_rate_multiplier,
+		         c.upstream_account_user_id,
+		         c.upstream_balance, c.upstream_balance_unit,
+		         c.upstream_balance_total, c.upstream_balance_used,
+		         c.upstream_account_plan_name, c.upstream_rate_multiplier,
 		         c.upstream_account_sync_status, c.upstream_account_sync_error,
 		         c.upstream_account_synced_at, c.upstream_account_last_attempt_at,
 		         c.auto_disabled_until, c.last_failure_status,

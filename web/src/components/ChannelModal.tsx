@@ -219,8 +219,10 @@ export function ChannelModal({
                           e.target.value === "other"
                             ? e.target.value
                             : "official",
+                        upstream_account_user_id:
+                          e.target.value === "newapi" ? current.upstream_account_user_id : "",
                       }))
-                    }
+                  }
                   >
                     <option value="official">{t("channelsUpstreamIntegrationOfficial")}</option>
                     <option value="newapi">{t("channelsUpstreamIntegrationNewAPI")}</option>
@@ -252,6 +254,26 @@ export function ChannelModal({
                     autoComplete="new-password"
                   />
                 </div>
+
+                {channelForm.upstream_integration === "newapi" && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="channel-upstream-account-user-id" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      {t("channelsFormUpstreamAccountUserID")}
+                    </Label>
+                    <Input
+                      id="channel-upstream-account-user-id"
+                      value={channelForm.upstream_account_user_id}
+                      onChange={(e) =>
+                        setChannelForm((current) => ({
+                          ...current,
+                          upstream_account_user_id: e.target.value,
+                        }))
+                      }
+                      placeholder={t("channelsFormUpstreamAccountUserIDPlaceholder")}
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
               </div>
 
               <p className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">

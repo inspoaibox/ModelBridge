@@ -19,6 +19,9 @@ import (
 type upstreamAccountSnapshot struct {
 	balance        string
 	balanceUnit    string
+	balanceTotal   string
+	balanceUsed    string
+	planName       string
 	rateMultiplier string
 }
 
@@ -40,19 +43,21 @@ func (r *SQLChannelRouter) SyncChannelAccount(ctx context.Context, actorID, chan
 	}
 	_ = actorID
 
-	var provider, baseURL, integration, credentialRef string
+	var provider, baseURL, integration, credentialRef, accountUserID string
 	err := r.db.QueryRowContext(ctx, `
-		SELECT provider, base_url, upstream_integration, upstream_account_credential_ref
+		SELECT provider, base_url, upstream_integration,
+		       upstream_account_credential_ref, upstream_account_user_id
 		FROM channels
 		WHERE id = $1::uuid
 		  AND deleted_at IS NULL
-	`, channelID).Scan(&provider, &baseURL, &integration, &credentialRef)
+	`, channelID).Scan(&provider, &baseURL, &integration, &credentialRef, &accountUserID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChannelSummary{}, ErrChannelNotFound
 	}
 	if err != nil {
 		return ChannelSummary{}, err
 	}
+	integration = normalizeUpstreamIntegration(integration)
 
 	if _, err := r.db.ExecContext(ctx, `
 		UPDATE channels
@@ -65,10 +70,15 @@ func (r *SQLChannelRouter) SyncChannelAccount(ctx context.Context, actorID, chan
 		return ChannelSummary{}, err
 	}
 
-	integration = normalizeUpstreamIntegration(integration)
 	if integration == UpstreamIntegrationOfficial || integration == UpstreamIntegrationOther || integration == "" {
 		if err := r.finishUnsupportedAccountSync(ctx, channelID); err != nil {
 			return ChannelSummary{}, err
+		}
+		return r.GetChannel(ctx, channelID)
+	}
+	if integration == UpstreamIntegrationNewAPI && strings.TrimSpace(accountUserID) == "" {
+		if updateErr := r.finishFailedAccountSync(ctx, channelID, "未配置上游用户 ID"); updateErr != nil {
+			return ChannelSummary{}, updateErr
 		}
 		return r.GetChannel(ctx, channelID)
 	}
@@ -81,7 +91,7 @@ func (r *SQLChannelRouter) SyncChannelAccount(ctx context.Context, actorID, chan
 		return r.GetChannel(ctx, channelID)
 	}
 
-	snapshot, fetchErr := fetchUpstreamAccount(ctx, integration, provider, baseURL, secret)
+	snapshot, fetchErr := fetchUpstreamAccount(ctx, integration, provider, baseURL, secret, accountUserID)
 	if fetchErr != nil {
 		if updateErr := r.finishFailedAccountSync(ctx, channelID, safeAccountSyncError(fetchErr)); updateErr != nil {
 			return ChannelSummary{}, updateErr
@@ -128,11 +138,14 @@ func (r *SQLChannelRouter) finishUnsupportedAccountSync(ctx context.Context, cha
 		UPDATE channels
 		SET upstream_balance = NULL,
 		    upstream_balance_unit = '',
+		    upstream_balance_total = NULL,
+		    upstream_balance_used = NULL,
+		    upstream_account_plan_name = '',
 		    upstream_rate_multiplier = NULL,
 		    upstream_account_sync_status = 'not_supported',
-	    upstream_account_sync_error = '',
-	    upstream_account_synced_at = NULL,
-	    upstream_account_last_attempt_at = COALESCE(upstream_account_last_attempt_at, now())
+		    upstream_account_sync_error = '',
+		    upstream_account_synced_at = NULL,
+		    upstream_account_last_attempt_at = COALESCE(upstream_account_last_attempt_at, now())
 		WHERE id = $1::uuid
 		  AND deleted_at IS NULL
 	`, channelID)
@@ -154,27 +167,36 @@ func (r *SQLChannelRouter) finishSuccessfulAccountSync(ctx context.Context, chan
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE channels
 		SET upstream_balance = CASE
-		        WHEN NULLIF($2, '') IS NULL THEN upstream_balance
+		        WHEN NULLIF($2, '') IS NULL THEN NULL
 		        ELSE $2::numeric
 		    END,
 		    upstream_balance_unit = CASE
-		        WHEN NULLIF($2, '') IS NULL THEN upstream_balance_unit
+		        WHEN NULLIF($2, '') IS NULL THEN ''
 		        ELSE $3
 		    END,
-		    upstream_rate_multiplier = CASE
-		        WHEN NULLIF($4, '') IS NULL THEN upstream_rate_multiplier
+		    upstream_balance_total = CASE
+		        WHEN NULLIF($4, '') IS NULL THEN NULL
 		        ELSE $4::numeric
+		    END,
+		    upstream_balance_used = CASE
+		        WHEN NULLIF($5, '') IS NULL THEN NULL
+		        ELSE $5::numeric
+		    END,
+		    upstream_account_plan_name = $6,
+		    upstream_rate_multiplier = CASE
+		        WHEN NULLIF($7, '') IS NULL THEN NULL
+		        ELSE $7::numeric
 		    END,
 		    upstream_account_sync_status = 'success',
 		    upstream_account_sync_error = '',
 		    upstream_account_synced_at = now()
 		WHERE id = $1::uuid
 		  AND deleted_at IS NULL
-	`, channelID, snapshot.balance, snapshot.balanceUnit, snapshot.rateMultiplier)
+	`, channelID, snapshot.balance, snapshot.balanceUnit, snapshot.balanceTotal, snapshot.balanceUsed, snapshot.planName, snapshot.rateMultiplier)
 	return err
 }
 
-func fetchUpstreamAccount(ctx context.Context, integration, provider, baseURL, credential string) (upstreamAccountSnapshot, error) {
+func fetchUpstreamAccount(ctx context.Context, integration, provider, baseURL, credential, accountUserID string) (upstreamAccountSnapshot, error) {
 	client, err := providerHTTPClient(baseURL)
 	if err != nil {
 		return upstreamAccountSnapshot{}, err
@@ -183,34 +205,25 @@ func fetchUpstreamAccount(ctx context.Context, integration, provider, baseURL, c
 
 	switch integration {
 	case UpstreamIntegrationNewAPI:
-		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/user/self", credential)
+		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/user/self", credential, map[string]string{
+			"New-Api-User": strings.TrimSpace(accountUserID),
+		})
 		if err != nil {
 			return upstreamAccountSnapshot{}, err
 		}
 		return parseNewAPIAccount(body)
 	case UpstreamIntegrationSub2API:
-		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/v1/auth/me", credential)
+		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/v1/usage", credential, nil)
 		if err != nil {
 			return upstreamAccountSnapshot{}, err
 		}
-		snapshot, err := parseSub2APIAccount(body)
-		if err != nil {
-			return upstreamAccountSnapshot{}, err
-		}
-
-		// Sub2API exposes rates separately. A single value is stored only when
-		// the upstream response is unambiguous; multiple group rates stay empty.
-		ratesBody, ratesErr := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/v1/groups/rates", credential)
-		if ratesErr == nil {
-			snapshot.rateMultiplier = singleRateMultiplier(ratesBody)
-		}
-		return snapshot, nil
+		return parseSub2APIAccount(body)
 	default:
 		return upstreamAccountSnapshot{}, errUpstreamAccountUnsupported
 	}
 }
 
-func requestUpstreamAccountJSON(ctx context.Context, client *http.Client, baseURL, path, credential string) (json.RawMessage, error) {
+func requestUpstreamAccountJSON(ctx context.Context, client *http.Client, baseURL, path, credential string, extraHeaders map[string]string) (json.RawMessage, error) {
 	endpoint, err := accountEndpointURL(baseURL, path)
 	if err != nil {
 		return nil, err
@@ -222,6 +235,11 @@ func requestUpstreamAccountJSON(ctx context.Context, client *http.Client, baseUR
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(credential))
 	request.Header.Set("User-Agent", "ai-token-upstream-account-sync/1")
+	for key, value := range extraHeaders {
+		if strings.TrimSpace(key) != "" {
+			request.Header.Set(key, value)
+		}
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
@@ -257,146 +275,218 @@ func accountEndpointURL(rawBaseURL, path string) (string, error) {
 }
 
 func parseNewAPIAccount(body json.RawMessage) (upstreamAccountSnapshot, error) {
-	payload, err := decodeAccountPayload(body)
+	payload, err := decodeAccountData(body, true)
 	if err != nil {
 		return upstreamAccountSnapshot{}, err
 	}
-	balance, balanceKey := findNumber(payload, []string{
-		"balance", "remaining_balance", "quota", "remain_quota", "remaining_quota",
-	})
-	if balance == "" {
+	quota := rawAccountNumber(payload, "quota")
+	if quota == "" {
 		return upstreamAccountSnapshot{}, errUpstreamAccountNotFound
 	}
-	unit := "USD"
-	if strings.Contains(strings.ToLower(balanceKey), "quota") {
-		unit = "quota"
+	balance := divideAccountNumber(quota, 500000)
+	usedQuota := rawAccountNumber(payload, "used_quota")
+	used := divideAccountNumber(usedQuota, 500000)
+	total := addAccountNumbers(balance, used)
+	planName := rawAccountString(payload, "group")
+	if planName == "" {
+		planName = "默认套餐"
 	}
-	rate, _ := findNumber(payload, []string{
-		"rate_multiplier", "group_ratio", "ratio", "multiplier",
-	})
 	return upstreamAccountSnapshot{
 		balance:        balance,
-		balanceUnit:    unit,
-		rateMultiplier: rate,
+		balanceUnit:    "USD",
+		balanceTotal:   total,
+		balanceUsed:    used,
+		planName:       planName,
+		rateMultiplier: firstAccountNumber(payload, "group_ratio", "rate_multiplier", "ratio", "multiplier"),
 	}, nil
 }
 
 func parseSub2APIAccount(body json.RawMessage) (upstreamAccountSnapshot, error) {
-	payload, err := decodeAccountPayload(body)
+	payload, err := decodeAccountData(body, false)
 	if err != nil {
 		return upstreamAccountSnapshot{}, err
 	}
-	balance, balanceKey := findNumber(payload, []string{
-		"balance", "available_balance", "remaining_balance", "quota",
-	})
+	if rawAccountBool(payload, "isValid") == "false" {
+		return upstreamAccountSnapshot{}, errors.New("upstream account response was unsuccessful")
+	}
+	balance := rawAccountNumber(payload, "remaining")
+	quota, _ := rawAccountObject(payload, "quota")
+	if balance == "" {
+		balance = rawAccountNumber(quota, "remaining")
+	}
+	if balance == "" {
+		balance = rawAccountNumber(payload, "balance")
+	}
 	if balance == "" {
 		return upstreamAccountSnapshot{}, errUpstreamAccountNotFound
 	}
-	unit := "USD"
-	if strings.Contains(strings.ToLower(balanceKey), "quota") {
-		unit = "quota"
+	total := firstAccountNumber(payload, "total")
+	used := firstAccountNumber(payload, "used")
+	if total == "" {
+		total = rawAccountNumber(quota, "limit")
 	}
-	rate, _ := findNumber(payload, []string{"rate_multiplier", "multiplier", "ratio"})
+	if used == "" {
+		used = rawAccountNumber(quota, "used")
+	}
+	unit := firstAccountString(payload, "unit")
+	if unit == "" {
+		unit = rawAccountString(quota, "unit")
+	}
+	if unit == "" {
+		unit = "USD"
+	}
+	planName := firstAccountString(payload, "planName", "plan_name")
+	if planName == "" {
+		if len(quota) > 0 {
+			planName = "API Key 额度"
+		} else {
+			planName = "钱包余额"
+		}
+	}
 	return upstreamAccountSnapshot{
 		balance:        balance,
 		balanceUnit:    unit,
-		rateMultiplier: rate,
+		balanceTotal:   total,
+		balanceUsed:    used,
+		planName:       planName,
+		rateMultiplier: firstAccountNumber(payload, "rate_multiplier", "multiplier", "ratio"),
 	}, nil
 }
 
-func decodeAccountPayload(body json.RawMessage) (map[string]any, error) {
-	var raw any
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&raw); err != nil {
+func decodeAccountData(body json.RawMessage, requireSuccess bool) (map[string]json.RawMessage, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, err
 	}
-	root, ok := raw.(map[string]any)
-	if !ok {
+	if root == nil {
 		return nil, errUpstreamAccountNotFound
 	}
-	if success, ok := root["success"].(bool); ok && !success {
+	if rawSuccess, ok := root["success"]; ok {
+		var success bool
+		if err := json.Unmarshal(rawSuccess, &success); err != nil || !success {
+			return nil, errors.New("upstream account response was unsuccessful")
+		}
+	} else if requireSuccess {
 		return nil, errors.New("upstream account response was unsuccessful")
 	}
-	if data, ok := root["data"].(map[string]any); ok {
+	if rawData, ok := root["data"]; ok {
+		var data map[string]json.RawMessage
+		if err := json.Unmarshal(rawData, &data); err != nil || data == nil {
+			return nil, errUpstreamAccountNotFound
+		}
 		return data, nil
 	}
 	return root, nil
 }
 
-func findNumber(payload map[string]any, keys []string) (string, string) {
-	wanted := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		wanted[strings.ToLower(key)] = struct{}{}
+func rawAccountNumber(payload map[string]json.RawMessage, key string) string {
+	if payload == nil {
+		return ""
 	}
-	var walk func(any) (string, string)
-	walk = func(value any) (string, string) {
-		switch item := value.(type) {
-		case map[string]any:
-			for key, candidate := range item {
-				if _, ok := wanted[strings.ToLower(strings.TrimSpace(key))]; ok {
-					if number := accountNumber(candidate); number != "" {
-						return number, key
-					}
-				}
-			}
-			for _, candidate := range item {
-				if number, key := walk(candidate); number != "" {
-					return number, key
-				}
-			}
-		case []any:
-			for _, candidate := range item {
-				if number, key := walk(candidate); number != "" {
-					return number, key
-				}
-			}
-		}
-		return "", ""
+	raw, ok := payload[key]
+	if !ok {
+		return ""
 	}
-	return walk(payload)
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return ""
+	}
+	return accountNumber(value)
 }
 
-func singleRateMultiplier(body json.RawMessage) string {
-	var raw any
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.UseNumber()
-	if decoder.Decode(&raw) != nil {
+func rawAccountString(payload map[string]json.RawMessage, key string) string {
+	if payload == nil {
 		return ""
 	}
-	values := make([]string, 0, 4)
-	var walk func(any)
-	walk = func(value any) {
-		switch item := value.(type) {
-		case map[string]any:
-			for key, candidate := range item {
-				lower := strings.ToLower(key)
-				if strings.Contains(lower, "rate") || strings.Contains(lower, "ratio") || strings.Contains(lower, "multiplier") {
-					if number := accountNumber(candidate); number != "" {
-						values = append(values, number)
-						continue
-					}
-				}
-				walk(candidate)
-			}
-		case []any:
-			for _, candidate := range item {
-				walk(candidate)
-			}
+	raw, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func rawAccountBool(payload map[string]json.RawMessage, key string) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	var value bool
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func rawAccountObject(payload map[string]json.RawMessage, key string) (map[string]json.RawMessage, bool) {
+	if payload == nil {
+		return nil, false
+	}
+	raw, ok := payload[key]
+	if !ok {
+		return nil, false
+	}
+	var value map[string]json.RawMessage
+	if json.Unmarshal(raw, &value) != nil || value == nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func firstAccountNumber(payload map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		if value := rawAccountNumber(payload, key); value != "" {
+			return value
 		}
 	}
-	walk(raw)
-	unique := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		unique[value] = struct{}{}
-	}
-	if len(unique) != 1 {
-		return ""
-	}
-	for value := range unique {
-		return value
+	return ""
+}
+
+func firstAccountString(payload map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		if value := rawAccountString(payload, key); value != "" {
+			return value
+		}
 	}
 	return ""
+}
+
+func divideAccountNumber(value string, divisor int64) string {
+	if value == "" || divisor == 0 {
+		return ""
+	}
+	ratio, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return ""
+	}
+	ratio.Quo(ratio, new(big.Rat).SetInt64(divisor))
+	number := new(big.Float).SetPrec(256).SetRat(ratio)
+	return accountNumber(json.Number(number.Text('f', 18)))
+}
+
+func addAccountNumbers(left, right string) string {
+	if left == "" || right == "" {
+		return ""
+	}
+	first, firstOK := new(big.Rat).SetString(left)
+	second, secondOK := new(big.Rat).SetString(right)
+	if !firstOK || !secondOK {
+		return ""
+	}
+	first.Add(first, second)
+	number := new(big.Float).SetPrec(256).SetRat(first)
+	return accountNumber(json.Number(number.Text('f', 18)))
 }
 
 func accountNumber(value any) string {

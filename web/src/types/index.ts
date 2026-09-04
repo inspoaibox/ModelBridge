@@ -314,8 +314,12 @@ export interface ChannelSummary {
   upstream_cost_discount: string;
   upstream_integration: "official" | "newapi" | "sub2api" | "other" | string;
   has_upstream_account_credential: boolean;
+  upstream_account_user_id?: string;
   upstream_balance?: string;
   upstream_balance_unit?: string;
+  upstream_balance_total?: string;
+  upstream_balance_used?: string;
+  upstream_account_plan_name?: string;
   upstream_rate_multiplier?: string;
   upstream_account_sync_status: "not_configured" | "pending" | "success" | "failed" | "not_supported" | string;
   upstream_account_sync_error?: string;
@@ -528,6 +532,7 @@ export interface ChannelFormState {
   upstream_cost_discount: string;
   upstream_integration: "official" | "newapi" | "sub2api" | "other";
   upstream_account_credential: string;
+  upstream_account_user_id: string;
   upstream_account_credential_configured: boolean;
   clear_upstream_account_credential: boolean;
   priority: number;

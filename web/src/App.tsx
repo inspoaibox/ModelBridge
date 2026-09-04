@@ -209,6 +209,7 @@ function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini"
     upstream_cost_discount: "1",
     upstream_integration: "official",
     upstream_account_credential: "",
+    upstream_account_user_id: "",
     upstream_account_credential_configured: false,
     clear_upstream_account_credential: false,
     priority: 100,
@@ -247,6 +248,7 @@ function channelFormFromSummary(channel: ChannelSummary): ChannelFormState {
         ? channel.upstream_integration
         : "official",
     upstream_account_credential: "",
+    upstream_account_user_id: channel.upstream_account_user_id || "",
     upstream_account_credential_configured: channel.has_upstream_account_credential === true,
     clear_upstream_account_credential: false,
     priority: channel.priority,
@@ -3923,6 +3925,10 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         upstream_cost_discount: channelForm.upstream_cost_discount.trim(),
         upstream_integration: channelForm.upstream_integration,
         upstream_account_credential: channelForm.upstream_account_credential.trim(),
+        upstream_account_user_id:
+          channelForm.upstream_integration === "newapi"
+            ? channelForm.upstream_account_user_id.trim()
+            : "",
         clear_upstream_account_credential: channelForm.clear_upstream_account_credential,
         priority: Number(channelForm.priority),
         weight: Number(channelForm.weight),

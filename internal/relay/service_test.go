@@ -115,9 +115,9 @@ func TestChannelMutationAllowsEmptyModelMappings(t *testing.T) {
 
 func TestChannelMutationNormalizesPersistedCostFactorWithoutTrailingZeros(t *testing.T) {
 	request, err := (ChannelMutation{
-		Name:                  "Existing channel",
-		Provider:              ProviderOpenAI,
-		BaseURL:               "https://api.openai.com/v1",
+		Name:                 "Existing channel",
+		Provider:             ProviderOpenAI,
+		BaseURL:              "https://api.openai.com/v1",
 		UpstreamCostDiscount: "1.000000000000000000",
 	}).validate(false)
 	if err != nil {
@@ -128,9 +128,9 @@ func TestChannelMutationNormalizesPersistedCostFactorWithoutTrailingZeros(t *tes
 	}
 
 	request, err = (ChannelMutation{
-		Name:                  "Discounted channel",
-		Provider:              ProviderOpenAI,
-		BaseURL:               "https://api.openai.com/v1",
+		Name:                 "Discounted channel",
+		Provider:             ProviderOpenAI,
+		BaseURL:              "https://api.openai.com/v1",
 		UpstreamCostDiscount: "0.123456789123456789",
 	}).validate(false)
 	if err != nil {
