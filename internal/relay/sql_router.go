@@ -505,8 +505,7 @@ func (r *SQLChannelRouter) UpdateChannel(
 		accountUserID = ""
 		resetAccountSnapshot = resetAccountSnapshot || currentAccountUserID != ""
 	}
-	if accountCredentialRef == "" ||
-		(request.UpstreamIntegration == UpstreamIntegrationNewAPI && strings.TrimSpace(accountUserID) == "") {
+	if accountCredentialRef == "" {
 		accountSyncStatus = "not_configured"
 		resetAccountSnapshot = true
 	}
@@ -796,8 +795,7 @@ func (r *SQLChannelRouter) currentAccountConfig(ctx context.Context, tx *sql.Tx,
 }
 
 func accountSyncStatus(integration, credential, userID string) string {
-	if strings.TrimSpace(credential) == "" ||
-		(integration == UpstreamIntegrationNewAPI && strings.TrimSpace(userID) == "") {
+	if strings.TrimSpace(credential) == "" {
 		return "not_configured"
 	}
 	return "pending"

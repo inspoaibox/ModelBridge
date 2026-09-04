@@ -30,6 +30,14 @@ var (
 	errUpstreamAccountNotFound    = errors.New("upstream account information was not returned")
 )
 
+type upstreamAccountHTTPError struct {
+	status int
+}
+
+func (e *upstreamAccountHTTPError) Error() string {
+	return fmt.Sprintf("upstream account endpoint returned HTTP %d", e.status)
+}
+
 // SyncChannelAccount refreshes only the administrator-facing account snapshot.
 // It intentionally does not call any channel health recorder and does not
 // touch the fields used by SelectCandidates or billing.
@@ -76,13 +84,6 @@ func (r *SQLChannelRouter) SyncChannelAccount(ctx context.Context, actorID, chan
 		}
 		return r.GetChannel(ctx, channelID)
 	}
-	if integration == UpstreamIntegrationNewAPI && strings.TrimSpace(accountUserID) == "" {
-		if updateErr := r.finishFailedAccountSync(ctx, channelID, "未配置上游用户 ID"); updateErr != nil {
-			return ChannelSummary{}, updateErr
-		}
-		return r.GetChannel(ctx, channelID)
-	}
-
 	secret, err := r.resolveAccountSecret(ctx, credentialRef)
 	if err != nil {
 		if updateErr := r.finishFailedAccountSync(ctx, channelID, "未配置独立的上游账户查询凭据"); updateErr != nil {
@@ -205,19 +206,50 @@ func fetchUpstreamAccount(ctx context.Context, integration, provider, baseURL, c
 
 	switch integration {
 	case UpstreamIntegrationNewAPI:
-		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/user/self", credential, map[string]string{
-			"New-Api-User": strings.TrimSpace(accountUserID),
-		})
+		extraHeaders := map[string]string{}
+		// Older NewAPI deployments used this header to select the user. Newer
+		// deployments authenticate the user directly from the dashboard PAT and
+		// explicitly no longer require New-Api-User. Send it only when configured
+		// so both generations remain compatible.
+		if strings.TrimSpace(accountUserID) != "" {
+			extraHeaders["New-Api-User"] = strings.TrimSpace(accountUserID)
+		}
+		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/user/self", credential, extraHeaders)
 		if err != nil {
 			return upstreamAccountSnapshot{}, err
 		}
-		return parseNewAPIAccount(body)
+		snapshot, err := parseNewAPIAccount(body)
+		if err != nil {
+			return upstreamAccountSnapshot{}, err
+		}
+		// NewAPI exposes the effective group ratio on the user-groups endpoint,
+		// not on /api/user/self. This is best-effort: balance data remains useful
+		// when an older deployment does not expose the secondary endpoint.
+		groupsBody, groupsErr := requestUpstreamAccountJSON(ctx, client, baseURL, "/api/user/self/groups", credential, extraHeaders)
+		if groupsErr == nil {
+			if ratio := parseNewAPIGroupRate(groupsBody, snapshot.planName); ratio != "" {
+				snapshot.rateMultiplier = ratio
+			}
+		}
+		return snapshot, nil
 	case UpstreamIntegrationSub2API:
 		body, err := requestUpstreamAccountJSON(ctx, client, baseURL, "/v1/usage", credential, nil)
 		if err != nil {
 			return upstreamAccountSnapshot{}, err
 		}
-		return parseSub2APIAccount(body)
+		snapshot, err := parseSub2APIAccount(body)
+		if err != nil {
+			return upstreamAccountSnapshot{}, err
+		}
+		// Sub2API keeps the effective key multiplier on its dedicated billing
+		// endpoint; /v1/usage only reports balance and usage.
+		billingBody, billingErr := requestUpstreamAccountJSON(ctx, client, baseURL, "/v1/sub2api/billing", credential, nil)
+		if billingErr == nil {
+			if ratio := parseSub2APIBillingRate(billingBody); ratio != "" {
+				snapshot.rateMultiplier = ratio
+			}
+		}
+		return snapshot, nil
 	default:
 		return upstreamAccountSnapshot{}, errUpstreamAccountUnsupported
 	}
@@ -247,7 +279,7 @@ func requestUpstreamAccountJSON(ctx context.Context, client *http.Client, baseUR
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		return nil, fmt.Errorf("upstream account endpoint returned HTTP %d", response.StatusCode)
+		return nil, &upstreamAccountHTTPError{status: response.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
@@ -301,6 +333,63 @@ func parseNewAPIAccount(body json.RawMessage) (upstreamAccountSnapshot, error) {
 	}, nil
 }
 
+func parseNewAPIGroupRate(body json.RawMessage, groupName string) string {
+	payload, err := decodeAccountData(body, false)
+	if err != nil {
+		return ""
+	}
+	groupName = strings.TrimSpace(groupName)
+	if groupName != "" {
+		if raw, ok := payload[groupName]; ok {
+			var value any
+			decoder := json.NewDecoder(strings.NewReader(string(raw)))
+			decoder.UseNumber()
+			if decoder.Decode(&value) == nil {
+				if number := accountNumber(value); number != "" {
+					return number
+				}
+				if object, ok := value.(map[string]any); ok {
+					for _, key := range []string{"ratio", "group_ratio", "rate_multiplier", "multiplier"} {
+						if number := accountNumber(object[key]); number != "" {
+							return number
+						}
+					}
+				}
+			}
+		}
+	}
+	// Some compatible wrappers return a single group without preserving the
+	// group name. Accept that unambiguous form, but never guess among multiple
+	// ratios.
+	var found string
+	for _, raw := range payload {
+		var value any
+		decoder := json.NewDecoder(strings.NewReader(string(raw)))
+		decoder.UseNumber()
+		if decoder.Decode(&value) != nil {
+			continue
+		}
+		var number string
+		if object, ok := value.(map[string]any); ok {
+			for _, key := range []string{"ratio", "group_ratio", "rate_multiplier", "multiplier"} {
+				if number = accountNumber(object[key]); number != "" {
+					break
+				}
+			}
+		} else {
+			number = accountNumber(value)
+		}
+		if number == "" {
+			continue
+		}
+		if found != "" && found != number {
+			return ""
+		}
+		found = number
+	}
+	return found
+}
+
 func parseSub2APIAccount(body json.RawMessage) (upstreamAccountSnapshot, error) {
 	payload, err := decodeAccountData(body, false)
 	if err != nil {
@@ -351,6 +440,21 @@ func parseSub2APIAccount(body json.RawMessage) (upstreamAccountSnapshot, error) 
 		planName:       planName,
 		rateMultiplier: firstAccountNumber(payload, "rate_multiplier", "multiplier", "ratio"),
 	}, nil
+}
+
+func parseSub2APIBillingRate(body json.RawMessage) string {
+	payload, err := decodeAccountData(body, false)
+	if err != nil {
+		return ""
+	}
+	return firstAccountNumber(payload,
+		"effective_rate_multiplier",
+		"resolved_rate_multiplier",
+		"group_rate_multiplier",
+		"rate_multiplier",
+		"multiplier",
+		"ratio",
+	)
 }
 
 func decodeAccountData(body json.RawMessage, requireSuccess bool) (map[string]json.RawMessage, error) {
@@ -526,6 +630,10 @@ func safeAccountSyncError(err error) string {
 	case errors.Is(err, ErrCredentialUnavailable):
 		return "独立的上游账户查询凭据不可用"
 	default:
+		var httpErr *upstreamAccountHTTPError
+		if errors.As(err, &httpErr) {
+			return fmt.Sprintf("上游账户接口返回 HTTP %d", httpErr.status)
+		}
 		return "上游账户信息查询失败"
 	}
 }

@@ -48,6 +48,30 @@ func TestParseNewAPIAccount(t *testing.T) {
 	}
 }
 
+func TestParseNewAPIGroupRate(t *testing.T) {
+	ratio := parseNewAPIGroupRate(json.RawMessage(`{
+        "success": true,
+        "data": {
+            "default": {"ratio": 1.25, "desc": "Default"},
+            "vip": {"ratio": 2}
+        }
+    }`), "default")
+	if ratio != "1.25" {
+		t.Fatalf("ratio = %q, want 1.25", ratio)
+	}
+}
+
+func TestParseSub2APIBillingRate(t *testing.T) {
+	ratio := parseSub2APIBillingRate(json.RawMessage(`{
+        "object": "sub2api.key_billing",
+        "resolved_rate_multiplier": 0.75,
+        "effective_rate_multiplier": 0.9
+    }`))
+	if ratio != "0.9" {
+		t.Fatalf("ratio = %q, want 0.9", ratio)
+	}
+}
+
 func TestParseSub2APIAccount(t *testing.T) {
 	snapshot, err := parseSub2APIAccount(json.RawMessage(`{
         "remaining": "12.3400",
@@ -68,17 +92,24 @@ func TestParseSub2APIAccount(t *testing.T) {
 
 func TestFetchNewAPIAccountUsesProtocolEndpointAndHeaders(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/user/self" {
-			t.Errorf("path = %q, want /api/user/self", r.URL.Path)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer account-secret" {
 			t.Errorf("authorization = %q, want bearer account-secret", got)
 		}
-		if got := r.Header.Get("New-Api-User"); got != "user-123" {
-			t.Errorf("New-Api-User = %q, want user-123", got)
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true,"data":{"quota":500000,"used_quota":250000,"group":"default","group_ratio":1.5}}`))
+		switch r.URL.Path {
+		case "/api/user/self":
+			if got := r.Header.Get("New-Api-User"); got != "user-123" {
+				t.Errorf("New-Api-User = %q, want user-123", got)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"quota":500000,"used_quota":250000,"group":"default"}}`))
+		case "/api/user/self/groups":
+			if got := r.Header.Get("New-Api-User"); got != "user-123" {
+				t.Errorf("New-Api-User = %q, want user-123", got)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"default":{"ratio":1.5,"desc":"Default"}}}`))
+		default:
+			t.Errorf("path = %q, want NewAPI account endpoint", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -91,11 +122,34 @@ func TestFetchNewAPIAccountUsesProtocolEndpointAndHeaders(t *testing.T) {
 	}
 }
 
+func TestFetchNewAPIAccountDoesNotRequireUserHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/user/self" {
+			if got := r.Header.Get("New-Api-User"); got != "" {
+				t.Errorf("New-Api-User = %q, want empty", got)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"quota":100000,"used_quota":0,"group":"default"}}`))
+			return
+		}
+		if r.URL.Path == "/api/user/self/groups" {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"default":{"ratio":1}}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	snapshot, err := fetchUpstreamAccount(context.Background(), UpstreamIntegrationNewAPI, ProviderOpenAI, server.URL, "account-secret", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if snapshot.balance != "0.2" || snapshot.rateMultiplier != "1" {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+}
+
 func TestFetchSub2APIAccountUsesUsageEndpointAndBearer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/usage" {
-			t.Errorf("path = %q, want /v1/usage", r.URL.Path)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer sub2api-key" {
 			t.Errorf("authorization = %q, want bearer sub2api-key", got)
 		}
@@ -103,7 +157,14 @@ func TestFetchSub2APIAccountUsesUsageEndpointAndBearer(t *testing.T) {
 			t.Errorf("New-Api-User = %q, want empty", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"remaining":12.34,"unit":"USD"}}`))
+		switch r.URL.Path {
+		case "/v1/usage":
+			_, _ = w.Write([]byte(`{"data":{"remaining":12.34,"unit":"USD"}}`))
+		case "/v1/sub2api/billing":
+			_, _ = w.Write([]byte(`{"effective_rate_multiplier":0.75}`))
+		default:
+			t.Errorf("path = %q, want Sub2API account endpoint", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -111,7 +172,7 @@ func TestFetchSub2APIAccountUsesUsageEndpointAndBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if snapshot.balance != "12.34" || snapshot.balanceUnit != "USD" {
+	if snapshot.balance != "12.34" || snapshot.balanceUnit != "USD" || snapshot.rateMultiplier != "0.75" {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 }
