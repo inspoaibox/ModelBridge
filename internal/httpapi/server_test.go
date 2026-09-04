@@ -1036,6 +1036,45 @@ func TestAdminChannelMutationRoutesRequireUpdatePermission(t *testing.T) {
 	}
 }
 
+func TestAdminChannelAccountSyncRequiresReadPermission(t *testing.T) {
+	service := &fakeRelayService{}
+	handler := NewWithRelay(auth.NewMiddleware(testResolver{
+		"admin-read": {
+			ID:       "reader-1",
+			Type:     auth.PrincipalPlatformUser,
+			Audience: auth.AudienceAdmin,
+			Permissions: map[string]struct{}{
+				"channel:read": {},
+			},
+		},
+		"admin-denied": {
+			ID:          "reader-2",
+			Type:        auth.PrincipalPlatformUser,
+			Audience:    auth.AudienceAdmin,
+			Permissions: map[string]struct{}{},
+		},
+	}), nil, service, false, "../../web")
+
+	request := httptest.NewRequest(http.MethodPost, "/admin/v1/channels/channel-1/sync-account", nil)
+	request.Header.Set("Authorization", "Bearer admin-read")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected account sync 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if service.accountSyncBy != "reader-1" || service.accountSyncChannelID != "channel-1" {
+		t.Fatalf("unexpected account sync request: %#v", service)
+	}
+
+	deniedRequest := httptest.NewRequest(http.MethodPost, "/admin/v1/channels/channel-1/sync-account", nil)
+	deniedRequest.Header.Set("Authorization", "Bearer admin-denied")
+	deniedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deniedResponse, deniedRequest)
+	if deniedResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected account sync permission denial, got %d", deniedResponse.Code)
+	}
+}
+
 func TestAdminChannelStatusAndDeleteRoutes(t *testing.T) {
 	service := &fakeRelayService{}
 	handler := NewWithRelay(auth.NewMiddleware(testResolver{
@@ -2207,22 +2246,24 @@ func (s *fakeSystemSettingsService) DeleteAPIEndpoint(_ context.Context, _ strin
 }
 
 type fakeRelayService struct {
-	principalID      string
-	model            string
-	request          relay.ChatCompletionRequest
-	channels         []relay.ChannelSummary
-	createdBy        string
-	created          relay.ChannelMutation
-	updatedBy        string
-	updatedChannelID string
-	updated          relay.ChannelMutation
-	statusBy         string
-	statusChannelID  string
-	status           string
-	deletedBy        string
-	deletedChannelID string
-	discoveredModels []relay.DiscoveredModel
-	discovered       relay.ModelDiscoveryRequest
+	principalID          string
+	model                string
+	request              relay.ChatCompletionRequest
+	channels             []relay.ChannelSummary
+	createdBy            string
+	created              relay.ChannelMutation
+	updatedBy            string
+	updatedChannelID     string
+	updated              relay.ChannelMutation
+	statusBy             string
+	statusChannelID      string
+	status               string
+	deletedBy            string
+	deletedChannelID     string
+	discoveredModels     []relay.DiscoveredModel
+	discovered           relay.ModelDiscoveryRequest
+	accountSyncBy        string
+	accountSyncChannelID string
 }
 
 type fakeStreamingRelayService struct {
@@ -2332,6 +2373,26 @@ func (s *fakeRelayService) DeleteChannel(_ context.Context, actorID string, chan
 func (s *fakeRelayService) DiscoverModels(_ context.Context, request relay.ModelDiscoveryRequest) ([]relay.DiscoveredModel, error) {
 	s.discovered = request
 	return s.discoveredModels, nil
+}
+
+func (s *fakeRelayService) SyncChannelAccount(_ context.Context, actorID, channelID string) (relay.ChannelSummary, error) {
+	s.accountSyncBy = actorID
+	s.accountSyncChannelID = channelID
+	return relay.ChannelSummary{
+		ID:                        channelID,
+		Name:                      "channel",
+		Provider:                  "openai",
+		Status:                    "active",
+		UpstreamIntegration:       relay.UpstreamIntegrationNewAPI,
+		UpstreamAccountSyncStatus: "success",
+		UpstreamBalance:           stringPointer("12.5"),
+		UpstreamBalanceUnit:       "USD",
+		UpstreamRateMultiplier:    stringPointer("0.5"),
+	}, nil
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func safeFakeChannel(request relay.ChannelMutation) relay.ChannelSummary {

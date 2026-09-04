@@ -430,6 +430,11 @@ func newHandler(
 		"channel:read",
 	)(relayChannelsHandler(relayService)))
 
+	mux.Handle("POST /admin/v1/channels/{channelID}/sync-account", authMiddleware.Protect(
+		auth.AudienceAdmin,
+		"channel:read",
+	)(relayChannelAccountSyncHandler(relayService)))
+
 	mux.Handle("POST /admin/v1/channels/discover-models", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelModelDiscoveryHandler(relayService), "channel:update"))
 
 	mux.Handle("POST /admin/v1/channels", protectStepUp(adminsettings.StepUpOperationChannelModel, relayChannelCreateHandler(relayService), "channel:update"))
@@ -2364,6 +2369,23 @@ func relayChannelsHandler(service relay.ChatCompletionService) http.Handler {
 	})
 }
 
+func relayChannelAccountSyncHandler(service relay.ChatCompletionService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		manager, ok := channelAccountSyncManager(w, service)
+		if !ok {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		channel, err := manager.SyncChannelAccount(ctx, principalID(r), r.PathValue("channelID"))
+		if err != nil {
+			writeChannelError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, channel)
+	})
+}
+
 func relayChannelModelDiscoveryHandler(service relay.ChatCompletionService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		manager, ok := modelDiscoveryManager(w, service)
@@ -4163,6 +4185,10 @@ type channelManagementService interface {
 	DeleteChannel(context.Context, string, string) error
 }
 
+type channelAccountSyncService interface {
+	SyncChannelAccount(context.Context, string, string) (relay.ChannelSummary, error)
+}
+
 type modelDiscoveryService interface {
 	DiscoverModels(context.Context, relay.ModelDiscoveryRequest) ([]relay.DiscoveredModel, error)
 }
@@ -4173,6 +4199,19 @@ func channelManager(w http.ResponseWriter, service relay.ChatCompletionService) 
 		return nil, false
 	}
 	manager, ok := service.(channelManagementService)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "CHANNELS_UNAVAILABLE"})
+		return nil, false
+	}
+	return manager, true
+}
+
+func channelAccountSyncManager(w http.ResponseWriter, service relay.ChatCompletionService) (channelAccountSyncService, bool) {
+	if service == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "CHANNELS_UNAVAILABLE"})
+		return nil, false
+	}
+	manager, ok := service.(channelAccountSyncService)
 	if !ok {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "CHANNELS_UNAVAILABLE"})
 		return nil, false

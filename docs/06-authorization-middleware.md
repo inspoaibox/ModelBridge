@@ -79,6 +79,7 @@ audience 是否匹配
 | 接口 | 身份 | 权限 | 额外检查 |
 |---|---|---|---|
 | `GET /admin/v1/channels` | 管理 Session | `channel:read` | 只返回脱敏密钥预览 |
+| `POST /admin/v1/channels/{channelID}/sync-account` | 管理 Session | `channel:read` | 手动查询余额/倍率；失败只更新旁路状态，不需要 `channel:update` 或 Step-up |
 | `POST /admin/v1/channels/discover-models` | 管理 Session | `channel:update` | 临时使用提交的 Key 探测模型，不写入数据库 |
 | `POST /admin/v1/channels` | 管理 Session | `channel:update` | 不能提交明文密钥到日志 |
 | `PUT /admin/v1/channels/{channelID}` | 管理 Session | `channel:update` | 密钥轮换也必须脱敏记录 |

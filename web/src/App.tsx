@@ -206,6 +206,10 @@ function defaultChannelForm(provider: "openai" | "anthropic" | "grok" | "gemini"
     api_key: "",
     status: "active",
     upstream_cost_discount: "1.000000",
+    upstream_integration: "official",
+    upstream_account_credential: "",
+    upstream_account_credential_configured: false,
+    clear_upstream_account_credential: false,
     priority: 100,
     weight: 100,
     // Model mappings are explicit. A new channel must never inherit a
@@ -235,6 +239,15 @@ function channelFormFromSummary(channel: ChannelSummary): ChannelFormState {
         ? "disabled"
         : "active",
     upstream_cost_discount: channel.upstream_cost_discount || "1.000000",
+    upstream_integration:
+      channel.upstream_integration === "newapi" ||
+      channel.upstream_integration === "sub2api" ||
+      channel.upstream_integration === "other"
+        ? channel.upstream_integration
+        : "official",
+    upstream_account_credential: "",
+    upstream_account_credential_configured: channel.has_upstream_account_credential === true,
+    clear_upstream_account_credential: false,
     priority: channel.priority,
     weight: channel.weight,
     models:
@@ -2235,6 +2248,35 @@ export default function App() {
     }
   }
 
+  async function syncChannelAccount(channel: ChannelSummary) {
+    if (channelActionBusy) return;
+    setChannelActionBusy(`account-sync:${channel.id}`);
+    setChannelsMessage({ kind: "pending", text: t("channelsAccountSyncing") });
+    try {
+      const response = await fetch(`/admin/v1/channels/${encodeURIComponent(channel.id)}/sync-account`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      const result = (await response.json().catch(() => ({}))) as ChannelSummary & { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error || "account sync failed");
+      }
+      setChannels((current) => current.map((item) => (item.id === result.id ? result : item)));
+      setChannelsMessage({
+        kind: result.upstream_account_sync_status === "success" ? "success" : "pending",
+        text:
+          result.upstream_account_sync_status === "success"
+            ? t("channelsAccountSyncSuccess")
+            : t("channelsAccountSyncCompleted"),
+      });
+    } catch {
+      setChannelsMessage({ kind: "error", text: t("channelsAccountSyncFailed") });
+    } finally {
+      setChannelActionBusy("");
+    }
+  }
+
   async function refreshGroups(showPending = false) {
     if (!signedIn || audience !== "admin") return;
     setGroupsBusy(true);
@@ -3857,6 +3899,9 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         api_key: channelForm.api_key.trim(),
         status: channelForm.status,
         upstream_cost_discount: channelForm.upstream_cost_discount.trim(),
+        upstream_integration: channelForm.upstream_integration,
+        upstream_account_credential: channelForm.upstream_account_credential.trim(),
+        clear_upstream_account_credential: channelForm.clear_upstream_account_credential,
         priority: Number(channelForm.priority),
         weight: Number(channelForm.weight),
         models,
@@ -4340,6 +4385,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             refreshChannels={refreshChannels}
             openCreateChannel={openCreateChannel}
             openEditChannel={openEditChannel}
+            syncChannelAccount={syncChannelAccount}
             changeChannelStatus={changeChannelStatus}
             deleteChannel={deleteChannel}
             channelDeleteConfirm={channelDeleteConfirm}

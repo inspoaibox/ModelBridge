@@ -102,6 +102,7 @@ interface AdminConsoleProps {
   refreshChannels: (showPending?: boolean) => Promise<void>;
   openCreateChannel: (provider?: "openai" | "anthropic" | "grok" | "gemini" | "volcengine") => void;
   openEditChannel: (channel: ChannelSummary) => void;
+  syncChannelAccount: (channel: ChannelSummary) => Promise<void>;
   changeChannelStatus: (channel: ChannelSummary, nextStatus: "active" | "disabled") => Promise<void>;
   deleteChannel: (channel: ChannelSummary) => Promise<void>;
   channelDeleteConfirm: string;
@@ -299,6 +300,7 @@ export function AdminConsole({
   refreshChannels,
   openCreateChannel,
   openEditChannel,
+  syncChannelAccount,
   changeChannelStatus,
   deleteChannel,
   channelDeleteConfirm,
@@ -517,6 +519,52 @@ export function AdminConsole({
       default:
         return t("channelsStatusUnknown");
     }
+  };
+
+  const upstreamIntegrationLabel = (integration: string) => {
+    switch (integration) {
+      case "newapi":
+        return t("channelsUpstreamIntegrationNewAPI");
+      case "sub2api":
+        return t("channelsUpstreamIntegrationSub2API");
+      case "other":
+        return t("channelsUpstreamIntegrationOther");
+      default:
+        return t("channelsUpstreamIntegrationOfficial");
+    }
+  };
+
+  const accountSyncStatusLabel = (status: string) => {
+    switch (status) {
+      case "pending":
+        return t("channelsAccountPending");
+      case "success":
+        return t("channelsAccountSuccess");
+      case "failed":
+        return t("channelsAccountFailed");
+      case "not_supported":
+        return t("channelsAccountNotSupported");
+      default:
+        return t("channelsAccountNotConfigured");
+    }
+  };
+
+  const accountSyncStatusVariant = (status: string): "success" | "warning" | "muted" | "destructive" => {
+    switch (status) {
+      case "success":
+        return "success";
+      case "pending":
+        return "warning";
+      case "failed":
+        return "destructive";
+      default:
+        return "muted";
+    }
+  };
+
+  const formatAccountValue = (value?: string) => {
+    if (!value) return "-";
+    return formatDecimalWithoutTrailingZeros(value, "-");
   };
 
   const filteredChannels = channels.filter(
@@ -1270,9 +1318,11 @@ export function AdminConsole({
                     <TableRow>
                       <TableHead>{t("channelsColName")}</TableHead>
                       <TableHead>{t("channelsColProvider")}</TableHead>
+                      <TableHead>{t("channelsColUpstreamIntegration")}</TableHead>
                       <TableHead>{t("channelsColStatus")}</TableHead>
                       <TableHead>{t("channelsColPriority")}</TableHead>
                       <TableHead>{t("channelsColCostDiscount")}</TableHead>
+                      <TableHead>{t("channelsColAccount")}</TableHead>
                       <TableHead>{t("channelsColModels")}</TableHead>
                       <TableHead>{t("channelsColCredential")}</TableHead>
                       <TableHead className="text-right">{t("channelsColAction")}</TableHead>
@@ -1281,14 +1331,14 @@ export function AdminConsole({
                   <TableBody>
                     {channelsBusy && channels.length === 0 ? (
                       <TableRow>
-                          <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                          <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                           <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-indigo-600 dark:text-indigo-400" />
                           <span>{t("channelsLoading")}</span>
                         </TableCell>
                       </TableRow>
                     ) : filteredChannels.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <TableCell colSpan={10} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                           {t("channelsEmpty")}
                         </TableCell>
                       </TableRow>
@@ -1312,6 +1362,13 @@ export function AdminConsole({
                               className="font-mono text-[10px] uppercase font-bold"
                             >
                               {channel.provider}
+                            </Badge>
+                          </TableCell>
+
+                          {/* Upstream integration */}
+                          <TableCell className="min-w-[135px]">
+                            <Badge variant={channel.upstream_integration === "official" ? "cyan" : "purple"} className="text-[10px]">
+                              {upstreamIntegrationLabel(channel.upstream_integration)}
                             </Badge>
                           </TableCell>
 
@@ -1346,6 +1403,31 @@ export function AdminConsole({
                             </div>
                             <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
                               {t("channelsCostDiscountHint")}
+                            </div>
+                          </TableCell>
+
+                          {/* Optional upstream account snapshot */}
+                          <TableCell className="min-w-[190px]">
+                            <div className="flex items-center gap-2">
+                              <Badge variant={accountSyncStatusVariant(channel.upstream_account_sync_status)} className="text-[10px]">
+                                {accountSyncStatusLabel(channel.upstream_account_sync_status)}
+                              </Badge>
+                              {channel.upstream_account_sync_status === "failed" && channel.upstream_account_sync_error ? (
+                                <span className="max-w-[140px] truncate text-[10px] text-rose-600 dark:text-rose-300" title={channel.upstream_account_sync_error}>
+                                  {channel.upstream_account_sync_error}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="mt-1 space-y-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                              <div>
+                                {t("channelsAccountBalance")}: <span className="font-mono text-slate-700 dark:text-slate-200">{formatAccountValue(channel.upstream_balance)}{channel.upstream_balance ? ` ${channel.upstream_balance_unit || "USD"}` : ""}</span>
+                              </div>
+                              <div>
+                                {t("channelsAccountRate")}: <span className="font-mono text-slate-700 dark:text-slate-200">{channel.upstream_rate_multiplier ? `x${formatAccountValue(channel.upstream_rate_multiplier)}` : "-"}</span>
+                              </div>
+                              {channel.upstream_account_synced_at ? (
+                                <div>{t("channelsAccountLastSync")}: {formatTime(channel.upstream_account_synced_at)}</div>
+                              ) : null}
                             </div>
                           </TableCell>
 
@@ -1385,6 +1467,16 @@ export function AdminConsole({
                           {/* Actions */}
                           <TableCell className="text-right whitespace-nowrap">
                             <div className="inline-flex items-center gap-1.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-500/10"
+                                onClick={() => void syncChannelAccount(channel)}
+                                disabled={!canSeeAdminPermission("channel:read") || Boolean(channelActionBusy)}
+                                title={t("channelsAccountSync")}
+                              >
+                                <RefreshCw className={cn("h-3.5 w-3.5", channelActionBusy === `account-sync:${channel.id}` ? "animate-spin" : "")} />
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"

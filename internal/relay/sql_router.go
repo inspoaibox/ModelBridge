@@ -361,14 +361,19 @@ func (r *SQLChannelRouter) CreateChannel(
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO channels (
-			id, name, provider, base_url, credential_ref, status, upstream_cost_discount, priority, weight,
+			id, name, provider, base_url, credential_ref, status, upstream_cost_discount,
+			upstream_integration, upstream_account_credential_ref, upstream_account_sync_status,
+			priority, weight,
 			created_by, updated_by
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7::numeric, $8, $9,
-			NULLIF($10, '')::uuid, NULLIF($10, '')::uuid
+			$1, $2, $3, $4, $5, $6, $7::numeric,
+			$8, '', $9,
+			$10, $11,
+			NULLIF($12, '')::uuid, NULLIF($12, '')::uuid
 		)
 	`, channelID, request.Name, request.Provider, request.BaseURL, "pending:"+channelID,
-		request.Status, request.UpstreamCostDiscount, request.Priority, request.Weight, actorID)
+		request.Status, request.UpstreamCostDiscount, request.UpstreamIntegration,
+		accountSyncStatus(request.UpstreamAccountCredential), request.Priority, request.Weight, actorID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
@@ -376,12 +381,20 @@ func (r *SQLChannelRouter) CreateChannel(
 	if err != nil {
 		return ChannelSummary{}, err
 	}
+	accountCredentialRef := ""
+	if request.UpstreamAccountCredential != "" {
+		accountCredentialRef, err = r.insertAccountSecret(ctx, tx, channelID, actorID, request.UpstreamAccountCredential)
+		if err != nil {
+			return ChannelSummary{}, err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE channels
 		SET credential_ref = $2,
+		    upstream_account_credential_ref = $3,
 		    updated_at = now()
 		WHERE id = $1
-	`, channelID, credentialRef); err != nil {
+	`, channelID, credentialRef, accountCredentialRef); err != nil {
 		return ChannelSummary{}, err
 	}
 	if err := r.replaceChannelModels(ctx, tx, channelID, request.Provider, request.Models); err != nil {
@@ -432,6 +445,59 @@ func (r *SQLChannelRouter) UpdateChannel(
 	if err != nil {
 		return ChannelSummary{}, err
 	}
+	currentAccountRef, currentIntegration, currentAccountStatus, err := r.currentAccountConfig(ctx, tx, channelID)
+	if err != nil {
+		return ChannelSummary{}, err
+	}
+	accountCredentialRef := currentAccountRef
+	accountSyncStatus := currentAccountStatus
+	if accountSyncStatus == "" {
+		accountSyncStatus = "not_configured"
+	}
+	resetAccountSnapshot := currentIntegration != request.UpstreamIntegration
+	if request.ClearUpstreamAccountCredential {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE channel_account_secrets
+			SET revoked_at = now()
+			WHERE channel_id = $1
+			  AND revoked_at IS NULL
+		`, channelID); err != nil {
+			return ChannelSummary{}, err
+		}
+		accountCredentialRef = ""
+		accountSyncStatus = "not_configured"
+		resetAccountSnapshot = true
+	}
+	if request.UpstreamAccountCredential != "" {
+		if r.box == nil {
+			return ChannelSummary{}, ErrUnavailable
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE channel_account_secrets
+			SET revoked_at = now()
+			WHERE channel_id = $1
+			  AND revoked_at IS NULL
+		`, channelID); err != nil {
+			return ChannelSummary{}, err
+		}
+		accountCredentialRef, err = r.insertAccountSecret(ctx, tx, channelID, actorID, request.UpstreamAccountCredential)
+		if err != nil {
+			return ChannelSummary{}, err
+		}
+		accountSyncStatus = "pending"
+		resetAccountSnapshot = true
+	}
+	if request.UpstreamAccountCredential == "" && !request.ClearUpstreamAccountCredential {
+		if resetAccountSnapshot && accountCredentialRef != "" {
+			accountSyncStatus = "pending"
+		}
+		if currentAccountRef == "" {
+			accountSyncStatus = "not_configured"
+		}
+		if resetAccountSnapshot && accountCredentialRef == "" {
+			accountSyncStatus = "not_configured"
+		}
+	}
 	if request.APIKey != "" {
 		if r.box == nil {
 			return ChannelSummary{}, ErrUnavailable
@@ -458,18 +524,27 @@ func (r *SQLChannelRouter) UpdateChannel(
 		    credential_ref = $5,
 		    status = $6,
 		    upstream_cost_discount = $7::numeric,
+		    upstream_integration = $8,
+		    upstream_account_credential_ref = $9,
+		    upstream_account_sync_status = $10,
+		    upstream_account_sync_error = CASE WHEN $10 IN ('pending', 'not_configured') THEN '' ELSE upstream_account_sync_error END,
+		    upstream_balance = CASE WHEN $11::boolean THEN NULL ELSE upstream_balance END,
+		    upstream_balance_unit = CASE WHEN $11::boolean THEN '' ELSE upstream_balance_unit END,
+		    upstream_rate_multiplier = CASE WHEN $11::boolean THEN NULL ELSE upstream_rate_multiplier END,
+		    upstream_account_synced_at = CASE WHEN $11::boolean THEN NULL ELSE upstream_account_synced_at END,
 		    consecutive_failures = CASE WHEN $6 = 'active' THEN 0 ELSE consecutive_failures END,
 		    auto_disabled_until = CASE WHEN $6 = 'active' THEN NULL ELSE auto_disabled_until END,
 		    last_failure_status = CASE WHEN $6 = 'active' THEN NULL ELSE last_failure_status END,
 		    last_success_at = CASE WHEN $6 = 'active' THEN NULL ELSE last_success_at END,
-		    priority = $8,
-		    weight = $9,
-		    updated_by = NULLIF($10, '')::uuid,
+		    priority = $12,
+		    weight = $13,
+		    updated_by = NULLIF($14, '')::uuid,
 		    updated_at = now()
 		WHERE id = $1
 		  AND deleted_at IS NULL
 	`, channelID, request.Name, request.Provider, request.BaseURL, credentialRef,
-		request.Status, request.UpstreamCostDiscount, request.Priority, request.Weight, actorID)
+		request.Status, request.UpstreamCostDiscount, request.UpstreamIntegration, accountCredentialRef,
+		accountSyncStatus, resetAccountSnapshot, request.Priority, request.Weight, actorID)
 	if err != nil {
 		return ChannelSummary{}, err
 	}
@@ -583,6 +658,14 @@ func (r *SQLChannelRouter) DeleteChannel(ctx context.Context, actorID string, ch
 	`, channelID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE channel_account_secrets
+		SET revoked_at = now()
+		WHERE channel_id = $1
+		  AND revoked_at IS NULL
+	`, channelID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -624,6 +707,43 @@ func (r *SQLChannelRouter) insertSecret(
 	return "secret:" + secretID, nil
 }
 
+func (r *SQLChannelRouter) insertAccountSecret(
+	ctx context.Context,
+	tx *sql.Tx,
+	channelID string,
+	actorID string,
+	secret string,
+) (string, error) {
+	if r == nil || r.box == nil {
+		return "", ErrUnavailable
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return "", ErrCredentialRequired
+	}
+	secretID, err := ids.New()
+	if err != nil {
+		return "", err
+	}
+	encrypted, err := r.box.Seal([]byte(secret))
+	if err != nil {
+		return "", ErrCredentialUnavailable
+	}
+	prefix, suffix := secretPreviewParts(secret)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO channel_account_secrets (
+			id, channel_id, encrypted_secret, secret_prefix, secret_suffix,
+			created_by, rotated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, NULLIF($6, '')::uuid, now()
+		)
+	`, secretID, channelID, []byte(encrypted), prefix, suffix, actorID)
+	if err != nil {
+		return "", err
+	}
+	return "account-secret:" + secretID, nil
+}
+
 func (r *SQLChannelRouter) currentCredentialRef(ctx context.Context, tx *sql.Tx, channelID string) (string, error) {
 	var credentialRef string
 	err := tx.QueryRowContext(ctx, `
@@ -639,6 +759,30 @@ func (r *SQLChannelRouter) currentCredentialRef(ctx context.Context, tx *sql.Tx,
 		return "", err
 	}
 	return credentialRef, nil
+}
+
+func (r *SQLChannelRouter) currentAccountConfig(ctx context.Context, tx *sql.Tx, channelID string) (string, string, string, error) {
+	var credentialRef, integration, status string
+	err := tx.QueryRowContext(ctx, `
+		SELECT upstream_account_credential_ref, upstream_integration, upstream_account_sync_status
+		FROM channels
+		WHERE id = $1
+		  AND deleted_at IS NULL
+	`, channelID).Scan(&credentialRef, &integration, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", ErrChannelNotFound
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	return credentialRef, integration, status, nil
+}
+
+func accountSyncStatus(credential string) string {
+	if strings.TrimSpace(credential) == "" {
+		return "not_configured"
+	}
+	return "pending"
 }
 
 func (r *SQLChannelRouter) replaceChannelModels(
@@ -779,6 +923,10 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 			updatedAt         time.Time
 			autoDisabledUntil sql.NullTime
 			lastFailureStatus sql.NullInt64
+			upstreamBalance   sql.NullString
+			upstreamRate      sql.NullString
+			upstreamSyncedAt  sql.NullTime
+			upstreamAttemptAt sql.NullTime
 		)
 		if err := rows.Scan(
 			&channel.ID,
@@ -791,6 +939,15 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 			&channel.HasCredential,
 			&channel.Status,
 			&channel.UpstreamCostDiscount,
+			&channel.UpstreamIntegration,
+			&channel.HasUpstreamAccountCredential,
+			&upstreamBalance,
+			&channel.UpstreamBalanceUnit,
+			&upstreamRate,
+			&channel.UpstreamAccountSyncStatus,
+			&channel.UpstreamAccountSyncError,
+			&upstreamSyncedAt,
+			&upstreamAttemptAt,
 			&channel.Priority,
 			&channel.Weight,
 			&channel.ConsecutiveFailures,
@@ -810,6 +967,22 @@ func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]Channe
 		}
 		channel.CreatedAt = createdAt
 		channel.UpdatedAt = updatedAt
+		if upstreamBalance.Valid {
+			value := upstreamBalance.String
+			channel.UpstreamBalance = &value
+		}
+		if upstreamRate.Valid {
+			value := upstreamRate.String
+			channel.UpstreamRateMultiplier = &value
+		}
+		if upstreamSyncedAt.Valid {
+			value := upstreamSyncedAt.Time
+			channel.UpstreamAccountSyncedAt = &value
+		}
+		if upstreamAttemptAt.Valid {
+			value := upstreamAttemptAt.Time
+			channel.UpstreamAccountLastAttemptAt = &value
+		}
 		if autoDisabledUntil.Valid {
 			value := autoDisabledUntil.Time
 			channel.AutoDisabledUntil = &value
@@ -843,7 +1016,20 @@ func channelListQuery(where string) string {
 		           WHEN c.credential_ref LIKE 'secret:%' THEN cs.id IS NOT NULL
 		           ELSE c.credential_ref <> ''
 		       END AS has_credential,
-		       c.status, c.upstream_cost_discount::text, c.priority, c.weight, c.consecutive_failures,
+		       c.status, c.upstream_cost_discount::text,
+		       c.upstream_integration,
+		       CASE
+		           WHEN c.upstream_account_credential_ref = '' THEN false
+		           ELSE cas.id IS NOT NULL
+		       END AS has_upstream_account_credential,
+		       c.upstream_balance::text,
+		       c.upstream_balance_unit,
+		       c.upstream_rate_multiplier::text,
+		       c.upstream_account_sync_status,
+		       c.upstream_account_sync_error,
+		       c.upstream_account_synced_at,
+		       c.upstream_account_last_attempt_at,
+		       c.priority, c.weight, c.consecutive_failures,
 		       c.auto_disabled_until, c.last_failure_status,
 		       c.created_at, c.updated_at,
 		       COALESCE(
@@ -863,12 +1049,20 @@ func channelListQuery(where string) string {
 		LEFT JOIN channel_secrets cs
 		       ON c.credential_ref = 'secret:' || cs.id::text
 		      AND cs.revoked_at IS NULL
+		LEFT JOIN channel_account_secrets cas
+		       ON c.upstream_account_credential_ref = 'account-secret:' || cas.id::text
+		      AND cas.revoked_at IS NULL
 		LEFT JOIN channel_models cm ON cm.channel_id = c.id
 		LEFT JOIN models m ON m.id = cm.model_id
 		WHERE ` + where + `
 		GROUP BY c.id, c.name, c.provider, c.base_url, c.credential_ref,
 		         cs.id, cs.secret_prefix, cs.secret_suffix,
+		         cas.id,
 		         c.status, c.upstream_cost_discount, c.priority, c.weight, c.consecutive_failures,
+		         c.upstream_integration, c.upstream_account_credential_ref,
+		         c.upstream_balance, c.upstream_balance_unit, c.upstream_rate_multiplier,
+		         c.upstream_account_sync_status, c.upstream_account_sync_error,
+		         c.upstream_account_synced_at, c.upstream_account_last_attempt_at,
 		         c.auto_disabled_until, c.last_failure_status,
 		         c.created_at, c.updated_at
 		ORDER BY c.priority DESC, c.provider ASC, c.name ASC

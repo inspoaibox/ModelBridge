@@ -30,6 +30,13 @@ const (
 	maxRequestedTokens        = 1_000_000
 )
 
+const (
+	UpstreamIntegrationOfficial = "official"
+	UpstreamIntegrationNewAPI   = "newapi"
+	UpstreamIntegrationSub2API  = "sub2api"
+	UpstreamIntegrationOther    = "other"
+)
+
 var (
 	ErrUnavailable           = errors.New("relay service is unavailable")
 	ErrInvalidRequest        = errors.New("invalid relay request")
@@ -226,24 +233,33 @@ type Channel struct {
 }
 
 type ChannelSummary struct {
-	ID                   string                `json:"id"`
-	Name                 string                `json:"name"`
-	Provider             string                `json:"provider"`
-	BaseURL              string                `json:"base_url"`
-	CredentialRef        string                `json:"credential_ref"`
-	CredentialMode       string                `json:"credential_mode"`
-	CredentialPreview    string                `json:"credential_preview"`
-	HasCredential        bool                  `json:"has_credential"`
-	Status               string                `json:"status"`
-	UpstreamCostDiscount string                `json:"upstream_cost_discount"`
-	Priority             int                   `json:"priority"`
-	Weight               int                   `json:"weight"`
-	ConsecutiveFailures  int                   `json:"consecutive_failures"`
-	AutoDisabledUntil    *time.Time            `json:"auto_disabled_until,omitempty"`
-	LastFailureStatus    *int                  `json:"last_failure_status,omitempty"`
-	Models               []ChannelModelSummary `json:"models"`
-	CreatedAt            time.Time             `json:"created_at"`
-	UpdatedAt            time.Time             `json:"updated_at"`
+	ID                           string                `json:"id"`
+	Name                         string                `json:"name"`
+	Provider                     string                `json:"provider"`
+	BaseURL                      string                `json:"base_url"`
+	CredentialRef                string                `json:"credential_ref"`
+	CredentialMode               string                `json:"credential_mode"`
+	CredentialPreview            string                `json:"credential_preview"`
+	HasCredential                bool                  `json:"has_credential"`
+	Status                       string                `json:"status"`
+	UpstreamCostDiscount         string                `json:"upstream_cost_discount"`
+	UpstreamIntegration          string                `json:"upstream_integration"`
+	HasUpstreamAccountCredential bool                  `json:"has_upstream_account_credential"`
+	UpstreamBalance              *string               `json:"upstream_balance,omitempty"`
+	UpstreamBalanceUnit          string                `json:"upstream_balance_unit,omitempty"`
+	UpstreamRateMultiplier       *string               `json:"upstream_rate_multiplier,omitempty"`
+	UpstreamAccountSyncStatus    string                `json:"upstream_account_sync_status"`
+	UpstreamAccountSyncError     string                `json:"upstream_account_sync_error,omitempty"`
+	UpstreamAccountSyncedAt      *time.Time            `json:"upstream_account_synced_at,omitempty"`
+	UpstreamAccountLastAttemptAt *time.Time            `json:"upstream_account_last_attempt_at,omitempty"`
+	Priority                     int                   `json:"priority"`
+	Weight                       int                   `json:"weight"`
+	ConsecutiveFailures          int                   `json:"consecutive_failures"`
+	AutoDisabledUntil            *time.Time            `json:"auto_disabled_until,omitempty"`
+	LastFailureStatus            *int                  `json:"last_failure_status,omitempty"`
+	Models                       []ChannelModelSummary `json:"models"`
+	CreatedAt                    time.Time             `json:"created_at"`
+	UpdatedAt                    time.Time             `json:"updated_at"`
 }
 
 type ChannelModelSummary struct {
@@ -265,6 +281,13 @@ type ChannelMutator interface {
 	DeleteChannel(context.Context, string, string) error
 }
 
+// ChannelAccountSyncer refreshes an optional upstream account-information
+// snapshot. The snapshot is operational metadata only; it must never be used
+// by relay routing, health circuits, customer billing, or cost estimation.
+type ChannelAccountSyncer interface {
+	SyncChannelAccount(context.Context, string, string) (ChannelSummary, error)
+}
+
 type ModelDiscoveryRequest struct {
 	ChannelID string `json:"channel_id,omitempty"`
 	Provider  string `json:"provider"`
@@ -279,15 +302,18 @@ type DiscoveredModel struct {
 }
 
 type ChannelMutation struct {
-	Name                 string                 `json:"name"`
-	Provider             string                 `json:"provider"`
-	BaseURL              string                 `json:"base_url"`
-	APIKey               string                 `json:"api_key,omitempty"`
-	Status               string                 `json:"status,omitempty"`
-	UpstreamCostDiscount string                 `json:"upstream_cost_discount,omitempty"`
-	Priority             int                    `json:"priority"`
-	Weight               int                    `json:"weight"`
-	Models               []ChannelModelMutation `json:"models"`
+	Name                           string                 `json:"name"`
+	Provider                       string                 `json:"provider"`
+	BaseURL                        string                 `json:"base_url"`
+	APIKey                         string                 `json:"api_key,omitempty"`
+	Status                         string                 `json:"status,omitempty"`
+	UpstreamCostDiscount           string                 `json:"upstream_cost_discount,omitempty"`
+	UpstreamIntegration            string                 `json:"upstream_integration,omitempty"`
+	UpstreamAccountCredential      string                 `json:"upstream_account_credential,omitempty"`
+	ClearUpstreamAccountCredential bool                   `json:"clear_upstream_account_credential,omitempty"`
+	Priority                       int                    `json:"priority"`
+	Weight                         int                    `json:"weight"`
+	Models                         []ChannelModelMutation `json:"models"`
 }
 
 type ChannelModelMutation struct {
@@ -408,6 +434,17 @@ func (s *Service) ListChannels(ctx context.Context) ([]ChannelSummary, error) {
 		return nil, ErrUnavailable
 	}
 	return lister.List(ctx)
+}
+
+func (s *Service) SyncChannelAccount(ctx context.Context, actorID, channelID string) (ChannelSummary, error) {
+	if s == nil || s.router == nil {
+		return ChannelSummary{}, ErrUnavailable
+	}
+	syncer, ok := s.router.(ChannelAccountSyncer)
+	if !ok {
+		return ChannelSummary{}, ErrUnavailable
+	}
+	return syncer.SyncChannelAccount(ctx, actorID, channelID)
 }
 
 func (s *Service) DiscoverModels(ctx context.Context, request ModelDiscoveryRequest) ([]DiscoveredModel, error) {
@@ -549,6 +586,8 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	m.BaseURL = strings.TrimSpace(m.BaseURL)
 	m.APIKey = strings.TrimSpace(m.APIKey)
 	m.Status = normalizeChannelStatus(m.Status)
+	m.UpstreamIntegration = normalizeUpstreamIntegration(m.UpstreamIntegration)
+	m.UpstreamAccountCredential = strings.TrimSpace(m.UpstreamAccountCredential)
 	if normalized, ok := normalizeUpstreamCostDiscount(m.UpstreamCostDiscount); ok {
 		m.UpstreamCostDiscount = normalized
 	} else {
@@ -556,7 +595,7 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	}
 	m.Models = cleanChannelModels(m.Models)
 
-	if m.Name == "" || !supportedProvider(m.Provider) || m.BaseURL == "" {
+	if m.Name == "" || !supportedProvider(m.Provider) || m.BaseURL == "" || m.UpstreamIntegration == "" {
 		return ChannelMutation{}, ErrInvalidRequest
 	}
 	if requireAPIKey && m.APIKey == "" {
@@ -568,7 +607,25 @@ func (m ChannelMutation) validate(requireAPIKey bool) (ChannelMutation, error) {
 	if m.Priority < 0 || m.Priority > 10000 || m.Weight < 0 || m.Weight > 10000 {
 		return ChannelMutation{}, ErrInvalidRequest
 	}
+	if len(m.UpstreamAccountCredential) > 4096 {
+		return ChannelMutation{}, ErrInvalidRequest
+	}
 	return m, nil
+}
+
+func normalizeUpstreamIntegration(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", UpstreamIntegrationOfficial:
+		return UpstreamIntegrationOfficial
+	case UpstreamIntegrationNewAPI:
+		return UpstreamIntegrationNewAPI
+	case UpstreamIntegrationSub2API:
+		return UpstreamIntegrationSub2API
+	case UpstreamIntegrationOther:
+		return UpstreamIntegrationOther
+	default:
+		return ""
+	}
 }
 
 func normalizeUpstreamCostDiscount(value string) (string, bool) {

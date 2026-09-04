@@ -11,6 +11,7 @@ import {
   Server,
   Sparkles,
   Trash2,
+  Wallet,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -193,7 +194,90 @@ export function ChannelModal({
               </div>
             </div>
 
-            {/* Section 2: Endpoint, API Key, Priority */}
+            {/* Section 2: Optional upstream account snapshot */}
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/40 p-5 space-y-4">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                <Wallet className="h-3.5 w-3.5" />
+                <span>2. {t("channelsFormUpstreamIntegration")}</span>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="channel-upstream-integration" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {t("channelsFormUpstreamIntegration")}
+                  </Label>
+                  <select
+                    id="channel-upstream-integration"
+                    className="flex h-10 w-full rounded-xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900/90 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus-visible:outline-none focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500/20"
+                    value={channelForm.upstream_integration}
+                    onChange={(e) =>
+                      setChannelForm((current) => ({
+                        ...current,
+                        upstream_integration:
+                          e.target.value === "newapi" ||
+                          e.target.value === "sub2api" ||
+                          e.target.value === "other"
+                            ? e.target.value
+                            : "official",
+                      }))
+                    }
+                  >
+                    <option value="official">{t("channelsUpstreamIntegrationOfficial")}</option>
+                    <option value="newapi">{t("channelsUpstreamIntegrationNewAPI")}</option>
+                    <option value="sub2api">{t("channelsUpstreamIntegrationSub2API")}</option>
+                    <option value="other">{t("channelsUpstreamIntegrationOther")}</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="channel-upstream-account-credential" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {t("channelsFormUpstreamAccountCredential")}
+                  </Label>
+                  <Input
+                    id="channel-upstream-account-credential"
+                    type="password"
+                    value={channelForm.upstream_account_credential}
+                    onChange={(e) =>
+                      setChannelForm((current) => ({
+                        ...current,
+                        upstream_account_credential: e.target.value,
+                        clear_upstream_account_credential: false,
+                      }))
+                    }
+                    placeholder={
+                      channelForm.upstream_account_credential_configured
+                        ? t("channelsFormUpstreamAccountCredentialOptional")
+                        : t("channelsFormUpstreamAccountCredentialPlaceholder")
+                    }
+                    autoComplete="new-password"
+                  />
+                </div>
+              </div>
+
+              <p className="text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                {t("channelsFormUpstreamAccountHint")}
+              </p>
+
+              {channelForm.id && channelForm.upstream_account_credential_configured && (
+                <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={channelForm.clear_upstream_account_credential}
+                    onChange={(e) =>
+                      setChannelForm((current) => ({
+                        ...current,
+                        clear_upstream_account_credential: e.target.checked,
+                        upstream_account_credential: e.target.checked ? "" : current.upstream_account_credential,
+                      }))
+                    }
+                    className="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                  />
+                  <span>{t("channelsFormClearUpstreamAccountCredential")}</span>
+                </label>
+              )}
+            </div>
+
+            {/* Section 3: Endpoint, API Key, Priority */}
             <div className="rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/40 p-5 space-y-4">
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-600 dark:text-cyan-400">
                 <Key className="h-3.5 w-3.5" />
@@ -305,7 +389,7 @@ export function ChannelModal({
               )}
             </div>
 
-            {/* Section 3: Model Mapping & Upstream Discovery */}
+            {/* Section 4: Model Mapping & Upstream Discovery */}
             <div className="rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/40 p-5 space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">

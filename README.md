@@ -71,6 +71,7 @@ go run ./cmd/bootstrap-admin
 
 渠道需要管理员在后台手动新增，填写 Base URL、API Key 和模型映射。API Key 会加密保存到 `channel_secrets`，渠道列表只返回脱敏预览。
 后台渠道管理支持弹窗新增、编辑、暂停、启用和软删除；填写上游 Base URL 与 API Key 后，可以通过 models 接口自动读取模型，也可以手动维护模型映射。软删除会同时吊销该渠道的活跃密钥，模型映射关闭“下游可见”后不会参与 Relay 路由。
+渠道还可以选择上游对接系统（原厂、New API、Sub2API 或其他），并单独填写账户查询凭据。该凭据仅用于管理员手动查询上游余额和倍率，独立加密保存；查询失败、无接口或未配置凭据都不会影响渠道调用、路由、健康度、客户计费和成本估算。余额和倍率不会自动在页面刷新时请求上游。
 
 ## 当前接口
 
@@ -123,6 +124,7 @@ PUT  /admin/v1/settings/payments/{provider}
 GET  /public/v1/settings
 GET  /public/v1/features
 GET  /admin/v1/channels
+POST /admin/v1/channels/{channelID}/sync-account
 POST /admin/v1/channels/discover-models
 POST /admin/v1/channels
 PUT  /admin/v1/channels/{channelID}

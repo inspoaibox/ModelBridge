@@ -195,6 +195,22 @@ provider
 base_url
 credential_ref
 status                  active | draining | disabled
+upstream_cost_discount  上游成本估算折扣；与账户查询倍率完全独立
+upstream_integration    official | newapi | sub2api | other
+upstream_account_credential_ref
+                        账户查询凭据引用，不参与 Relay 调用
+upstream_balance        管理员查看的上游余额快照，可为空
+upstream_balance_unit   USD、quota 等上游返回的单位
+upstream_rate_multiplier
+                        上游账户/分组倍率快照，可为空
+upstream_account_sync_status
+                        not_configured | pending | success | failed | not_supported
+upstream_account_sync_error
+                        最近一次查询失败原因，不影响渠道
+upstream_account_synced_at
+                        最近一次成功同步时间
+upstream_account_last_attempt_at
+                        最近一次查询尝试时间
 priority
 weight
 timeout_policy_json
@@ -206,6 +222,23 @@ deleted_at
 ```
 
 `credential_ref` 只保存密钥管理系统中的引用，不保存明文凭据。
+`upstream_account_credential_ref` 与 `credential_ref` 分开，专门用于可选的余额/倍率查询；账户查询快照是运营展示数据，不得被路由、健康度、计费或成本估算读取。
+
+### `channel_account_secrets`
+
+```text
+id
+channel_id
+encrypted_secret       独立账户查询凭据的密文
+secret_prefix
+secret_suffix
+created_by
+created_at
+rotated_at
+revoked_at
+```
+
+该表只保存账户查询凭据。渠道调用 API Key 仍保存在 `channel_secrets`，两者不可混用。
 
 ### `channel_models`
 
