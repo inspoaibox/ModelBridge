@@ -3892,7 +3892,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       const errorCode = error instanceof Error ? error.message : "";
       const message =
         errorCode === "CHANNEL_CREDENTIAL_REQUIRED"
-          ? t("channelsCredentialRequired")
+          ? t("channelsFormDiscoverCredentialRequired")
           : errorCode === "CHANNEL_CREDENTIAL_INVALID"
             ? t("channelsCredentialInvalid")
             : errorCode === "INVALID_REQUEST"

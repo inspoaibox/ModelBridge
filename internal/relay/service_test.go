@@ -1160,7 +1160,7 @@ func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.
 	models, err := service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
 		ChannelID: "channel-1",
 		Provider:  ProviderOpenAI,
-		BaseURL:   "https://new-upstream.example/v1",
+		BaseURL:   "https://api.openai.com/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1171,8 +1171,46 @@ func TestServiceDiscoverModelsUsesStoredCredentialForExistingChannel(t *testing.
 	if provider.modelAPIKey != "sk-stored" {
 		t.Fatalf("stored credential was not used: %q", provider.modelAPIKey)
 	}
-	if provider.modelBaseURL != "https://new-upstream.example/v1" {
-		t.Fatalf("submitted endpoint was not used: %q", provider.modelBaseURL)
+	if provider.modelBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("stored endpoint was not used: %q", provider.modelBaseURL)
+	}
+}
+
+func TestServiceDiscoverModelsRequiresNewCredentialWhenEndpointChanges(t *testing.T) {
+	router := &fakeChannelRouter{
+		discoveryConfig: ChannelDiscoveryConfig{
+			Provider:      ProviderOpenAI,
+			BaseURL:       "https://api.openai.com/v1",
+			CredentialRef: "secret:channel-1",
+		},
+	}
+	provider := &recordingProvider{
+		models: []DiscoveredModel{{ID: "gpt-5"}},
+	}
+	service, err := NewService(
+		router,
+		credentialResolverFunc(func(_ context.Context, ref string) (string, error) {
+			if ref != "secret:channel-1" {
+				t.Fatalf("unexpected credential ref: %q", ref)
+			}
+			return "sk-stored", nil
+		}),
+		map[string]Provider{ProviderOpenAI: provider},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.DiscoverModels(context.Background(), ModelDiscoveryRequest{
+		ChannelID: "channel-1",
+		Provider:  ProviderOpenAI,
+		BaseURL:   "https://new-upstream.example/v1",
+	})
+	if !errors.Is(err, ErrCredentialRequired) {
+		t.Fatalf("endpoint changes must require a replacement key, got %v", err)
+	}
+	if provider.modelAPIKey != "" || provider.modelBaseURL != "" {
+		t.Fatalf("provider must not be called without a replacement key: %#v", provider)
 	}
 }
 

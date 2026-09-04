@@ -150,10 +150,9 @@ type ModelProbeService interface {
 	ProbeModel(context.Context, string, string) error
 }
 
-// ChannelDiscoveryConfigReader returns the persisted provider and credential
-// reference for an existing channel. The admin form may intentionally replace
-// the endpoint while retaining the stored credential, so the submitted
-// endpoint remains authoritative and is validated before the provider call.
+// ChannelDiscoveryConfigReader returns the persisted provider, endpoint, and
+// credential reference for an existing channel. A stored credential may only
+// be reused for the same endpoint; changing the endpoint requires a new key.
 type ChannelDiscoveryConfigReader interface {
 	DiscoveryConfig(context.Context, string) (ChannelDiscoveryConfig, error)
 }
@@ -478,13 +477,14 @@ func (s *Service) DiscoverModels(ctx context.Context, request ModelDiscoveryRequ
 			return nil, ErrInvalidRequest
 		}
 		request.Provider = configuredProvider
-		// The form always submits the current endpoint. Keep the persisted
-		// endpoint only for older clients that omit it, while allowing an admin
-		// to change Base URL without having to re-enter an unchanged key.
+		// Keep the persisted endpoint only for older clients that omit it.
 		if request.BaseURL == "" {
 			request.BaseURL = strings.TrimSpace(config.BaseURL)
 		}
 		if request.APIKey == "" {
+			if !sameDiscoveryBaseURL(request.BaseURL, config.BaseURL) {
+				return nil, ErrCredentialRequired
+			}
 			request.APIKey, err = s.credentials.Resolve(ctx, strings.TrimSpace(config.CredentialRef))
 			if err != nil {
 				return nil, err
@@ -1850,6 +1850,11 @@ func validChannelStatus(status string) bool {
 
 func validBaseURL(value string) bool {
 	return validUpstreamBaseURL(value)
+}
+
+func sameDiscoveryBaseURL(left, right string) bool {
+	return strings.TrimRight(strings.TrimSpace(left), "/") ==
+		strings.TrimRight(strings.TrimSpace(right), "/")
 }
 
 func cleanChannelModels(models []ChannelModelMutation) []ChannelModelMutation {
