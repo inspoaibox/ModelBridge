@@ -463,14 +463,12 @@ func newHandler(
 		"token:read",
 	)(tokenListHandler(tokenService)))
 
-	mux.Handle("PUT /admin/v1/tokens/{tokenID}/group", protectStepUp(adminsettings.StepUpOperationToken, tokenGroupUpdateHandler(tokenService), "token:update"))
+	mux.Handle("POST /admin/v1/tokens/{tokenID}/pause", protectStepUp(adminsettings.StepUpOperationToken, tokenPauseHandler(tokenService), "token:pause"))
 
 	mux.Handle("POST /admin/v1/tokens", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"token:create",
 	)(adminTokenCreationDisabledHandler()))
-
-	mux.Handle("DELETE /admin/v1/tokens/{tokenID}", protectStepUp(adminsettings.StepUpOperationToken, tokenRevokeHandler(tokenService), "token:revoke"))
 
 	// Tenant members and projects are managed by the tenant owner/admin. The
 	// tenant path guard prevents a valid console session from crossing tenants;
@@ -3719,18 +3717,18 @@ func tokenConsoleDeleteHandler(service tokens.ConsoleService) http.Handler {
 	})
 }
 
-func tokenRevokeHandler(service tokens.AdminService) http.Handler {
+func tokenPauseHandler(service tokens.AdminService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		revoker, ok := service.(tokens.AdminRevoker)
-		if !ok || revoker == nil {
+		if service == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})
 			return
 		}
-		if err := revoker.Revoke(r.Context(), r.PathValue("tokenID")); err != nil {
+		item, err := service.Pause(r.Context(), r.PathValue("tokenID"))
+		if err != nil {
 			writeTokenAdminError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+		writeJSON(w, http.StatusOK, item)
 	})
 }
 
@@ -3761,37 +3759,13 @@ func writeTokenConsoleError(w http.ResponseWriter, err error) {
 	}
 }
 
-type tokenGroupUpdatePayload struct {
-	GroupID string `json:"group_id"`
-}
-
-func tokenGroupUpdateHandler(service tokens.AdminService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if service == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})
-			return
-		}
-		var payload tokenGroupUpdatePayload
-		if err := decodeJSON(w, r, &payload); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_REQUEST"})
-			return
-		}
-		item, err := service.SetGroup(r.Context(), r.PathValue("tokenID"), payload.GroupID)
-		if err != nil {
-			writeTokenAdminError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	})
-}
-
 func writeTokenAdminError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, tokens.ErrAdminInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_REQUEST"})
 	case errors.Is(err, tokens.ErrNetworkAllowlistInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_TOKEN_NETWORK_ALLOWLIST"})
-	case errors.Is(err, tokens.ErrTokenNotFound), errors.Is(err, tokens.ErrGroupNotFound):
+	case errors.Is(err, tokens.ErrTokenNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TOKEN_RESOURCE_NOT_FOUND"})
 	case errors.Is(err, tokens.ErrAdminUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "TOKENS_UNAVAILABLE"})

@@ -748,7 +748,6 @@ export default function App() {
   const [issuedToken, setIssuedToken] = useState<IssuedTokenResponse | null>(null);
   const [tokenEditingID, setTokenEditingID] = useState("");
   const [consoleTokenSecrets, setConsoleTokenSecrets] = useState<Record<string, string>>({});
-  const [tokenRevokeConfirm, setTokenRevokeConfirm] = useState("");
   const [consoleTokenGroups, setConsoleTokenGroups] = useState<TokenGroupOption[]>([]);
   const [consoleTokenGroupsBusy, setConsoleTokenGroupsBusy] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -2432,30 +2431,6 @@ export default function App() {
     }
   }
 
-  async function updateTokenGroup(token: TokenSummary, groupID: string) {
-    if (!groupID || token.group_id === groupID) return;
-    setTokenActionBusy(token.id);
-    setTokensMessage({ kind: "pending", text: t("tokensLoading") });
-    try {
-      const response = await fetchAdminSensitive(`/admin/v1/tokens/${encodeURIComponent(token.id)}/group`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ group_id: groupID }),
-      });
-      const result = (await response.json().catch(() => ({}))) as TokenSummary & { error?: string };
-      if (!response.ok) {
-        throw new Error(result.error || "token group update failed");
-      }
-      setTokens((current) => current.map((item) => (item.id === token.id ? result : item)));
-      setTokensMessage({ kind: "success", text: t("tokensUpdateSuccess") });
-    } catch {
-      setTokensMessage({ kind: "error", text: t("tokensUnavailable") });
-    } finally {
-      setTokenActionBusy("");
-    }
-  }
-
   async function refreshConsoleTokens(showPending = false) {
     if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("token:read")) return;
     setTokensBusy(true);
@@ -3547,24 +3522,18 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
     return Boolean(consoleTokenSecrets[token.id]);
   }
 
-  async function revokeAdminToken(token: TokenSummary) {
+  async function pauseAdminToken(token: TokenSummary) {
     if (token.status !== "active") return;
-    if (tokenRevokeConfirm !== token.id) {
-      setTokenRevokeConfirm(token.id);
-      setTokensMessage({ kind: "pending", text: t("tokensRevokeConfirm") });
-      return;
-    }
     setTokenActionBusy(token.id);
     try {
-      const response = await fetchAdminSensitive(`/admin/v1/tokens/${encodeURIComponent(token.id)}`, {
-        method: "DELETE",
+      const response = await fetchAdminSensitive(`/admin/v1/tokens/${encodeURIComponent(token.id)}/pause`, {
+        method: "POST",
         headers: { Accept: "application/json" },
         credentials: "same-origin",
       });
-      if (!response.ok) throw new Error("token revoke failed");
-      setTokenRevokeConfirm("");
+      if (!response.ok) throw new Error("token pause failed");
       await refreshTokens(false);
-      setTokensMessage({ kind: "success", text: t("tokensRevokeSuccess") });
+      setTokensMessage({ kind: "success", text: t("tokensPauseSuccess") });
     } catch {
       setTokensMessage({ kind: "error", text: t("tokensUnavailable") });
     } finally {
@@ -4098,7 +4067,6 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
     setIssuedToken(null);
     setTokenEditingID("");
     setConsoleTokenSecrets({});
-    setTokenRevokeConfirm("");
     setConsoleTokenGroups([]);
     setConsoleTokenGroupsBusy(false);
     setProjects([]);
@@ -4495,9 +4463,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             tokensBusy={tokensBusy}
             tokensMessage={tokensMessage}
             refreshTokens={refreshTokens}
-            updateTokenGroup={updateTokenGroup}
-            revokeToken={revokeAdminToken}
-            tokenRevokeConfirm={tokenRevokeConfirm}
+            pauseToken={pauseAdminToken}
             tokenActionBusy={tokenActionBusy}
             users={users}
             usersBusy={usersBusy}

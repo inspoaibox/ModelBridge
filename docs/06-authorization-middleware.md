@@ -79,6 +79,8 @@ audience 是否匹配
 | 接口 | 身份 | 权限 | 额外检查 |
 |---|---|---|---|
 | `GET /admin/v1/channels` | 管理 Session | `channel:read` | 只返回脱敏密钥预览 |
+| `GET /admin/v1/tokens` | 管理 Session | `token:read` | 仅查看客户令牌脱敏信息 |
+| `POST /admin/v1/tokens/{tokenID}/pause` | 管理 Session | `token:pause` | 仅暂停客户的 active Token；不能修改或撤销 |
 | `POST /admin/v1/channels/{channelID}/sync-account` | 管理 Session | `channel:read` | 立即查询余额/倍率；后台任务也每 1 分钟查询一次；失败只更新旁路状态，不需要 `channel:update` 或 Step-up |
 | `POST /admin/v1/channels/discover-models` | 管理 Session | `channel:update` | 临时使用提交的 Key 探测模型，不写入数据库 |
 | `POST /admin/v1/channels` | 管理 Session | `channel:update` | 不能提交明文密钥到日志 |

@@ -120,9 +120,7 @@ interface AdminConsoleProps {
   tokensBusy: boolean;
   tokensMessage: LoginMessage;
   refreshTokens: (showPending?: boolean) => Promise<void>;
-  updateTokenGroup: (token: TokenSummary, groupID: string) => Promise<void>;
-  revokeToken: (token: TokenSummary) => Promise<void>;
-  tokenRevokeConfirm: string;
+  pauseToken: (token: TokenSummary) => Promise<void>;
   tokenActionBusy: string;
   users: UserSummary[];
   usersBusy: boolean;
@@ -318,9 +316,7 @@ export function AdminConsole({
   tokensBusy,
   tokensMessage,
   refreshTokens,
-  updateTokenGroup,
-  revokeToken,
-  tokenRevokeConfirm,
+  pauseToken,
   tokenActionBusy,
   users,
   usersBusy,
@@ -1229,18 +1225,13 @@ export function AdminConsole({
                             <div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">{token.project_id}</div>
                           </TableCell>
                           <TableCell className="min-w-[170px]">
-                            <select value={token.group_id || ""} onChange={(event) => void updateTokenGroup(token, event.target.value)} disabled={!canSeeAdminPermission("token:update") || token.status !== "active" || Boolean(tokenActionBusy)} className="h-9 min-w-[150px] rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 ring-offset-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:ring-offset-slate-900">
-                              {!token.group_id ? <option value="">{t("tokensNoGroup")}</option> : null}
-                              {groups.map((group) => <option key={group.id} value={group.id} disabled={group.status !== "active" && group.id !== token.group_id}>{group.name} ({group.code}){group.status !== "active" ? ` - ${t("groupsStatusDisabled")}` : ""}</option>)}
-                            </select>
+                            <div className="font-medium text-slate-800 dark:text-slate-200">{token.group_code || t("tokensNoGroup")}</div>
+                            <div className="mt-1 text-[10px] text-slate-500">{t("tokensAdminReadOnly")}</div>
                           </TableCell>
-                          <TableCell><Badge variant={token.status === "active" ? "success" : token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell>
+                          <TableCell><Badge variant={token.status === "active" ? "success" : token.status === "disabled" || token.status === "expired" ? "warning" : "muted"}>{token.status === "active" ? t("tokensStatusActive") : token.status === "disabled" ? t("tokensStatusPaused") : token.status === "expired" ? t("tokensStatusExpired") : t("tokensStatusRevoked")}</Badge></TableCell>
                           <TableCell className="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{formatTime(token.created_at)}</TableCell>
                           <TableCell className="text-right">
-                            <Button variant={tokenRevokeConfirm === token.id ? "destructive" : "ghost"} size="sm" onClick={() => void revokeToken(token)} disabled={!canSeeAdminPermission("token:revoke") || token.status !== "active" || Boolean(tokenActionBusy)} className="gap-1.5 text-xs">
-                              <Trash2 className="h-3.5 w-3.5" />
-                              {tokenRevokeConfirm === token.id ? t("tokensRevokeConfirm") : t("tokensRevoke")}
-                            </Button>
+                            {token.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void pauseToken(token)} disabled={!canSeeAdminPermission("token:pause") || Boolean(tokenActionBusy)} className="gap-1.5 text-xs text-amber-700 hover:text-amber-800 dark:text-amber-300"><Pause className="h-3.5 w-3.5" />{t("tokensPause")}</Button> : <span className="text-xs text-slate-400">{t("tokensAdminNoAction")}</span>}
                           </TableCell>
                         </TableRow>
                       ))

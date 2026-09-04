@@ -75,6 +75,7 @@ tenant:update
 member:invite
 member:remove
 token:create
+token:pause
 token:revoke
 token:read_secret
 project:update
@@ -99,6 +100,8 @@ user:freeze
 audit:read
 audit:export
 ```
+
+平台管理员的 Token 权限仅用于查看和暂停（`token:read`、`token:pause`）；`token:update` 与 `token:revoke` 只用于租户用户管理自己创建的令牌。
 
 默认拒绝。未配置的权限不能因为前端存在按钮、接口参数或数据库默认值而自动放行。
 

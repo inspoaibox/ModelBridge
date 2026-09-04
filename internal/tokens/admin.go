@@ -45,11 +45,7 @@ type Summary struct {
 
 type AdminService interface {
 	List(context.Context) ([]Summary, error)
-	SetGroup(context.Context, string, string) (Summary, error)
-}
-
-type AdminRevoker interface {
-	Revoke(context.Context, string) error
+	Pause(context.Context, string) (Summary, error)
 }
 
 type SQLAdminService struct {
@@ -70,36 +66,29 @@ func (s *SQLAdminService) List(ctx context.Context) ([]Summary, error) {
 	return listSummaries(ctx, s.db, "WHERE t.deleted_at IS NULL")
 }
 
-func (s *SQLAdminService) SetGroup(ctx context.Context, tokenID, groupID string) (Summary, error) {
+func (s *SQLAdminService) Pause(ctx context.Context, tokenID string) (Summary, error) {
 	if s == nil || s.db == nil {
 		return Summary{}, ErrAdminUnavailable
 	}
 	tokenID = strings.TrimSpace(tokenID)
-	groupID = strings.TrimSpace(groupID)
-	if !ids.Valid(tokenID) || !ids.Valid(groupID) {
+	if !ids.Valid(tokenID) {
 		return Summary{}, ErrAdminInvalid
 	}
-
-	var exists bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE id = $1::uuid)`, tokenID).Scan(&exists); err != nil {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE api_tokens
+		SET status = 'disabled'
+		WHERE id = $1::uuid
+		  AND deleted_at IS NULL
+		  AND status = 'active'
+		  AND (expires_at IS NULL OR expires_at > now())
+	`, tokenID)
+	if err != nil {
 		return Summary{}, err
 	}
-	if !exists {
+	if affected, err := result.RowsAffected(); err != nil {
+		return Summary{}, err
+	} else if affected == 0 {
 		return Summary{}, ErrTokenNotFound
-	}
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM routing_groups
-			WHERE id = $1::uuid AND status = 'active' AND deleted_at IS NULL
-		)
-	`, groupID).Scan(&exists); err != nil {
-		return Summary{}, err
-	}
-	if !exists {
-		return Summary{}, ErrGroupNotFound
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE api_tokens SET group_id = $2::uuid WHERE id = $1::uuid`, tokenID, groupID); err != nil {
-		return Summary{}, err
 	}
 	items, err := s.List(ctx)
 	if err != nil {
@@ -111,28 +100,4 @@ func (s *SQLAdminService) SetGroup(ctx context.Context, tokenID, groupID string)
 		}
 	}
 	return Summary{}, ErrTokenNotFound
-}
-
-func (s *SQLAdminService) Revoke(ctx context.Context, tokenID string) error {
-	if s == nil || s.db == nil {
-		return ErrAdminUnavailable
-	}
-	tokenID = strings.TrimSpace(tokenID)
-	if !ids.Valid(tokenID) {
-		return ErrAdminInvalid
-	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE api_tokens
-		SET status = 'revoked', revoked_at = COALESCE(revoked_at, now())
-		WHERE id = $1::uuid AND status <> 'revoked'
-	`, tokenID)
-	if err != nil {
-		return err
-	}
-	if affected, err := result.RowsAffected(); err != nil {
-		return err
-	} else if affected == 0 {
-		return ErrTokenNotFound
-	}
-	return nil
 }

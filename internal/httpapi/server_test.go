@@ -1219,7 +1219,7 @@ func TestAdminGroupRoutesEnforceGroupPermissions(t *testing.T) {
 	}
 }
 
-func TestAdminTokenGroupRoutesEnforceTokenPermissions(t *testing.T) {
+func TestAdminTokenRoutesAreReadOnlyExceptPause(t *testing.T) {
 	service := &fakeTokenAdminService{}
 	handler := NewWithRelayAndGroupsAndTokens(auth.NewMiddleware(testResolver{
 		"token-read": {
@@ -1230,12 +1230,12 @@ func TestAdminTokenGroupRoutesEnforceTokenPermissions(t *testing.T) {
 				"token:read": {},
 			},
 		},
-		"token-update": {
+		"token-pause": {
 			ID:       "user-2",
 			Type:     auth.PrincipalPlatformUser,
 			Audience: auth.AudienceAdmin,
 			Permissions: map[string]struct{}{
-				"token:update": {},
+				"token:pause": {},
 			},
 		},
 		"token-create": {
@@ -1257,20 +1257,37 @@ func TestAdminTokenGroupRoutesEnforceTokenPermissions(t *testing.T) {
 	}
 
 	updateReq := httptest.NewRequest(http.MethodPut, "/admin/v1/tokens/token-1/group", strings.NewReader(`{"group_id":"group-1"}`))
-	updateReq.Header.Set("Authorization", "Bearer token-update")
+	updateReq.Header.Set("Authorization", "Bearer token-pause")
 	updateReq.Header.Set("X-MFA-Code", "123456")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
-	if updateRec.Code != http.StatusOK || service.updatedBy != "group-1" {
-		t.Fatalf("expected token group update 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	if updateRec.Code != http.StatusNotFound {
+		t.Fatalf("expected token group update route to be removed, got %d: %s", updateRec.Code, updateRec.Body.String())
 	}
 
-	deniedReq := httptest.NewRequest(http.MethodPut, "/admin/v1/tokens/token-1/group", strings.NewReader(`{"group_id":"group-1"}`))
+	pauseReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tokens/token-1/pause", nil)
+	pauseReq.Header.Set("Authorization", "Bearer token-pause")
+	pauseReq.Header.Set("X-MFA-Code", "123456")
+	pauseRec := httptest.NewRecorder()
+	handler.ServeHTTP(pauseRec, pauseReq)
+	if pauseRec.Code != http.StatusOK || service.pausedID != "token-1" {
+		t.Fatalf("expected token pause 200, got %d: %s", pauseRec.Code, pauseRec.Body.String())
+	}
+
+	deniedReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tokens/token-1/pause", nil)
 	deniedReq.Header.Set("Authorization", "Bearer token-read")
 	deniedRec := httptest.NewRecorder()
 	handler.ServeHTTP(deniedRec, deniedReq)
 	if deniedRec.Code != http.StatusForbidden {
-		t.Fatalf("expected token group write 403, got %d", deniedRec.Code)
+		t.Fatalf("expected token pause 403, got %d", deniedRec.Code)
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodDelete, "/admin/v1/tokens/token-1", nil)
+	revokeReq.Header.Set("Authorization", "Bearer token-pause")
+	revokeRec := httptest.NewRecorder()
+	handler.ServeHTTP(revokeRec, revokeReq)
+	if revokeRec.Code != http.StatusNotFound {
+		t.Fatalf("expected token revoke route to be removed, got %d: %s", revokeRec.Code, revokeRec.Body.String())
 	}
 
 	createReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tokens", strings.NewReader(`{"tenant_id":"tenant-1","project_id":"project-1","name":"admin-token","group_id":"group-1"}`))
@@ -2591,6 +2608,7 @@ func (s *fakeMFASettingsService) Disable(context.Context, string, string) error 
 
 type fakeTokenAdminService struct {
 	updatedBy    string
+	pausedID     string
 	createdGroup string
 }
 
@@ -2682,9 +2700,9 @@ func (s *fakeTokenAdminService) List(context.Context) ([]tokens.Summary, error) 
 	return []tokens.Summary{}, nil
 }
 
-func (s *fakeTokenAdminService) SetGroup(_ context.Context, _ string, groupID string) (tokens.Summary, error) {
-	s.updatedBy = groupID
-	return tokens.Summary{ID: "token-1", GroupID: groupID, GroupCode: "standard", Status: "active"}, nil
+func (s *fakeTokenAdminService) Pause(_ context.Context, tokenID string) (tokens.Summary, error) {
+	s.pausedID = tokenID
+	return tokens.Summary{ID: tokenID, GroupCode: "standard", Status: "disabled"}, nil
 }
 
 func (s *fakeTokenAdminService) Create(_ context.Context, request tokens.CreateRequest) (tokens.IssuedToken, error) {
