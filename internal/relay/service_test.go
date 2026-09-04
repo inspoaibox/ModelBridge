@@ -457,6 +457,9 @@ func TestOpenAIProviderListsModelsWithoutExposingCredential(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer sk-test" {
 			t.Fatalf("unexpected authorization header: %q", r.Header.Get("Authorization"))
 		}
+		if got := r.Header.Get("User-Agent"); got != modelDiscoveryAgent {
+			t.Fatalf("unexpected user-agent: %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gpt-z"},{"id":"gpt-a"},{"id":"gpt-a"}]}`))
 	}))

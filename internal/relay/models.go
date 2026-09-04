@@ -11,7 +11,10 @@ import (
 	openaioption "github.com/openai/openai-go/v2/option"
 )
 
-const maxDiscoveredModels = 500
+const (
+	maxDiscoveredModels = 500
+	modelDiscoveryAgent = "ai-token-relay"
+)
 
 func (OpenAIProvider) ListModels(ctx context.Context, baseURL, apiKey string) ([]DiscoveredModel, error) {
 	return listOpenAICompatibleModels(ctx, baseURL, apiKey, ProviderOpenAI)
@@ -33,6 +36,9 @@ func listOpenAICompatibleModels(ctx context.Context, baseURL, apiKey, provider s
 	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
 		opts = append(opts, openaioption.WithBaseURL(baseURL))
 	}
+	// Some upstream WAF rules block the OpenAI SDK's generated User-Agent.
+	// Keep the discovery request identifiable without exposing the SDK brand.
+	opts = append(opts, openaioption.WithHeader("User-Agent", modelDiscoveryAgent))
 
 	client := openai.NewClient(opts...)
 	page, err := client.Models.List(ctx)
