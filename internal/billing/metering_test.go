@@ -1,9 +1,24 @@
 package billing
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestApplyMeteringPriceReplacesTokenComponents(t *testing.T) {
+	price := Price{InputPricePerUnit: "1", OutputPricePerUnit: "2", MinimumCharge: "3", Components: []PriceComponent{{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "1"}}}
+	got, err := applyMeteringPrice(price, MeteringVideoSeconds, "0.15")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Components) != 1 || got.Components[0].ComponentCode != "output_seconds" || got.Components[0].PricePerUnit != "0.15" || got.InputPricePerUnit != "0" || got.MinimumCharge != "0" {
+		t.Fatalf("unexpected non-token price: %#v", got)
+	}
+	if _, err := applyMeteringPrice(price, MeteringImageCount, "0"); !errors.Is(err, ErrPriceNotConfigured) {
+		t.Fatalf("zero media price must be rejected, got %v", err)
+	}
+}
 
 func TestMeteredChargeUsesMediaPriceAndDoesNotDoubleChargeText(t *testing.T) {
 	charge, err := calculateMeteredCharge([]PriceComponent{

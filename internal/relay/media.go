@@ -916,7 +916,7 @@ func (s *Service) startMediaBilling(ctx context.Context, principal *auth.Princip
 	if idempotencyKey == "" {
 		idempotencyKey = metadata.IdempotencyKey
 	}
-	request := billing.Request{RequestID: requestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, idempotencyKey), TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID, GroupMultiplier: policy.Multiplier, MeteringMode: policy.MeteringMode, UpstreamCostDiscount: channel.UpstreamCostDiscount, EstimatedMetrics: metrics, Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType, BillingType: policy.BillingType}
+	request := billing.Request{RequestID: requestID, IdempotencyKey: scopedBillingIdempotencyKey(principal, metadata, idempotencyKey), TenantID: principal.TenantID, ProjectID: principalProjectID(principal), TokenID: principal.TokenID, Model: model, Provider: canonicalProvider(channel.Provider), ChannelID: channel.ID, GroupID: policy.ID, GroupMultiplier: policy.Multiplier, MeteringMode: policy.MeteringMode, MeteringPrice: policy.MeteringPrice, UpstreamCostDiscount: channel.UpstreamCostDiscount, EstimatedMetrics: metrics, Endpoint: metadata.Endpoint, ClientIP: metadata.ClientIP, RequestType: requestType, BillingType: policy.BillingType}
 	if enabled {
 		value, err := s.billing.Reserve(ctx, request)
 		return value, "", err

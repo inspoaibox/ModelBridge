@@ -62,7 +62,7 @@ func (r *SQLChannelRouter) ResolveGroupPolicy(ctx context.Context, groupID strin
 	}
 	var policy GroupPolicy
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id::text, status, multiplier::text, rpm_limit, billing_type, metering_mode
+		SELECT id::text, status, multiplier::text, rpm_limit, billing_type, metering_mode, metering_price::text
 		FROM routing_groups
 		WHERE id = $1::uuid AND deleted_at IS NULL
 	`, groupID).Scan(
@@ -72,6 +72,7 @@ func (r *SQLChannelRouter) ResolveGroupPolicy(ctx context.Context, groupID strin
 		&policy.RPMLimit,
 		&policy.BillingType,
 		&policy.MeteringMode,
+		&policy.MeteringPrice,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GroupPolicy{}, ErrGroupUnavailable

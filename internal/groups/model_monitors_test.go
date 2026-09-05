@@ -4,6 +4,23 @@ import "testing"
 
 const testMonitorGroupID = "11111111-1111-4111-8111-111111111111"
 
+func TestGroupMutationRequiresNonTokenMeterPrice(t *testing.T) {
+	base := Mutation{Code: "media", Name: "Media", MeteringMode: MeteringImageCount}
+	if _, err := base.validate(); err == nil {
+		t.Fatal("image metering without a unit price must be rejected")
+	}
+	base.MeteringPrice = "0.0250"
+	got, err := base.validate()
+	if err != nil || got.MeteringPrice != "0.025" {
+		t.Fatalf("unexpected normalized media price: %#v, %v", got, err)
+	}
+	token := Mutation{Code: "text", Name: "Text", MeteringMode: MeteringToken, MeteringPrice: "99"}
+	got, err = token.validate()
+	if err != nil || got.MeteringPrice != "0" {
+		t.Fatalf("token mode must ignore non-token price: %#v, %v", got, err)
+	}
+}
+
 func TestModelMonitorMutationValidation(t *testing.T) {
 	tests := []struct {
 		name    string

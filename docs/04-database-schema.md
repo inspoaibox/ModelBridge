@@ -306,7 +306,7 @@ cached_input_tokens
 reasoning_tokens
 usage_metrics_json        JSON 中保存音频/图片/视频 Token、图片数量、像素、字符、秒数、请求、查询、会话、页数、搜索、Grounding、OCR、存储等完整计量
 charge_breakdown_json     逐组件数量、单价和金额
-price_snapshot_json       本次请求使用的价格组件、版本和分组倍率快照
+price_snapshot_json       本次请求使用的价格组件、版本、分组倍率和非 Token 计量单价快照
 upstream_price_snapshot_json
                          上游成本估算使用的官方参考价或客户价格回退快照
 upstream_cost_discount    请求实际使用渠道的上游成本折扣系数快照

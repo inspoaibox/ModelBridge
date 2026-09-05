@@ -109,6 +109,11 @@ export function GroupModal({ open, form, setForm, channels, language, busy, mess
                 </select>
                 <p className="text-xs text-slate-500 dark:text-slate-400">{t("groupsMeteringHint")}</p>
               </div>
+              {form.metering_mode !== "token" ? <div className="space-y-2">
+                <Label htmlFor="group-metering-price">{t("groupsMeteringPrice")}</Label>
+                <Input id="group-metering-price" inputMode="decimal" min="0.000000000001" value={form.metering_price} onChange={(event) => setForm((current) => ({ ...current, metering_price: event.target.value }))} disabled={busy} placeholder="0.01" required />
+                <p className="text-xs text-slate-500 dark:text-slate-400">{t(form.metering_mode === "image_count" ? "groupsMeteringPriceImageHint" : form.metering_mode === "video_seconds" ? "groupsMeteringPriceSecondsHint" : "groupsMeteringPriceRequestHint")}</p>
+              </div> : null}
             </div>
 
             <section className="space-y-3" aria-labelledby="group-channels-title">

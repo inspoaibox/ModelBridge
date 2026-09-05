@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math/big"
 	"strings"
 	"time"
 
@@ -45,31 +46,33 @@ type ChannelSummary struct {
 }
 
 type Summary struct {
-	ID           string           `json:"id"`
-	Code         string           `json:"code"`
-	Name         string           `json:"name"`
-	Description  string           `json:"description"`
-	Status       string           `json:"status"`
-	Multiplier   string           `json:"multiplier"`
-	RPMLimit     int              `json:"rpm_limit"`
-	BillingType  string           `json:"billing_type"`
-	MeteringMode string           `json:"metering_mode"`
-	Priority     int              `json:"priority"`
-	Channels     []ChannelSummary `json:"channels"`
-	Models       []string         `json:"models"`
-	CreatedAt    time.Time        `json:"created_at"`
-	UpdatedAt    time.Time        `json:"updated_at"`
+	ID            string           `json:"id"`
+	Code          string           `json:"code"`
+	Name          string           `json:"name"`
+	Description   string           `json:"description"`
+	Status        string           `json:"status"`
+	Multiplier    string           `json:"multiplier"`
+	RPMLimit      int              `json:"rpm_limit"`
+	BillingType   string           `json:"billing_type"`
+	MeteringMode  string           `json:"metering_mode"`
+	MeteringPrice string           `json:"metering_price"`
+	Priority      int              `json:"priority"`
+	Channels      []ChannelSummary `json:"channels"`
+	Models        []string         `json:"models"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
 }
 
 type TokenGroupSummary struct {
-	ID           string   `json:"id"`
-	Code         string   `json:"code"`
-	Name         string   `json:"name"`
-	Multiplier   string   `json:"multiplier"`
-	BillingType  string   `json:"billing_type"`
-	MeteringMode string   `json:"metering_mode"`
-	Status       string   `json:"status"`
-	Models       []string `json:"models"`
+	ID            string   `json:"id"`
+	Code          string   `json:"code"`
+	Name          string   `json:"name"`
+	Multiplier    string   `json:"multiplier"`
+	BillingType   string   `json:"billing_type"`
+	MeteringMode  string   `json:"metering_mode"`
+	MeteringPrice string   `json:"metering_price"`
+	Status        string   `json:"status"`
+	Models        []string `json:"models"`
 }
 
 type TokenGroupLister interface {
@@ -122,16 +125,17 @@ type ModelMonitorService interface {
 }
 
 type Mutation struct {
-	Code         string   `json:"code"`
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	Status       string   `json:"status"`
-	Multiplier   string   `json:"multiplier"`
-	RPMLimit     int      `json:"rpm_limit"`
-	BillingType  string   `json:"billing_type"`
-	MeteringMode string   `json:"metering_mode"`
-	Priority     int      `json:"priority"`
-	ChannelIDs   []string `json:"channel_ids"`
+	Code          string   `json:"code"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Status        string   `json:"status"`
+	Multiplier    string   `json:"multiplier"`
+	RPMLimit      int      `json:"rpm_limit"`
+	BillingType   string   `json:"billing_type"`
+	MeteringMode  string   `json:"metering_mode"`
+	MeteringPrice string   `json:"metering_price"`
+	Priority      int      `json:"priority"`
+	ChannelIDs    []string `json:"channel_ids"`
 }
 
 type Service interface {
@@ -160,6 +164,7 @@ func (m Mutation) validate() (Mutation, error) {
 	m.Multiplier = strings.TrimSpace(m.Multiplier)
 	m.BillingType = strings.ToLower(strings.TrimSpace(m.BillingType))
 	m.MeteringMode = strings.ToLower(strings.TrimSpace(m.MeteringMode))
+	m.MeteringPrice = strings.TrimSpace(m.MeteringPrice)
 	if m.Status == "" {
 		m.Status = StatusActive
 	}
@@ -176,6 +181,13 @@ func (m Mutation) validate() (Mutation, error) {
 		return Mutation{}, ErrInvalidRequest
 	}
 	if !validStatus(m.Status) || !validBillingType(m.BillingType) || !validMeteringMode(m.MeteringMode) {
+		return Mutation{}, ErrInvalidRequest
+	}
+	if m.MeteringMode == MeteringToken {
+		m.MeteringPrice = "0"
+	} else if normalized, ok := normalizeMeteringPrice(m.MeteringPrice); ok {
+		m.MeteringPrice = normalized
+	} else {
 		return Mutation{}, ErrInvalidRequest
 	}
 	if normalized, ok := normalizeMultiplier(m.Multiplier); ok {
@@ -217,6 +229,27 @@ func validMeteringMode(value string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeMeteringPrice(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && char != '.' {
+			return "", false
+		}
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || (len(parts) == 2 && len(parts[1]) > 12) {
+		return "", false
+	}
+	rational, ok := new(big.Rat).SetString(value)
+	if !ok || rational.Sign() <= 0 || rational.Cmp(new(big.Rat).SetInt64(1000000000)) > 0 {
+		return "", false
+	}
+	return strings.TrimRight(strings.TrimRight(rational.FloatString(12), "0"), "."), true
 }
 
 func cleanIDs(values []string) []string {

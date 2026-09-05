@@ -17,7 +17,7 @@ func (s *SQLService) List(ctx context.Context) ([]Summary, error) {
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rg.id::text, rg.code, rg.name, rg.description, rg.status,
-		       rg.multiplier::text, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.priority,
+		       rg.multiplier::text, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.metering_price::text, rg.priority,
 		       rg.created_at, rg.updated_at,
 		       COALESCE(
 		           jsonb_agg(
@@ -45,7 +45,7 @@ func (s *SQLService) List(ctx context.Context) ([]Summary, error) {
 		LEFT JOIN channels c ON c.id = rgc.channel_id AND c.deleted_at IS NULL
 		WHERE rg.deleted_at IS NULL
 		GROUP BY rg.id, rg.code, rg.name, rg.description, rg.status,
-		         rg.multiplier, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.priority,
+		         rg.multiplier, rg.rpm_limit, rg.billing_type, rg.metering_mode, rg.metering_price, rg.priority,
 		         rg.created_at, rg.updated_at
 		ORDER BY rg.priority DESC, rg.code ASC
 	`)
@@ -71,6 +71,7 @@ func (s *SQLService) List(ctx context.Context) ([]Summary, error) {
 			&group.RPMLimit,
 			&group.BillingType,
 			&group.MeteringMode,
+			&group.MeteringPrice,
 			&group.Priority,
 			&group.CreatedAt,
 			&group.UpdatedAt,
@@ -98,7 +99,7 @@ func (s *SQLService) ListTokenGroups(ctx context.Context) ([]TokenGroupSummary, 
 		return nil, ErrUnavailable
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT rg.id::text, rg.code, rg.name, rg.multiplier::text, rg.billing_type, rg.metering_mode, rg.status,
+		SELECT rg.id::text, rg.code, rg.name, rg.multiplier::text, rg.billing_type, rg.metering_mode, rg.metering_price::text, rg.status,
 		       COALESCE((
 		           SELECT jsonb_agg(DISTINCT m.model_name ORDER BY m.model_name)
 		           FROM routing_group_channels rgc
@@ -123,7 +124,7 @@ func (s *SQLService) ListTokenGroups(ctx context.Context) ([]TokenGroupSummary, 
 			group     TokenGroupSummary
 			modelsRaw []byte
 		)
-		if err := rows.Scan(&group.ID, &group.Code, &group.Name, &group.Multiplier, &group.BillingType, &group.MeteringMode, &group.Status, &modelsRaw); err != nil {
+		if err := rows.Scan(&group.ID, &group.Code, &group.Name, &group.Multiplier, &group.BillingType, &group.MeteringMode, &group.MeteringPrice, &group.Status, &modelsRaw); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(modelsRaw, &group.Models); err != nil {
@@ -157,11 +158,11 @@ func (s *SQLService) Create(ctx context.Context, actorID string, request Mutatio
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO routing_groups (
 			id, code, name, description, status, multiplier, rpm_limit,
-			billing_type, metering_mode, priority, created_by, updated_by
+			billing_type, metering_mode, metering_price, priority, created_by, updated_by
 		) VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, $8, $9,
-		          $10, NULLIF($11, '')::uuid, NULLIF($11, '')::uuid)
+		          $10::numeric, $11, NULLIF($12, '')::uuid, NULLIF($12, '')::uuid)
 	`, groupID, request.Code, request.Name, request.Description, request.Status,
-		request.Multiplier, request.RPMLimit, request.BillingType, request.MeteringMode, request.Priority, actorID); err != nil {
+		request.Multiplier, request.RPMLimit, request.BillingType, request.MeteringMode, request.MeteringPrice, request.Priority, actorID); err != nil {
 		return Summary{}, err
 	}
 	if err := replaceChannels(ctx, tx, groupID, request.ChannelIDs); err != nil {
@@ -209,14 +210,15 @@ func (s *SQLService) Update(ctx context.Context, actorID, groupID string, reques
 		    status = $5,
 		    multiplier = $6::numeric,
 		    rpm_limit = $7,
-		    billing_type = $8,
-		    metering_mode = $9,
-		    priority = $10,
-		    updated_by = NULLIF($11, '')::uuid,
+			billing_type = $8,
+			metering_mode = $9,
+		    metering_price = $10::numeric,
+		    priority = $11,
+		    updated_by = NULLIF($12, '')::uuid,
 		    updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
 	`, groupID, request.Code, request.Name, request.Description, request.Status,
-		request.Multiplier, request.RPMLimit, request.BillingType, request.MeteringMode, request.Priority, actorID); err != nil {
+		request.Multiplier, request.RPMLimit, request.BillingType, request.MeteringMode, request.MeteringPrice, request.Priority, actorID); err != nil {
 		return Summary{}, err
 	}
 	if err := replaceChannels(ctx, tx, groupID, request.ChannelIDs); err != nil {

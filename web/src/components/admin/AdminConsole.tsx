@@ -1100,6 +1100,7 @@ export function AdminConsole({
                       <TableHead>{t("groupsRPM")}</TableHead>
                       <TableHead>{t("groupsBillingType")}</TableHead>
                       <TableHead>{t("groupsMeteringMode")}</TableHead>
+                      <TableHead>{t("groupsMeteringPriceShort")}</TableHead>
                       <TableHead>{t("groupsStatus")}</TableHead>
                       <TableHead className="text-right">{t("groupsActions")}</TableHead>
                     </TableRow>
@@ -1107,14 +1108,14 @@ export function AdminConsole({
                   <TableBody>
                     {groupsBusy && groups.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <TableCell colSpan={9} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                           <RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-indigo-600 dark:text-indigo-400" />
                           <span>{t("groupsLoading")}</span>
                         </TableCell>
                       </TableRow>
                     ) : groups.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">{t("groupsEmpty")}</TableCell>
+                        <TableCell colSpan={9} className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">{t("groupsEmpty")}</TableCell>
                       </TableRow>
                     ) : (
                       groups.map((group) => (
@@ -1145,6 +1146,7 @@ export function AdminConsole({
                           <TableCell><span className="font-mono text-xs text-slate-700 dark:text-slate-300">{group.rpm_limit === 0 ? t("groupsRPMUnlimited") : group.rpm_limit}</span></TableCell>
                           <TableCell><Badge variant={group.billing_type === "free" ? "muted" : "success"}>{group.billing_type === "free" ? t("groupsBillingFree") : t("groupsBillingPrepaid")}</Badge></TableCell>
                           <TableCell><Badge variant="cyan">{t(group.metering_mode === "image_count" ? "groupsMeteringImageCount" : group.metering_mode === "video_seconds" ? "groupsMeteringVideoSeconds" : group.metering_mode === "video_request" ? "groupsMeteringVideoRequest" : "groupsMeteringToken")}</Badge></TableCell>
+                          <TableCell className="whitespace-nowrap font-mono text-xs text-slate-700 dark:text-slate-300">{group.metering_mode === "token" ? "-" : `USD ${group.metering_price || "-"}`}</TableCell>
                           <TableCell><Badge variant={group.status === "active" ? "success" : "muted"}>{group.status === "active" ? t("groupsStatusActive") : t("groupsStatusDisabled")}</Badge></TableCell>
                           <TableCell className="whitespace-nowrap text-right">
                             <div className="inline-flex items-center gap-1">

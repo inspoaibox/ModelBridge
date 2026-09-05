@@ -350,6 +350,7 @@ export interface GroupSummary {
   rpm_limit: number;
   billing_type: "prepaid" | "free";
   metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
+  metering_price: string;
   priority: number;
   channels: GroupChannelSummary[];
   models: string[];
@@ -458,6 +459,7 @@ export interface GroupFormState {
   rpm_limit: number;
   billing_type: "prepaid" | "free";
   metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
+  metering_price: string;
   priority: number;
   channel_ids: string[];
 }
@@ -503,6 +505,7 @@ export interface TokenGroupOption {
   multiplier: string;
   billing_type: "prepaid" | "free";
   metering_mode: "token" | "image_count" | "video_seconds" | "video_request";
+  metering_price: string;
   status: "active" | "disabled";
   models: string[];
 }

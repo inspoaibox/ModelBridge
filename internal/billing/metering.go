@@ -121,6 +121,40 @@ func customerMeteringUsageWithEstimate(actual, estimate MeteredUsage, mode strin
 	return customer, nil
 }
 
+// applyMeteringPrice replaces the model's token components with the explicit
+// group price for image, video-second, or video-request billing. This keeps
+// non-token groups independent from the model token price matrix while still
+// preserving the model price identity for upstream cost estimation.
+func applyMeteringPrice(price Price, mode, unitPrice string) (Price, error) {
+	normalizedMode, err := normalizeMeteringMode(mode)
+	if err != nil {
+		return Price{}, err
+	}
+	if normalizedMode == MeteringToken {
+		return price, nil
+	}
+	unitPrice = strings.TrimSpace(unitPrice)
+	if !validNonNegativeDecimal(unitPrice) || isZeroAmount(unitPrice) {
+		return Price{}, ErrPriceNotConfigured
+	}
+	code, unit := "", ""
+	switch normalizedMode {
+	case MeteringImageCount:
+		code, unit = "output_images", "image"
+	case MeteringVideoSeconds:
+		code, unit = "output_seconds", "second"
+	case MeteringVideoRequest:
+		code, unit = "requests", "request"
+	}
+	price.InputPricePerUnit = "0"
+	price.OutputPricePerUnit = "0"
+	price.CachedInputPricePerUnit = "0"
+	price.ReasoningPricePerUnit = "0"
+	price.MinimumCharge = "0"
+	price.Components = []PriceComponent{{ComponentCode: code, Unit: unit, PricePerUnit: unitPrice}}
+	return price, nil
+}
+
 func firstPositiveMetric(usage MeteredUsage, codes ...string) string {
 	for _, code := range codes {
 		value := strings.TrimSpace(usage[code])

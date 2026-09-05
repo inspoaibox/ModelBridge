@@ -110,12 +110,13 @@ type GroupChannelCandidateRouter interface {
 }
 
 type GroupPolicy struct {
-	ID           string
-	Status       string
-	Multiplier   string
-	RPMLimit     int
-	BillingType  string
-	MeteringMode string
+	ID            string
+	Status        string
+	Multiplier    string
+	RPMLimit      int
+	BillingType   string
+	MeteringMode  string
+	MeteringPrice string
 }
 
 type GroupPolicyResolver interface {
@@ -773,6 +774,7 @@ func (s *Service) ChatCompletions(
 				GroupID:               groupPolicy.ID,
 				GroupMultiplier:       groupPolicy.Multiplier,
 				MeteringMode:          groupPolicy.MeteringMode,
+				MeteringPrice:         groupPolicy.MeteringPrice,
 				UpstreamCostDiscount:  channel.UpstreamCostDiscount,
 				EstimatedInputTokens:  estimateInputTokens(request),
 				EstimatedOutputTokens: estimateOutputTokens(request),
@@ -805,6 +807,7 @@ func (s *Service) ChatCompletions(
 					GroupID:              groupPolicy.ID,
 					GroupMultiplier:      groupPolicy.Multiplier,
 					MeteringMode:         groupPolicy.MeteringMode,
+					MeteringPrice:        groupPolicy.MeteringPrice,
 					UpstreamCostDiscount: channel.UpstreamCostDiscount,
 					Endpoint:             metadata.Endpoint,
 					ClientIP:             metadata.ClientIP,

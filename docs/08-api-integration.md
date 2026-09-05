@@ -368,7 +368,7 @@ Seedance 完成任务后的官方 `usage.completion_tokens` 被记录为 `output
 | `requests`、`queries`、`sessions`、`pages` | USD / 对应单位 |
 | `file_search_calls_1k`、`computer_use_input_tokens_1k` | USD / 1K calls 或 Token |
 
-每次结算会固化 `usage_metrics`、`charge_breakdown`、价格版本和分组倍率。Priority、Flex、Batch 和上下文阶梯价只在请求服务等级或用量区间匹配时生效。上游没有返回且无法安全估算的计量不会按免费处理，而是等待对账或拒绝结算。
+每次结算会固化 `usage_metrics`、`charge_breakdown`、价格版本和分组倍率。路由分组选择 `image_count`、`video_seconds` 或 `video_request` 时，分组必须配置 `metering_price`，客户侧只按 `output_images`、`output_seconds` 或单次 `requests=1` 计费，不使用 Token 组件；上游成本仍按上游真实 Usage 和上游价格组件估算。Priority、Flex、Batch 和上下文阶梯价只在请求服务等级或用量区间匹配时生效。上游没有返回且无法安全估算的计量不会按免费处理，而是等待对账或拒绝结算。
 
 ## 当前边界
 
