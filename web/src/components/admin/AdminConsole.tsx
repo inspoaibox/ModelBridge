@@ -1845,6 +1845,10 @@ function estimateComponentLabel(code: string, t: (key: TranslationKey) => string
       return t("billingMetricInput");
     case "cached_input_tokens":
       return t("billingMetricCachedInput");
+    case "cache_creation_tokens":
+      return t("modelsCacheWritesPrice");
+    case "cache_creation_1h_tokens":
+      return t("modelsCacheWritesPrice") + " (1h)";
     case "output_tokens":
       return t("billingMetricOutput");
     case "reasoning_tokens":
@@ -2027,7 +2031,7 @@ function PriceMatrixTable({
                     <TableRow key={price.model_id}>
                       <TableCell className="min-w-[230px]"><div className="font-semibold text-slate-900 dark:text-white">{price.model}</div></TableCell>
                       <TableCell><Badge variant={price.source === "manual" ? "default" : price.source === "litellm" ? "cyan" : "muted"}>{price.source === "manual" ? t("billingPriceSourceManual") : price.source === "litellm" ? t("billingPriceSourceLiteLLM") : t("billingPriceSourceMissing")}</Badge></TableCell>
-                      <TableCell><div className="flex max-w-[420px] flex-wrap gap-1.5">{(price.components || []).map((component) => <span key={component.component_code} className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={component.component_code + " · " + component.unit}>{component.component_code}: {componentDisplayPrice(component.price_per_unit, component.unit)} <span className="font-sans text-slate-400">{componentUnitLabel(component.unit)}</span></span>)}{(price.components || []).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}</div></TableCell>
+                      <TableCell><div className="flex max-w-[420px] flex-wrap gap-1.5">{(price.components || []).map((component) => <span key={component.component_code} className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300" title={component.component_code + " · " + component.unit}>{estimateComponentLabel(component.component_code, t)}: {componentDisplayPrice(component.price_per_unit, component.unit)} <span className="font-sans text-slate-400">{componentUnitLabel(component.unit)}</span></span>)}{(price.components || []).length === 0 ? <span className="text-xs text-slate-400">-</span> : null}</div></TableCell>
                       <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="customer_price_per_unit" tone="platform" t={t} /></TableCell>
                       <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="estimated_cost_per_unit" tone="cost" t={t} /></TableCell>
                       <TableCell><PriceEstimateCell estimates={price.cost_estimates} field="profit_per_unit" tone="profit" t={t} /></TableCell>

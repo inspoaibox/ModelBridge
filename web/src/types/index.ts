@@ -266,6 +266,7 @@ export interface PublicModelPricing {
   input_price_per_million_tokens: string;
   output_price_per_million_tokens: string;
   cached_input_price_per_million_tokens: string;
+  cache_creation_price_per_million_tokens: string;
   reasoning_price_per_million_tokens: string;
   source: string;
   source_url?: string;
@@ -283,6 +284,7 @@ export interface PublicPlatformModelPrice {
   input_price_per_million_tokens: string;
   output_price_per_million_tokens: string;
   cached_input_price_per_million_tokens: string;
+  cache_creation_price_per_million_tokens: string;
   reasoning_price_per_million_tokens: string;
   components?: PriceComponent[];
 }
@@ -587,6 +589,7 @@ export interface PriceMatrixSummary {
   input_price_per_million_tokens: string;
   output_price_per_million_tokens: string;
   cached_input_price_per_million_tokens: string;
+  cache_creation_price_per_million_tokens: string;
   reasoning_price_per_million_tokens: string;
   source: "manual" | "litellm" | "unconfigured";
   source_url?: string;
@@ -921,6 +924,7 @@ export interface ModelPriceFormState {
   input_price_per_million_tokens: string;
   output_price_per_million_tokens: string;
   cached_input_price_per_million_tokens: string;
+  cache_creation_price_per_million_tokens: string;
   reasoning_price_per_million_tokens: string;
   components: PriceComponentFormState[];
 }

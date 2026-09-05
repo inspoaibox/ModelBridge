@@ -66,6 +66,23 @@ func TestMissingLegacySubsetPriceFallsBackToParent(t *testing.T) {
 	}
 }
 
+func TestLegacyPriceIncludesCacheCreationPrice(t *testing.T) {
+	components := legacyPriceComponents(Price{
+		InputPricePerUnit:         "0.000001",
+		OutputPricePerUnit:        "0.000002",
+		CacheCreationPricePerUnit: "0.000003",
+	})
+	charge, err := calculateMeteredCharge(components, MeteredUsage{
+		"input_tokens": "100", "cache_creation_tokens": "20",
+	}, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if charge.Amount != "0.00014" {
+		t.Fatalf("cache creation price was not applied: %s", charge.Amount)
+	}
+}
+
 func TestExplicitZeroSubsetComponentRemainsFree(t *testing.T) {
 	charge, err := calculateMeteredCharge([]PriceComponent{
 		{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "1"},

@@ -280,6 +280,7 @@ function defaultModelPriceForm(): ModelPriceFormState {
     input_price_per_million_tokens: "",
     output_price_per_million_tokens: "",
     cached_input_price_per_million_tokens: "",
+    cache_creation_price_per_million_tokens: "",
     reasoning_price_per_million_tokens: "",
     components: [],
   };
@@ -3678,6 +3679,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       input_price_per_million_tokens: price.input_price_per_million_tokens,
       output_price_per_million_tokens: price.output_price_per_million_tokens,
       cached_input_price_per_million_tokens: price.cached_input_price_per_million_tokens,
+      cache_creation_price_per_million_tokens: tokenPriceToDisplay((price.components || []).find((component) => component.component_code === "cache_creation_tokens")?.price_per_unit || "", "token"),
       reasoning_price_per_million_tokens: price.reasoning_price_per_million_tokens,
       components: (price.components || []).map((component) => ({
         component_code: component.component_code,
@@ -3703,6 +3705,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
     const input = millionPriceToUnit(modelPriceForm.input_price_per_million_tokens);
     const output = millionPriceToUnit(modelPriceForm.output_price_per_million_tokens);
     const cached = modelPriceForm.cached_input_price_per_million_tokens.trim() ? millionPriceToUnit(modelPriceForm.cached_input_price_per_million_tokens) : "0";
+    const cacheCreation = modelPriceForm.cache_creation_price_per_million_tokens.trim() ? millionPriceToUnit(modelPriceForm.cache_creation_price_per_million_tokens) : "0";
     const reasoning = modelPriceForm.reasoning_price_per_million_tokens.trim() ? millionPriceToUnit(modelPriceForm.reasoning_price_per_million_tokens) : "0";
     const components = modelPriceForm.components.map((component) => ({
       component_code: component.component_code,
@@ -3710,7 +3713,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       price_per_unit: isTokenPriceUnit(component.unit) ? tokenDisplayToPrice(component.price_per_unit, component.unit) : component.price_per_unit.trim(),
       tiers: component.tiers,
       metadata: component.metadata,
-    })).filter((component) => component.component_code && component.price_per_unit);
+    })).filter((component) => component.component_code && component.price_per_unit && component.component_code !== "cache_creation_tokens");
+    if (cacheCreation !== "0") components.push({ component_code: "cache_creation_tokens", unit: "token", price_per_unit: cacheCreation, tiers: undefined, metadata: undefined });
     if (!modelPriceForm.model_id || modelPriceForm.currency.trim().toUpperCase() !== "USD" || ![input, output, cached, reasoning, ...components.map((component) => component.price_per_unit)].some((value) => value && value !== "0")) {
       setModelPriceFormMessage({ kind: "error", text: t("billingPriceFormInvalid") });
       return;
@@ -3729,6 +3733,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
           input_price_per_unit: input,
           output_price_per_unit: output,
           cached_input_price_per_unit: cached,
+          cache_creation_price_per_unit: cacheCreation,
           reasoning_price_per_unit: reasoning,
           minimum_charge: "0",
           components: components.length > 0 ? components : undefined,

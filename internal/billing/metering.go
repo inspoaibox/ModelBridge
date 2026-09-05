@@ -315,6 +315,7 @@ func legacyPriceComponents(price Price) []PriceComponent {
 		{"input_tokens", "token", price.InputPricePerUnit, false},
 		{"output_tokens", "token", price.OutputPricePerUnit, false},
 		{"cached_input_tokens", "token", price.CachedInputPricePerUnit, true},
+		{"cache_creation_tokens", "token", price.CacheCreationPricePerUnit, true},
 		{"reasoning_tokens", "token", price.ReasoningPricePerUnit, true},
 	} {
 		if strings.TrimSpace(item.value) != "" && (!item.fallback || !isZeroAmount(item.value)) {

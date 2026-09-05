@@ -13,22 +13,24 @@ import (
 var ErrUnavailable = errors.New("model catalog is unavailable")
 
 type Pricing struct {
-	Currency                         string           `json:"currency"`
-	InputPricePerUnit                string           `json:"input_price_per_unit"`
-	OutputPricePerUnit               string           `json:"output_price_per_unit"`
-	CachedInputPricePerUnit          string           `json:"cached_input_price_per_unit"`
-	ReasoningPricePerUnit            string           `json:"reasoning_price_per_unit"`
-	MinimumCharge                    string           `json:"minimum_charge"`
-	Unit                             string           `json:"unit"`
-	InputPricePerMillionTokens       string           `json:"input_price_per_million_tokens"`
-	OutputPricePerMillionTokens      string           `json:"output_price_per_million_tokens"`
-	CachedInputPricePerMillionTokens string           `json:"cached_input_price_per_million_tokens"`
-	ReasoningPricePerMillionTokens   string           `json:"reasoning_price_per_million_tokens"`
-	Source                           string           `json:"source"`
-	SourceURL                        string           `json:"source_url,omitempty"`
-	UpdatedAt                        string           `json:"updated_at,omitempty"`
-	Components                       []PriceComponent `json:"components,omitempty"`
-	PlatformPrices                   []PlatformPrice  `json:"platform_prices,omitempty"`
+	Currency                           string           `json:"currency"`
+	InputPricePerUnit                  string           `json:"input_price_per_unit"`
+	OutputPricePerUnit                 string           `json:"output_price_per_unit"`
+	CachedInputPricePerUnit            string           `json:"cached_input_price_per_unit"`
+	CacheCreationPricePerUnit          string           `json:"cache_creation_price_per_unit"`
+	ReasoningPricePerUnit              string           `json:"reasoning_price_per_unit"`
+	MinimumCharge                      string           `json:"minimum_charge"`
+	Unit                               string           `json:"unit"`
+	InputPricePerMillionTokens         string           `json:"input_price_per_million_tokens"`
+	OutputPricePerMillionTokens        string           `json:"output_price_per_million_tokens"`
+	CachedInputPricePerMillionTokens   string           `json:"cached_input_price_per_million_tokens"`
+	CacheCreationPricePerMillionTokens string           `json:"cache_creation_price_per_million_tokens"`
+	ReasoningPricePerMillionTokens     string           `json:"reasoning_price_per_million_tokens"`
+	Source                             string           `json:"source"`
+	SourceURL                          string           `json:"source_url,omitempty"`
+	UpdatedAt                          string           `json:"updated_at,omitempty"`
+	Components                         []PriceComponent `json:"components,omitempty"`
+	PlatformPrices                     []PlatformPrice  `json:"platform_prices,omitempty"`
 }
 
 type PriceComponent struct {
@@ -40,16 +42,17 @@ type PriceComponent struct {
 }
 
 type PlatformPrice struct {
-	GroupID                          string           `json:"group_id"`
-	GroupCode                        string           `json:"group_code"`
-	GroupName                        string           `json:"group_name"`
-	Multiplier                       string           `json:"multiplier"`
-	BillingType                      string           `json:"billing_type"`
-	InputPricePerMillionTokens       string           `json:"input_price_per_million_tokens"`
-	OutputPricePerMillionTokens      string           `json:"output_price_per_million_tokens"`
-	CachedInputPricePerMillionTokens string           `json:"cached_input_price_per_million_tokens"`
-	ReasoningPricePerMillionTokens   string           `json:"reasoning_price_per_million_tokens"`
-	Components                       []PriceComponent `json:"components,omitempty"`
+	GroupID                            string           `json:"group_id"`
+	GroupCode                          string           `json:"group_code"`
+	GroupName                          string           `json:"group_name"`
+	Multiplier                         string           `json:"multiplier"`
+	BillingType                        string           `json:"billing_type"`
+	InputPricePerMillionTokens         string           `json:"input_price_per_million_tokens"`
+	OutputPricePerMillionTokens        string           `json:"output_price_per_million_tokens"`
+	CachedInputPricePerMillionTokens   string           `json:"cached_input_price_per_million_tokens"`
+	CacheCreationPricePerMillionTokens string           `json:"cache_creation_price_per_million_tokens"`
+	ReasoningPricePerMillionTokens     string           `json:"reasoning_price_per_million_tokens"`
+	Components                         []PriceComponent `json:"components,omitempty"`
 }
 
 type Summary struct {
@@ -270,9 +273,11 @@ func (c *SQLCatalog) ListPublic(ctx context.Context) ([]Summary, error) {
 				SourceURL:               pricingSourceURL.String,
 				Components:              loadPublicPriceComponents(ctx, c.db, componentPriceID, pricingSource.String),
 			}
+			item.Pricing.CacheCreationPricePerUnit = publicComponentPrice(item.Pricing.Components, "cache_creation_tokens")
 			item.Pricing.InputPricePerMillionTokens = perMillionTokens(inputPrice.String)
 			item.Pricing.OutputPricePerMillionTokens = perMillionTokens(outputPrice.String)
 			item.Pricing.CachedInputPricePerMillionTokens = perMillionTokens(cachedInputPrice.String)
+			item.Pricing.CacheCreationPricePerMillionTokens = perMillionTokens(item.Pricing.CacheCreationPricePerUnit)
 			item.Pricing.ReasoningPricePerMillionTokens = perMillionTokens(reasoningPrice.String)
 			item.Pricing.PlatformPrices = platformPrices(groupsRaw, item.Pricing)
 			if pricingUpdatedAt.Valid {
@@ -353,6 +358,15 @@ func loadPublicPriceComponents(ctx context.Context, db *sql.DB, priceID, source 
 	return components
 }
 
+func publicComponentPrice(components []PriceComponent, code string) string {
+	for _, component := range components {
+		if component.ComponentCode == code {
+			return strings.TrimSpace(component.PricePerUnit)
+		}
+	}
+	return ""
+}
+
 type groupPriceBase struct {
 	GroupID     string `json:"group_id"`
 	GroupCode   string `json:"group_code"`
@@ -371,17 +385,19 @@ func platformPrices(raw []byte, pricing *Pricing) []PlatformPrice {
 	}
 	prices := make([]PlatformPrice, 0, len(groups))
 	for _, group := range groups {
+		components := multiplyComponents(pricing.Components, group.Multiplier)
 		prices = append(prices, PlatformPrice{
-			GroupID:                          group.GroupID,
-			GroupCode:                        group.GroupCode,
-			GroupName:                        group.GroupName,
-			Multiplier:                       group.Multiplier,
-			BillingType:                      group.BillingType,
-			InputPricePerMillionTokens:       multiplyDecimal(pricing.InputPricePerMillionTokens, group.Multiplier),
-			OutputPricePerMillionTokens:      multiplyDecimal(pricing.OutputPricePerMillionTokens, group.Multiplier),
-			CachedInputPricePerMillionTokens: multiplyDecimal(pricing.CachedInputPricePerMillionTokens, group.Multiplier),
-			ReasoningPricePerMillionTokens:   multiplyDecimal(pricing.ReasoningPricePerMillionTokens, group.Multiplier),
-			Components:                       multiplyComponents(pricing.Components, group.Multiplier),
+			GroupID:                            group.GroupID,
+			GroupCode:                          group.GroupCode,
+			GroupName:                          group.GroupName,
+			Multiplier:                         group.Multiplier,
+			BillingType:                        group.BillingType,
+			InputPricePerMillionTokens:         multiplyDecimal(pricing.InputPricePerMillionTokens, group.Multiplier),
+			OutputPricePerMillionTokens:        multiplyDecimal(pricing.OutputPricePerMillionTokens, group.Multiplier),
+			CachedInputPricePerMillionTokens:   multiplyDecimal(pricing.CachedInputPricePerMillionTokens, group.Multiplier),
+			CacheCreationPricePerMillionTokens: multiplyDecimal(pricing.CacheCreationPricePerMillionTokens, group.Multiplier),
+			ReasoningPricePerMillionTokens:     multiplyDecimal(pricing.ReasoningPricePerMillionTokens, group.Multiplier),
+			Components:                         components,
 		})
 	}
 	return prices

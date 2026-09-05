@@ -290,7 +290,7 @@ function officialPriceSummary(official: NonNullable<PublicModelSummary["pricing"
   return {
     input: primaryOrComponent(official.input_price_per_million_tokens, official.input_price_per_unit, official.components, ["input_tokens"]),
     cachedInput: primaryOrComponent(official.cached_input_price_per_million_tokens, official.cached_input_price_per_unit, official.components, ["cached_input_tokens"]),
-    cacheWrites: componentPrice(official.components, ["cache_creation_tokens", "cache_creation_1h_tokens"]),
+    cacheWrites: primaryOrComponent(official.cache_creation_price_per_million_tokens, undefined, official.components, ["cache_creation_tokens", "cache_creation_1h_tokens"]),
     output: primaryOrComponent(official.output_price_per_million_tokens, official.output_price_per_unit, official.components, ["output_tokens"]),
   };
 }
@@ -299,7 +299,7 @@ function platformPriceSummary(platform: PublicPlatformModelPrice): PriceSummary 
   return {
     input: primaryOrComponent(platform.input_price_per_million_tokens, undefined, platform.components, ["input_tokens"]),
     cachedInput: primaryOrComponent(platform.cached_input_price_per_million_tokens, undefined, platform.components, ["cached_input_tokens"]),
-    cacheWrites: componentPrice(platform.components, ["cache_creation_tokens", "cache_creation_1h_tokens"]),
+    cacheWrites: primaryOrComponent(platform.cache_creation_price_per_million_tokens, undefined, platform.components, ["cache_creation_tokens", "cache_creation_1h_tokens"]),
     output: primaryOrComponent(platform.output_price_per_million_tokens, undefined, platform.components, ["output_tokens"]),
   };
 }

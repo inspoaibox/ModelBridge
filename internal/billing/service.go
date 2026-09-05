@@ -155,31 +155,33 @@ type Price struct {
 	// ID identifies the source price record. PriceVersionID is only populated
 	// for internal manual prices because model_requests.price_version_id has a
 	// foreign key to price_versions, not official_model_price_versions.
-	ID                      string
-	PriceVersionID          string
-	Source                  string
-	ModelID                 string
-	Currency                string
-	InputPricePerUnit       string
-	OutputPricePerUnit      string
-	CachedInputPricePerUnit string
-	ReasoningPricePerUnit   string
-	MinimumCharge           string
-	Components              []PriceComponent
+	ID                        string
+	PriceVersionID            string
+	Source                    string
+	ModelID                   string
+	Currency                  string
+	InputPricePerUnit         string
+	OutputPricePerUnit        string
+	CachedInputPricePerUnit   string
+	CacheCreationPricePerUnit string
+	ReasoningPricePerUnit     string
+	MinimumCharge             string
+	Components                []PriceComponent
 }
 
 type priceSnapshotRecord struct {
-	ID                      string           `json:"id"`
-	PriceVersionID          string           `json:"price_version_id"`
-	Source                  string           `json:"source"`
-	ModelID                 string           `json:"model_id"`
-	Currency                string           `json:"currency"`
-	InputPricePerUnit       string           `json:"input_price_per_unit"`
-	OutputPricePerUnit      string           `json:"output_price_per_unit"`
-	CachedInputPricePerUnit string           `json:"cached_input_price_per_unit"`
-	ReasoningPricePerUnit   string           `json:"reasoning_price_per_unit"`
-	MinimumCharge           string           `json:"minimum_charge"`
-	Components              []PriceComponent `json:"components"`
+	ID                        string           `json:"id"`
+	PriceVersionID            string           `json:"price_version_id"`
+	Source                    string           `json:"source"`
+	ModelID                   string           `json:"model_id"`
+	Currency                  string           `json:"currency"`
+	InputPricePerUnit         string           `json:"input_price_per_unit"`
+	OutputPricePerUnit        string           `json:"output_price_per_unit"`
+	CachedInputPricePerUnit   string           `json:"cached_input_price_per_unit"`
+	CacheCreationPricePerUnit string           `json:"cache_creation_price_per_unit"`
+	ReasoningPricePerUnit     string           `json:"reasoning_price_per_unit"`
+	MinimumCharge             string           `json:"minimum_charge"`
+	Components                []PriceComponent `json:"components"`
 }
 
 func priceFromSnapshot(raw []byte, fallbackCurrency string) (Price, error) {
@@ -206,9 +208,10 @@ func priceFromSnapshot(raw []byte, fallbackCurrency string) (Price, error) {
 		ID: snapshot.ID, PriceVersionID: strings.TrimSpace(snapshot.PriceVersionID),
 		Source: snapshot.Source, ModelID: snapshot.ModelID, Currency: currency,
 		InputPricePerUnit: snapshot.InputPricePerUnit, OutputPricePerUnit: snapshot.OutputPricePerUnit,
-		CachedInputPricePerUnit: snapshot.CachedInputPricePerUnit,
-		ReasoningPricePerUnit:   snapshot.ReasoningPricePerUnit,
-		MinimumCharge:           snapshot.MinimumCharge, Components: snapshot.Components,
+		CachedInputPricePerUnit:   snapshot.CachedInputPricePerUnit,
+		CacheCreationPricePerUnit: snapshot.CacheCreationPricePerUnit,
+		ReasoningPricePerUnit:     snapshot.ReasoningPricePerUnit,
+		MinimumCharge:             snapshot.MinimumCharge, Components: snapshot.Components,
 	}, nil
 }
 
@@ -220,44 +223,46 @@ func officialPriceVersionID(price Price) string {
 }
 
 type PriceVersionSummary struct {
-	ID                      string           `json:"id"`
-	ScopeType               string           `json:"scope_type"`
-	ScopeID                 string           `json:"scope_id,omitempty"`
-	ModelID                 string           `json:"model_id"`
-	Provider                string           `json:"provider"`
-	Model                   string           `json:"model"`
-	Currency                string           `json:"currency"`
-	InputPricePerUnit       string           `json:"input_price_per_unit"`
-	OutputPricePerUnit      string           `json:"output_price_per_unit"`
-	CachedInputPricePerUnit string           `json:"cached_input_price_per_unit"`
-	ReasoningPricePerUnit   string           `json:"reasoning_price_per_unit"`
-	MinimumCharge           string           `json:"minimum_charge"`
-	Version                 int64            `json:"version"`
-	EffectiveFrom           time.Time        `json:"effective_from"`
-	EffectiveTo             *time.Time       `json:"effective_to,omitempty"`
-	Status                  string           `json:"status"`
-	CreatedBy               string           `json:"created_by"`
-	CreatedAt               time.Time        `json:"created_at"`
-	Components              []PriceComponent `json:"components,omitempty"`
+	ID                        string           `json:"id"`
+	ScopeType                 string           `json:"scope_type"`
+	ScopeID                   string           `json:"scope_id,omitempty"`
+	ModelID                   string           `json:"model_id"`
+	Provider                  string           `json:"provider"`
+	Model                     string           `json:"model"`
+	Currency                  string           `json:"currency"`
+	InputPricePerUnit         string           `json:"input_price_per_unit"`
+	OutputPricePerUnit        string           `json:"output_price_per_unit"`
+	CachedInputPricePerUnit   string           `json:"cached_input_price_per_unit"`
+	CacheCreationPricePerUnit string           `json:"cache_creation_price_per_unit"`
+	ReasoningPricePerUnit     string           `json:"reasoning_price_per_unit"`
+	MinimumCharge             string           `json:"minimum_charge"`
+	Version                   int64            `json:"version"`
+	EffectiveFrom             time.Time        `json:"effective_from"`
+	EffectiveTo               *time.Time       `json:"effective_to,omitempty"`
+	Status                    string           `json:"status"`
+	CreatedBy                 string           `json:"created_by"`
+	CreatedAt                 time.Time        `json:"created_at"`
+	Components                []PriceComponent `json:"components,omitempty"`
 }
 
 // PriceMatrixSummary is the current reference price for one configured model.
 // Historical price versions remain available in the ledger, but are intentionally
 // excluded from the operational pricing screen.
 type PriceMatrixSummary struct {
-	ModelID                          string                    `json:"model_id"`
-	Provider                         string                    `json:"provider"`
-	Model                            string                    `json:"model"`
-	Currency                         string                    `json:"currency"`
-	InputPricePerMillionTokens       string                    `json:"input_price_per_million_tokens"`
-	OutputPricePerMillionTokens      string                    `json:"output_price_per_million_tokens"`
-	CachedInputPricePerMillionTokens string                    `json:"cached_input_price_per_million_tokens"`
-	ReasoningPricePerMillionTokens   string                    `json:"reasoning_price_per_million_tokens"`
-	Source                           string                    `json:"source"`
-	SourceURL                        string                    `json:"source_url,omitempty"`
-	UpdatedAt                        *time.Time                `json:"updated_at,omitempty"`
-	Components                       []PriceComponent          `json:"components,omitempty"`
-	CostEstimates                    []PriceMatrixCostEstimate `json:"cost_estimates,omitempty"`
+	ModelID                            string                    `json:"model_id"`
+	Provider                           string                    `json:"provider"`
+	Model                              string                    `json:"model"`
+	Currency                           string                    `json:"currency"`
+	InputPricePerMillionTokens         string                    `json:"input_price_per_million_tokens"`
+	OutputPricePerMillionTokens        string                    `json:"output_price_per_million_tokens"`
+	CachedInputPricePerMillionTokens   string                    `json:"cached_input_price_per_million_tokens"`
+	CacheCreationPricePerMillionTokens string                    `json:"cache_creation_price_per_million_tokens"`
+	ReasoningPricePerMillionTokens     string                    `json:"reasoning_price_per_million_tokens"`
+	Source                             string                    `json:"source"`
+	SourceURL                          string                    `json:"source_url,omitempty"`
+	UpdatedAt                          *time.Time                `json:"updated_at,omitempty"`
+	Components                         []PriceComponent          `json:"components,omitempty"`
+	CostEstimates                      []PriceMatrixCostEstimate `json:"cost_estimates,omitempty"`
 }
 
 type PriceMatrixComponentEstimate struct {
@@ -284,19 +289,20 @@ type PriceMatrixCostEstimate struct {
 }
 
 type PublishPriceRequest struct {
-	ScopeType               string                `json:"scope_type"`
-	ScopeID                 string                `json:"scope_id,omitempty"`
-	ModelID                 string                `json:"model_id,omitempty"`
-	Provider                string                `json:"provider,omitempty"`
-	Model                   string                `json:"model,omitempty"`
-	Currency                string                `json:"currency"`
-	InputPricePerUnit       string                `json:"input_price_per_unit"`
-	OutputPricePerUnit      string                `json:"output_price_per_unit"`
-	CachedInputPricePerUnit string                `json:"cached_input_price_per_unit"`
-	ReasoningPricePerUnit   string                `json:"reasoning_price_per_unit"`
-	MinimumCharge           string                `json:"minimum_charge"`
-	Components              []PriceComponentInput `json:"components,omitempty"`
-	EffectiveFrom           *time.Time            `json:"effective_from,omitempty"`
+	ScopeType                 string                `json:"scope_type"`
+	ScopeID                   string                `json:"scope_id,omitempty"`
+	ModelID                   string                `json:"model_id,omitempty"`
+	Provider                  string                `json:"provider,omitempty"`
+	Model                     string                `json:"model,omitempty"`
+	Currency                  string                `json:"currency"`
+	InputPricePerUnit         string                `json:"input_price_per_unit"`
+	OutputPricePerUnit        string                `json:"output_price_per_unit"`
+	CachedInputPricePerUnit   string                `json:"cached_input_price_per_unit"`
+	CacheCreationPricePerUnit string                `json:"cache_creation_price_per_unit"`
+	ReasoningPricePerUnit     string                `json:"reasoning_price_per_unit"`
+	MinimumCharge             string                `json:"minimum_charge"`
+	Components                []PriceComponentInput `json:"components,omitempty"`
+	EffectiveFrom             *time.Time            `json:"effective_from,omitempty"`
 }
 
 type AccountSummary struct {
@@ -665,6 +671,7 @@ func (s *SQLService) ListPrices(ctx context.Context) ([]PriceVersionSummary, err
 		if err != nil {
 			return nil, err
 		}
+		price.CacheCreationPricePerUnit = cacheCreationPrice(price.Components)
 		prices = append(prices, price)
 	}
 	if err := rows.Err(); err != nil {
@@ -778,6 +785,7 @@ func (s *SQLService) ListPriceMatrix(ctx context.Context) ([]PriceMatrixSummary,
 		if err != nil {
 			return nil, err
 		}
+		item.CacheCreationPricePerMillionTokens = pricePerMillionTokens(cacheCreationPrice(item.Components))
 		item.CostEstimates, err = s.listPriceMatrixCostEstimates(
 			ctx,
 			item.ModelID,
@@ -1119,6 +1127,7 @@ func (s *SQLService) PublishPrice(
 	request.InputPricePerUnit = zeroPrice(request.InputPricePerUnit)
 	request.OutputPricePerUnit = zeroPrice(request.OutputPricePerUnit)
 	request.CachedInputPricePerUnit = zeroPrice(request.CachedInputPricePerUnit)
+	request.CacheCreationPricePerUnit = zeroPrice(request.CacheCreationPricePerUnit)
 	request.ReasoningPricePerUnit = zeroPrice(request.ReasoningPricePerUnit)
 	if request.ScopeType != "platform_default" &&
 		request.ScopeType != "tenant" &&
@@ -1141,6 +1150,7 @@ func (s *SQLService) PublishPrice(
 		request.InputPricePerUnit,
 		request.OutputPricePerUnit,
 		request.CachedInputPricePerUnit,
+		request.CacheCreationPricePerUnit,
 		request.ReasoningPricePerUnit,
 		request.MinimumCharge,
 	} {
@@ -1149,7 +1159,7 @@ func (s *SQLService) PublishPrice(
 		}
 	}
 	components := mergePriceComponentInputs(
-		legacyPriceComponentInputs(request.InputPricePerUnit, request.OutputPricePerUnit, request.CachedInputPricePerUnit, request.ReasoningPricePerUnit),
+		legacyPriceComponentInputs(request.InputPricePerUnit, request.OutputPricePerUnit, request.CachedInputPricePerUnit, request.CacheCreationPricePerUnit, request.ReasoningPricePerUnit),
 		request.Components,
 	)
 	components, err := normalizePriceComponentInputs(components)
@@ -1343,6 +1353,7 @@ func (s *SQLService) getPriceVersion(ctx context.Context, priceID string) (Price
 	if err != nil {
 		return PriceVersionSummary{}, err
 	}
+	price.CacheCreationPricePerUnit = cacheCreationPrice(price.Components)
 	return price, nil
 }
 
@@ -3373,6 +3384,7 @@ func resolveOfficialPrice(
 	if err != nil {
 		return Price{}, err
 	}
+	price.CacheCreationPricePerUnit = cacheCreationPrice(price.Components)
 	if price.Currency != strings.ToUpper(strings.TrimSpace(currency)) {
 		return Price{}, ErrPriceNotConfigured
 	}
@@ -3478,6 +3490,7 @@ func resolvePrice(
 		if err != nil {
 			return Price{}, err
 		}
+		price.CacheCreationPricePerUnit = cacheCreationPrice(price.Components)
 		if price.Currency != currency {
 			continue
 		}

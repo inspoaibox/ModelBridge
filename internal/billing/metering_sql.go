@@ -221,7 +221,7 @@ func canonicalDecimal(value string, maxIntegerDigits, maxFractionDigits int) (st
 	return result, true
 }
 
-func legacyPriceComponentInputs(input, output, cached, reasoning string) []PriceComponentInput {
+func legacyPriceComponentInputs(input, output, cached, cacheCreation, reasoning string) []PriceComponentInput {
 	result := make([]PriceComponentInput, 0, 4)
 	for _, item := range []struct {
 		code, value string
@@ -230,6 +230,7 @@ func legacyPriceComponentInputs(input, output, cached, reasoning string) []Price
 		{"input_tokens", input, false},
 		{"output_tokens", output, false},
 		{"cached_input_tokens", cached, true},
+		{"cache_creation_tokens", cacheCreation, true},
 		{"reasoning_tokens", reasoning, true},
 	} {
 		if strings.TrimSpace(item.value) == "" || item.optional && isZeroAmount(item.value) {
@@ -248,10 +249,29 @@ func nullableJSON(value, fallback []byte) []byte {
 }
 
 func priceComponentsFor(price Price) []PriceComponent {
-	if len(price.Components) > 0 {
-		return price.Components
+	result := append([]PriceComponent(nil), price.Components...)
+	existing := make(map[string]struct{}, len(result))
+	for _, component := range result {
+		if code := strings.TrimSpace(component.ComponentCode); code != "" {
+			existing[code] = struct{}{}
+		}
 	}
-	return legacyPriceComponents(price)
+	for _, component := range legacyPriceComponents(price) {
+		if _, ok := existing[component.ComponentCode]; ok {
+			continue
+		}
+		result = append(result, component)
+	}
+	return result
+}
+
+func cacheCreationPrice(components []PriceComponent) string {
+	for _, component := range components {
+		if strings.TrimSpace(component.ComponentCode) == "cache_creation_tokens" {
+			return strings.TrimSpace(component.PricePerUnit)
+		}
+	}
+	return ""
 }
 
 func usageMetricsFor(usage Usage) MeteredUsage {
@@ -271,17 +291,18 @@ func requestMetricsFor(request Request) MeteredUsage {
 
 func priceSnapshot(price Price) map[string]any {
 	return map[string]any{
-		"id":                          price.ID,
-		"price_version_id":            price.PriceVersionID,
-		"source":                      price.Source,
-		"model_id":                    price.ModelID,
-		"currency":                    price.Currency,
-		"input_price_per_unit":        price.InputPricePerUnit,
-		"output_price_per_unit":       price.OutputPricePerUnit,
-		"cached_input_price_per_unit": price.CachedInputPricePerUnit,
-		"reasoning_price_per_unit":    price.ReasoningPricePerUnit,
-		"minimum_charge":              price.MinimumCharge,
-		"components":                  priceComponentsFor(price),
+		"id":                            price.ID,
+		"price_version_id":              price.PriceVersionID,
+		"source":                        price.Source,
+		"model_id":                      price.ModelID,
+		"currency":                      price.Currency,
+		"input_price_per_unit":          price.InputPricePerUnit,
+		"output_price_per_unit":         price.OutputPricePerUnit,
+		"cached_input_price_per_unit":   price.CachedInputPricePerUnit,
+		"cache_creation_price_per_unit": price.CacheCreationPricePerUnit,
+		"reasoning_price_per_unit":      price.ReasoningPricePerUnit,
+		"minimum_charge":                price.MinimumCharge,
+		"components":                    priceComponentsFor(price),
 	}
 }
 

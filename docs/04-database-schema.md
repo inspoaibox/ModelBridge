@@ -278,7 +278,7 @@ created_by
 created_at
 ```
 
-价格发布后不可原地修改。修正价格应创建新版本。运行时优先使用 Token、项目、租户和平台手动价格；没有手动价格时使用已同步的 `official_model_price_versions` 官方参考价格。付费请求只会在 `price_version_id` 和 `official_price_version_id` 中记录一个价格版本，并将实际组件与分组倍率写入价格快照。
+价格发布后不可原地修改。修正价格应创建新版本。运行时优先使用 Token、项目、租户和平台手动价格；没有手动价格时使用已同步的 `official_model_price_versions` 官方参考价格。缓存命中（读取）使用 `cached_input_tokens`，缓存写入使用 `cache_creation_tokens`（及其 1 小时阶梯组件），两者独立计价；有些模型没有其中一类时保持为 0 或不返回。付费请求只会在 `price_version_id` 和 `official_price_version_id` 中记录一个价格版本，并将实际组件与分组倍率写入价格快照。
 
 ### `price_components` / `official_price_components`
 
