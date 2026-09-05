@@ -158,10 +158,10 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		          ))
 		      )
 		), health_requests AS (
-			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			SELECT id, group_id, model_id, status, latency_ms, created_at, failure_reason
 			FROM model_requests
 			UNION ALL
-			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			SELECT id, group_id, model_id, status, latency_ms, created_at, failure_reason
 			FROM model_probe_requests
 		)
 		SELECT mm.group_id::text, mm.code, mm.name, mm.status,
@@ -464,10 +464,10 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			      ))
 			  )
 		), health_requests AS (
-			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			SELECT id, group_id, model_id, status, latency_ms, created_at, failure_reason
 			FROM model_requests
 			UNION ALL
-			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			SELECT id, group_id, model_id, status, latency_ms, created_at, failure_reason
 			FROM model_probe_requests
 		)
 		SELECT mm.monitor_id::text, mm.monitor_name, mm.selection_mode, mm.mode,
