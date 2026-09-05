@@ -844,6 +844,8 @@ export interface ConsoleDashboardReport {
   uptime_seconds: number;
   range_from: string;
   range_to: string;
+  total_api_keys: number;
+  active_api_keys: number;
   total_requests: number;
   today_requests: number;
   total_tokens: number;

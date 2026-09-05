@@ -3980,7 +3980,7 @@ func consoleDashboardHandler(service billing.AdminService) http.Handler {
 			projectIDs = []string{"no-project-access"}
 		}
 		report, err := reporter.GetConsoleDashboard(r.Context(), billing.ConsoleDashboardQuery{
-			TenantID: principal.TenantID, ProjectIDs: projectIDs, From: from, To: to,
+			TenantID: principal.TenantID, UserID: principal.ID, ProjectIDs: projectIDs, From: from, To: to,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "DASHBOARD_UNAVAILABLE"})

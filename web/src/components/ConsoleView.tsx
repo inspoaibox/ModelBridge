@@ -393,7 +393,7 @@ function DashboardPanel({ language, t, tokens, activeTokens, principal, billingA
   const cost = (value?: string) => `${currency} ${formatDecimalWithoutTrailingZeros(value || "0", "0")}`;
   const tokenDetail = (input: number, output: number) => `${t("consoleDashboardInput")} ${formatInteger(input)} · ${t("consoleDashboardOutput")} ${formatInteger(output)}`;
   const cards = [
-    { label: t("consoleDashboardAPIKeys"), value: String(tokens.length), detail: `${t("consoleDashboardActive")} ${activeTokens}`, icon: KeyRound, tone: "cyan" },
+    { label: t("consoleDashboardAPIKeys"), value: formatInteger(report?.total_api_keys ?? tokens.length), detail: `${t("consoleDashboardActive")} ${formatInteger(report?.active_api_keys ?? activeTokens)}`, icon: KeyRound, tone: "cyan" },
     { label: t("consoleDashboardTodayRequests"), value: formatInteger(report?.today_requests || 0), detail: `${t("consoleDashboardTotalRequests")} ${formatInteger(report?.total_requests || 0)}`, icon: Activity, tone: "indigo" },
     { label: t("consoleDashboardBalance"), value: billingAccount ? cost(billingAccount.balance) : "-", detail: `${t("consoleDashboardTodaySpend")} ${cost(report?.today_cost)}`, icon: BadgeDollarSign, tone: "emerald" },
     { label: t("consoleDashboardSystem"), value: dashboardBusy ? "..." : report?.system_status === "normal" ? t("consoleDashboardNormal") : report?.system_status || "-", detail: `${t("consoleDashboardUptime")} ${formatUptime(report?.uptime_seconds || 0)}`, icon: CheckCircle2, tone: "emerald" },

@@ -12,6 +12,7 @@ import (
 // the projects visible to the signed-in console principal.
 type ConsoleDashboardQuery struct {
 	TenantID   string
+	UserID     string
 	ProjectIDs []string
 	From       *time.Time
 	To         *time.Time
@@ -41,6 +42,8 @@ type ConsoleDashboardReport struct {
 	RangeFrom           time.Time                    `json:"range_from"`
 	RangeTo             time.Time                    `json:"range_to"`
 	TotalRequests       int64                        `json:"total_requests"`
+	TotalAPIKeys        int64                        `json:"total_api_keys"`
+	ActiveAPIKeys       int64                        `json:"active_api_keys"`
 	TodayRequests       int64                        `json:"today_requests"`
 	TotalTokens         int64                        `json:"total_tokens"`
 	TodayTokens         int64                        `json:"today_tokens"`
@@ -70,6 +73,10 @@ func (s *SQLService) GetConsoleDashboard(ctx context.Context, query ConsoleDashb
 	if query.TenantID == "" {
 		return ConsoleDashboardReport{}, ErrInvalidRequest
 	}
+	query.UserID = strings.TrimSpace(query.UserID)
+	if query.UserID == "" {
+		return ConsoleDashboardReport{}, ErrInvalidRequest
+	}
 	now := time.Now().UTC()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	if query.From == nil {
@@ -85,6 +92,14 @@ func (s *SQLService) GetConsoleDashboard(ctx context.Context, query ConsoleDashb
 	}
 
 	report := ConsoleDashboardReport{CollectedAt: now, RangeFrom: *query.From, RangeTo: *query.To}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)::bigint,
+		       COUNT(*) FILTER (WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now()))::bigint
+		FROM api_tokens
+		WHERE tenant_id = $1::uuid AND created_by = $2::uuid AND deleted_at IS NULL AND status <> 'revoked'
+	`, query.TenantID, query.UserID).Scan(&report.TotalAPIKeys, &report.ActiveAPIKeys); err != nil {
+		return ConsoleDashboardReport{}, err
+	}
 	allWhere, allArgs := usageWhere(UsageQuery{TenantID: query.TenantID, ProjectIDs: query.ProjectIDs})
 	if err := s.scanDashboardTotals(ctx, allWhere, allArgs, &report.TotalRequests, &report.TotalInputTokens, &report.TotalOutputTokens, &report.TotalTokens, &report.TotalCost); err != nil {
 		return ConsoleDashboardReport{}, err
