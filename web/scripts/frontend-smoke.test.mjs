@@ -103,3 +103,15 @@ test("recharge presets come from payment configuration", () => {
   assert.doesNotMatch(panel, /\["10", "50", "100", "500", "1000", "5000"\]/);
   assert.match(settings, /paymentRechargePresets/);
 });
+
+test("customer finance navigation groups records, cost center, and orders", () => {
+  const consoleView = readFileSync(resolve(root, "src", "components", "ConsoleView.tsx"), "utf8");
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  assert.match(consoleView, /consoleNavFinance/);
+  assert.match(consoleView, /useState\(true\)/);
+  assert.match(consoleView, /financeSections/);
+  assert.match(consoleView, /setFinanceExpanded/);
+  assert.match(consoleView, /billing-records/);
+  assert.match(consoleView, /billing-orders/);
+  assert.match(app, /billing-center/);
+});

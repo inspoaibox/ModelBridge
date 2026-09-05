@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Copy,
   ExternalLink,
   FolderKanban,
@@ -46,6 +47,8 @@ import { PaymentRechargePanel } from "@/components/PaymentRechargePanel";
 import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 import { ImageLabView, VideoLabView } from "@/components/MediaLabsView";
 import { TextDebugPanel } from "@/components/TextDebugPanel";
+
+type ConsoleNavItem = { id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey; permission?: string };
 
 interface ConsoleViewProps {
   language: Language;
@@ -161,17 +164,20 @@ interface ConsoleViewProps {
   projectMemberActionBusy: string;
 }
 
-const consoleSections: Array<{ id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey; permission?: string }> = [
+const consoleSections: ConsoleNavItem[] = [
   { id: "dashboard", icon: LayoutDashboard, label: "consoleNavDashboard", title: "consoleDashboardTitle", description: "consoleDashboardDescription" },
   { id: "model-status", icon: Activity, label: "consoleNavModelStatus", title: "consoleModelStatusTitle", description: "consoleModelStatusDescription", permission: "model:status:read" },
-  { id: "billing-records", icon: Activity, label: "consoleNavUsage", title: "consoleUsageTitle", description: "consoleUsageDescription", permission: "usage:read" },
   { id: "projects", icon: FolderKanban, label: "consoleNavProjects", title: "consoleProjectsTitle", description: "consoleProjectsDescription", permission: "project:read" },
   { id: "tokens", icon: KeyRound, label: "consoleNavTokens", title: "tokensConsoleTitle", description: "tokensConsoleDescription", permission: "token:read" },
-  { id: "billing", icon: BadgeDollarSign, label: "consoleNavBilling", title: "consoleBillingTitle", description: "consoleBillingDescription", permission: "billing:read" },
-  { id: "billing-orders", icon: BadgeDollarSign, label: "consoleNavBillingOrders", title: "consoleBillingOrdersTitle", description: "consoleBillingOrdersDescription", permission: "billing:read" },
   { id: "enterprise", icon: Building2, label: "consoleNavEnterprise", title: "enterpriseTitle", description: "enterpriseDescription", permission: "enterprise:read" },
   { id: "profile", icon: UserRound, label: "consoleNavProfile", title: "consoleProfileTitle", description: "consoleProfileDescription" },
   { id: "docs", icon: BookOpen, label: "consoleNavDocs", title: "consoleDocsTitle", description: "consoleDocsDescription" },
+];
+
+const financeSections: ConsoleNavItem[] = [
+  { id: "billing-records", icon: Activity, label: "consoleNavUsage", title: "consoleUsageTitle", description: "consoleUsageDescription", permission: "usage:read" },
+  { id: "billing", icon: BadgeDollarSign, label: "consoleNavBilling", title: "consoleBillingTitle", description: "consoleBillingDescription", permission: "billing:read" },
+  { id: "billing-orders", icon: BadgeDollarSign, label: "consoleNavBillingOrders", title: "consoleBillingOrdersTitle", description: "consoleBillingOrdersDescription", permission: "billing:read" },
 ];
 
 const interfaceDebugSections: Array<{ id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey }> = [
@@ -179,6 +185,16 @@ const interfaceDebugSections: Array<{ id: ConsoleSection; icon: typeof LayoutDas
   { id: "interface-debug-model", icon: Video, label: "consoleNavDebugModel", title: "consoleDebugModelTitle", description: "consoleDebugModelDescription" },
   { id: "interface-debug-image", icon: Image, label: "consoleNavDebugImage", title: "consoleDebugImageTitle", description: "consoleDebugImageDescription" },
 ];
+
+function ConsoleSectionButton({ item, active, compact = false, onSelect, t }: { item: ConsoleNavItem; active: boolean; compact?: boolean; onSelect: (section: ConsoleSection) => void; t: (key: TranslationKey) => string }) {
+  const Icon = item.icon;
+  return <button key={item.id} type="button" onClick={() => onSelect(item.id)} className={cn("flex w-full items-center gap-3 rounded-xl text-left text-sm font-medium transition-all", compact ? "h-10 px-3" : "h-11 px-3", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>;
+}
+
+function ConsoleCompactSectionButton({ item, active, onSelect, t }: { item: ConsoleNavItem; active: boolean; onSelect: (section: ConsoleSection) => void; t: (key: TranslationKey) => string }) {
+  const Icon = item.icon;
+  return <button key={item.id} type="button" onClick={() => onSelect(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", active ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>;
+}
 
 export function ConsoleView({
   language,
@@ -296,10 +312,13 @@ export function ConsoleView({
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const hasPermission = (permission?: string) => !permission || principal?.permissions?.includes(permission) === true;
   const visibleSections = consoleSections.filter((item) => item.id !== "model-status" || modelStatusEnabled).filter((item) => hasPermission(item.permission));
+  const visibleFinanceSections = financeSections.filter((item) => hasPermission(item.permission));
   const visibleInterfaceDebugSections = interfaceDebugSections;
-  const allVisibleSections = [...visibleSections, ...visibleInterfaceDebugSections];
+  const allVisibleSections = [...visibleSections, ...visibleFinanceSections, ...visibleInterfaceDebugSections];
   const displayedSection = allVisibleSections.some((item) => item.id === section) ? section : "dashboard";
   const activeSection = allVisibleSections.find((item) => item.id === displayedSection) || consoleSections[0];
+  const [financeExpanded, setFinanceExpanded] = useState(true);
+  const financeActive = visibleFinanceSections.some((item) => item.id === displayedSection);
   const selectSection = (next: ConsoleSection) => {
     const normalized = next === "usage" ? "billing-records" : next;
     setSection(normalized);
@@ -317,7 +336,7 @@ export function ConsoleView({
       <aside className="sticky top-[72px] hidden h-[calc(100vh-72px)] w-[272px] shrink-0 flex-col border-r border-slate-200/80 bg-white/90 px-4 py-5 dark:border-slate-800/80 dark:bg-slate-950/90 lg:flex">
         <div className="mb-6 rounded-2xl border border-indigo-500/20 bg-gradient-to-br from-indigo-500/10 via-cyan-500/5 to-transparent p-4 dark:border-indigo-400/20"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"><ShieldCheck className="h-4 w-4" />{t("consoleWorkspaceEyebrow")}</div><div className="mt-3 truncate text-sm font-semibold text-slate-900 dark:text-white">{principal?.tenant_id || t("consoleTenantUnknown")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t("consoleTenantWorkspace")}</div></div>
         <nav className="flex-1 space-y-1" aria-label={t("consoleNavigation")}>
-          {visibleSections.map((item) => { const Icon = item.icon; const active = item.id === displayedSection; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-all", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>; })}
+          {visibleSections.map((item) => item.id === "enterprise" && visibleFinanceSections.length > 0 ? <React.Fragment key={item.id}><button type="button" onClick={() => setFinanceExpanded((current) => !current)} aria-expanded={financeExpanded} className={cn("flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition-all", financeActive ? "bg-indigo-500/10 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><BadgeDollarSign className="h-4 w-4 shrink-0" /><span className="truncate">{t("consoleNavFinance")}</span>{financeExpanded ? <ChevronDown className="ml-auto h-4 w-4" /> : <ChevronRight className="ml-auto h-4 w-4" />}</button>{financeExpanded ? <div className="ml-4 space-y-1 border-l border-slate-200 pl-3 dark:border-slate-800">{visibleFinanceSections.map((finance) => <ConsoleSectionButton key={finance.id} item={finance} active={finance.id === displayedSection} compact onSelect={selectSection} t={t} />)}</div> : null}<ConsoleSectionButton item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} /></React.Fragment> : <ConsoleSectionButton key={item.id} item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} />)}
           <div className="mt-5 border-t border-slate-200/80 pt-4 dark:border-slate-800/80"><div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{t("consoleNavInterfaceDebug")}</div>{visibleInterfaceDebugSections.map((item) => { const Icon = item.icon; const active = item.id === displayedSection; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-all", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>; })}</div>
         </nav>
         <div className="space-y-3 border-t border-slate-200/80 pt-4 dark:border-slate-800/80"><Button variant="outline" size="sm" onClick={handleSignOut} className="w-full gap-2 text-xs"><LogOut className="h-3.5 w-3.5" />{t("signOut")}</Button></div>
@@ -327,7 +346,7 @@ export function ConsoleView({
         <div className="mx-auto max-w-[1560px] space-y-6">
           <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 dark:border-slate-800/80 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"><span>{t("consoleWorkspaceEyebrow")}</span><span>/</span><span className="text-slate-700 dark:text-slate-300">{t(activeSection.label)}</span></div><h1 className="mt-2 text-2xl font-extrabold tracking-tight text-slate-950 dark:text-white sm:text-3xl">{t(activeSection.title)}</h1><p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">{t(activeSection.description)}</p></div><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/80 px-3.5 py-2 shadow-sm dark:border-slate-800 dark:bg-slate-900/80"><div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-xs font-bold uppercase text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300">{(principal?.id || "U").slice(0, 2)}</div><div><div className="text-[10px] font-bold uppercase text-slate-400">{t("consoleCurrentUser")}</div><div className="max-w-[180px] truncate font-mono text-xs text-slate-800 dark:text-slate-200">{principal?.id || "-"}</div></div></div></div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{visibleSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === displayedSection ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}<span className="inline-flex shrink-0 items-center px-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{t("consoleNavInterfaceDebug")}</span>{visibleInterfaceDebugSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === displayedSection ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}</div>
+          <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{visibleSections.map((item) => item.id === "enterprise" && visibleFinanceSections.length > 0 ? <React.Fragment key={item.id}><button type="button" onClick={() => setFinanceExpanded((current) => !current)} aria-expanded={financeExpanded} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", financeActive ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><BadgeDollarSign className="h-3.5 w-3.5" />{t("consoleNavFinance")} {financeExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</button>{financeExpanded ? visibleFinanceSections.map((finance) => <ConsoleCompactSectionButton key={finance.id} item={finance} active={finance.id === displayedSection} onSelect={selectSection} t={t} />) : null}<ConsoleCompactSectionButton item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} /></React.Fragment> : <ConsoleCompactSectionButton key={item.id} item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} />)}<span className="inline-flex shrink-0 items-center px-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{t("consoleNavInterfaceDebug")}</span>{visibleInterfaceDebugSections.map((item) => <ConsoleCompactSectionButton key={item.id} item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} />)}</div>
 
           {displayedSection === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
           {displayedSection === "model-status" ? <ModelStatusPanel language={language} report={modelStatusReport} busy={modelStatusBusy} message={modelStatusMessage} refresh={refreshModelStatus} /> : null}
