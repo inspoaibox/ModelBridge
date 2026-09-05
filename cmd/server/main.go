@@ -229,8 +229,13 @@ func main() {
 		}
 		if monitorService, ok := groupService.(groups.ModelMonitorService); ok {
 			if prober, ok := relayService.(relay.ModelProbeService); ok {
+				log.Printf("model monitor prober started")
 				go runModelMonitorProber(ctx, monitorService, prober)
+			} else {
+				log.Printf("model monitor prober unavailable: relay service does not implement ModelProbeService")
 			}
+		} else {
+			log.Printf("model monitor prober unavailable: group service does not implement ModelMonitorService")
 		}
 		if accountSyncService, ok := relayService.(upstreamAccountSyncService); ok {
 			go runUpstreamAccountSync(ctx, accountSyncService)

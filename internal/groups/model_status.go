@@ -84,6 +84,8 @@ type AdminModelStatusLister interface {
 // one of the tenant's live tokens is bound to it. A model is normal when every
 // configured route is currently eligible for selection, degraded when only
 // some are eligible, and unavailable when no route can currently be selected.
+// Active monitor probe health is included in this status; passive monitors
+// rely on real customer traffic observations.
 // A disabled group is reported separately so the UI can distinguish
 // configuration state from route health.
 func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (ModelStatusReport, error) {
@@ -108,6 +110,7 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		           rg.rpm_limit,
 		           rg.billing_type,
 		           rg.metering_mode,
+		           mmc.mode,
 		           rg.priority,
 		           rg.updated_at,
 		           pm.model_name AS primary_model,
@@ -166,11 +169,14 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		           AND c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
-		       COUNT(cm.model_id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable'))::int,
+		       COUNT(cm.model_id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable')
+		           OR (mm.mode = 'active' AND cm.probe_health IN ('degraded', 'unavailable')))::int,
 		       COUNT(cm.model_id) FILTER (WHERE cm.last_success_at IS NOT NULL
-		           OR cm.last_failure_at IS NOT NULL)::int,
-		       COALESCE(MAX(cm.consecutive_failures), 0)::int,
-		       MAX(cm.last_success_at), MAX(cm.last_failure_at),
+		           OR cm.last_failure_at IS NOT NULL
+		           OR (mm.mode = 'active' AND (cm.probe_last_success_at IS NOT NULL OR cm.probe_last_failure_at IS NOT NULL)))::int,
+		       GREATEST(COALESCE(MAX(cm.consecutive_failures), 0), COALESCE(MAX(cm.probe_consecutive_failures) FILTER (WHERE mm.mode = 'active'), 0))::int,
+		       GREATEST(MAX(cm.last_success_at), MAX(cm.probe_last_success_at)),
+		       GREATEST(MAX(cm.last_failure_at), MAX(cm.probe_last_failure_at)),
 		       COALESCE((SELECT COUNT(*)::int
 		           FROM model_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
@@ -358,9 +364,9 @@ func modelRouteStatus(groupStatus string, totalRoutes, availableRoutes, degraded
 	if availableRoutes < totalRoutes {
 		return "degraded"
 	}
-	// A configured route is not proven healthy until a real request has
-	// recorded either a success or a failure. This avoids presenting an
-	// untested channel as healthy immediately after it is added.
+	// A configured route is not proven healthy until a real request or an
+	// active monitor probe has recorded either a success or a failure. Passive
+	// monitors still wait for real traffic because they have no probe result.
 	if observedRoutes < totalRoutes {
 		return "pending"
 	}
@@ -464,11 +470,14 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		           AND c.status = 'active'
 		           AND (c.auto_disabled_until IS NULL OR c.auto_disabled_until <= now())
 		           AND (cm.auto_disabled_until IS NULL OR cm.auto_disabled_until <= now()))::int,
-		       COUNT(cm.model_id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable'))::int,
+		       COUNT(cm.model_id) FILTER (WHERE cm.health_status IN ('degraded', 'unavailable')
+		           OR (mm.mode = 'active' AND cm.probe_health IN ('degraded', 'unavailable')))::int,
 		       COUNT(cm.model_id) FILTER (WHERE cm.last_success_at IS NOT NULL
-		           OR cm.last_failure_at IS NOT NULL)::int,
-		       COALESCE(MAX(cm.consecutive_failures), 0)::int,
-		       MAX(cm.last_success_at), MAX(cm.last_failure_at),
+		           OR cm.last_failure_at IS NOT NULL
+		           OR (mm.mode = 'active' AND (cm.probe_last_success_at IS NOT NULL OR cm.probe_last_failure_at IS NOT NULL)))::int,
+		       GREATEST(COALESCE(MAX(cm.consecutive_failures), 0), COALESCE(MAX(cm.probe_consecutive_failures) FILTER (WHERE mm.mode = 'active'), 0))::int,
+		       GREATEST(MAX(cm.last_success_at), MAX(cm.probe_last_success_at)),
+		       GREATEST(MAX(cm.last_failure_at), MAX(cm.probe_last_failure_at)),
 		       COALESCE((SELECT COUNT(*)::int
 		           FROM model_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id

@@ -586,12 +586,12 @@ func newHandler(
 	)(adminModelMonitorListHandler(groupService)))
 	mux.Handle("POST /admin/v1/model-monitors", protectStepUp(
 		adminsettings.StepUpOperationChannelModel,
-		adminModelMonitorCreateHandler(groupService),
+		adminModelMonitorCreateHandler(groupService, relayService),
 		"operations:update",
 	))
 	mux.Handle("PUT /admin/v1/model-monitors/{monitorID}", protectStepUp(
 		adminsettings.StepUpOperationChannelModel,
-		adminModelMonitorUpdateHandler(groupService),
+		adminModelMonitorUpdateHandler(groupService, relayService),
 		"operations:update",
 	))
 	mux.Handle("DELETE /admin/v1/model-monitors/{monitorID}", protectStepUp(
@@ -3463,7 +3463,7 @@ func adminModelMonitorListHandler(service groups.Service) http.Handler {
 	})
 }
 
-func adminModelMonitorCreateHandler(service groups.Service) http.Handler {
+func adminModelMonitorCreateHandler(service groups.Service, relayService relay.ChatCompletionService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		monitors, ok := service.(groups.ModelMonitorService)
 		if !ok || monitors == nil {
@@ -3481,11 +3481,12 @@ func adminModelMonitorCreateHandler(service groups.Service) http.Handler {
 			writeModelMonitorError(w, err)
 			return
 		}
+		triggerInitialActiveModelMonitor(monitors, relayService, item)
 		writeJSON(w, http.StatusCreated, item)
 	})
 }
 
-func adminModelMonitorUpdateHandler(service groups.Service) http.Handler {
+func adminModelMonitorUpdateHandler(service groups.Service, relayService relay.ChatCompletionService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		monitors, ok := service.(groups.ModelMonitorService)
 		if !ok || monitors == nil {
@@ -3503,8 +3504,49 @@ func adminModelMonitorUpdateHandler(service groups.Service) http.Handler {
 			writeModelMonitorError(w, err)
 			return
 		}
+		triggerInitialActiveModelMonitor(monitors, relayService, item)
 		writeJSON(w, http.StatusOK, item)
 	})
+}
+
+// triggerInitialActiveModelMonitor makes the first active probe independent of
+// the five-second scheduler polling cycle. Claiming through the same database
+// method used by the scheduler keeps the save-triggered probe and scheduler
+// mutually exclusive when they race.
+func triggerInitialActiveModelMonitor(monitors groups.ModelMonitorService, relayService relay.ChatCompletionService, item groups.ModelMonitor) {
+	if monitors == nil || relayService == nil || !item.Enabled || item.Mode != groups.MonitorModeActive {
+		return
+	}
+	prober, ok := relayService.(relay.ModelProbeService)
+	if !ok || prober == nil {
+		log.Printf("model monitor initial probe unavailable monitor_id=%s", item.ID)
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		claimed, err := monitors.ClaimActiveModelMonitor(ctx, item.ID)
+		if err != nil {
+			if !errors.Is(err, groups.ErrMonitorBusy) {
+				log.Printf("model monitor initial probe claim failed monitor_id=%s error=%v", item.ID, err)
+			}
+			return
+		}
+		if claimed == nil {
+			return
+		}
+		outcome := relay.ProbeModelCandidates(ctx, prober, claimed.GroupID, claimed.PrimaryModel, claimed.ModelNames)
+		status := groups.MonitorProbeSuccess
+		if outcome.Supported == 0 {
+			status = groups.MonitorProbeSkipped
+		} else if !outcome.Succeeded {
+			status = groups.MonitorProbeFailed
+		}
+		probeError := strings.Join(outcome.Failures, "; ")
+		if err := monitors.CompleteActiveModelMonitor(ctx, claimed.ID, status, probeError); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("model monitor initial probe completion failed monitor_id=%s error=%v", claimed.ID, err)
+		}
+	}()
 }
 
 func adminModelMonitorDeleteHandler(service groups.Service) http.Handler {
