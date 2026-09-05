@@ -115,3 +115,17 @@ test("customer finance navigation groups records, cost center, and orders", () =
   assert.match(consoleView, /billing-orders/);
   assert.match(app, /billing-center/);
 });
+
+test("video debugging exposes Seedance capabilities and request fields", () => {
+  const media = readFileSync(resolve(root, "src", "components", "MediaLabsView.tsx"), "utf8");
+  const translations = readFileSync(resolve(root, "src", "locales", "translations.ts"), "utf8");
+  assert.match(media, /seedanceCapability/);
+  assert.match(media, /supported_resolutions/);
+  assert.match(media, /omni_reference_task_type/);
+  assert.match(media, /reference_image/);
+  assert.match(media, /return_last_frame/);
+  assert.match(media, /execution_expires_after/);
+  assert.match(media, /web_search/);
+  assert.match(translations, /mediaLabSeedanceModelIDRule/);
+  assert.match(translations, /mediaLabSeedanceContentRule/);
+});

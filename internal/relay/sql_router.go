@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -933,6 +934,7 @@ func modelCapabilities(provider, model string) string {
 				"max_reference_videos":       spec.maxReferenceVideos,
 				"max_reference_audios":       spec.maxReferenceAudios,
 				"audio_only_reference":       spec.audioOnlyReference,
+				"supported_resolutions":      sortedStringSet(spec.resolutions),
 				"reference_image_roles":      []string{"reference_image", "first_frame", "last_frame"},
 				"reference_video_role":       "reference_video",
 				"reference_audio_role":       "reference_audio",
@@ -974,6 +976,15 @@ func modelCapabilities(provider, model string) string {
 	default:
 		return `{"modalities":["text","image"],"official_sdk":true,"streaming":true,"tool_calling":true,"multimodal_input":true}`
 	}
+}
+
+func sortedStringSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func (r *SQLChannelRouter) list(ctx context.Context, channelID string) ([]ChannelSummary, error) {

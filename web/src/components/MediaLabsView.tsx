@@ -59,6 +59,20 @@ interface GeneratedImage {
 
 type JSONRecord = Record<string, unknown>;
 
+interface SeedanceSpec {
+  version: string;
+  defaultDuration: number;
+  maxDuration: number;
+  maxReferenceImages: number;
+  maxReferenceVideos: number;
+  maxReferenceAudios: number;
+  audioOnlyReference: boolean;
+  resolutions: string[];
+  supportsOutputFormat: boolean;
+  supportsOmniTaskType: boolean;
+  supportsReturnLastFrame: boolean;
+}
+
 export function ImageLabView(props: MediaLabProps) {
   return <MediaLab {...props} kind="image" />;
 }
@@ -83,6 +97,20 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
   const [imageQuality, setImageQuality] = useState("standard");
   const [imageFormat, setImageFormat] = useState("url");
   const [videoSeconds, setVideoSeconds] = useState("8");
+  const [videoResolution, setVideoResolution] = useState("");
+  const [videoRatio, setVideoRatio] = useState("");
+  const [videoTaskType, setVideoTaskType] = useState("");
+  const [videoGenerateAudio, setVideoGenerateAudio] = useState(false);
+  const [videoReturnLastFrame, setVideoReturnLastFrame] = useState(false);
+  const [videoOutputFormat, setVideoOutputFormat] = useState("");
+  const [videoExecutionExpiry, setVideoExecutionExpiry] = useState("");
+  const [videoPriority, setVideoPriority] = useState("");
+  const [videoWebSearch, setVideoWebSearch] = useState(false);
+  const [videoFirstFrameURL, setVideoFirstFrameURL] = useState("");
+  const [videoLastFrameURL, setVideoLastFrameURL] = useState("");
+  const [videoReferenceImages, setVideoReferenceImages] = useState("");
+  const [videoReferenceVideos, setVideoReferenceVideos] = useState("");
+  const [videoReferenceAudios, setVideoReferenceAudios] = useState("");
   const [busy, setBusy] = useState(false);
   const [copyState, setCopyState] = useState("");
   const [error, setError] = useState("");
@@ -92,6 +120,8 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
   const [videoBlobURL, setVideoBlobURL] = useState("");
   const [videoLoading, setVideoLoading] = useState(false);
   const blobURLRef = useRef("");
+  const selectedModel = availableModels.find((item) => item.name === model);
+  const seedanceSpec = selectedModel ? seedanceCapability(selectedModel) : null;
 
   useEffect(() => {
     if (endpointOptions.some((item) => item.root === endpointRoot)) return;
@@ -102,6 +132,13 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
     if (availableModels.some((item) => item.name === model)) return;
     setModel(availableModels[0]?.name || "");
   }, [availableModels, model]);
+
+  useEffect(() => {
+    if (kind !== "video") return;
+    setVideoSeconds(seedanceSpec ? String(seedanceSpec.defaultDuration) : "8");
+    if (!seedanceSpec?.supportsOmniTaskType) setVideoTaskType("");
+    if (!seedanceSpec?.supportsOutputFormat) setVideoOutputFormat("");
+  }, [kind, seedanceSpec?.supportsOmniTaskType, seedanceSpec?.supportsOutputFormat, seedanceSpec?.defaultDuration, seedanceSpec?.version]);
 
   useEffect(() => () => {
     if (blobURLRef.current) URL.revokeObjectURL(blobURLRef.current);
@@ -174,9 +211,33 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
     return () => { cancelled = true; };
   }, [t, videoBlobURL, videoJob, videoLoading]);
 
+  const seedanceContent = [
+    ...(prompt.trim() ? [{ type: "text", text: prompt.trim() }] : []),
+    ...(videoFirstFrameURL.trim() ? [{ type: "image_url", role: "first_frame", image_url: { url: videoFirstFrameURL.trim() } }] : []),
+    ...(videoLastFrameURL.trim() ? [{ type: "image_url", role: "last_frame", image_url: { url: videoLastFrameURL.trim() } }] : []),
+    ...videoReferenceImages.split(/\r?\n/).map((url) => url.trim()).filter(Boolean).map((url) => ({ type: "image_url", role: "reference_image", image_url: { url } })),
+    ...videoReferenceVideos.split(/\r?\n/).map((url) => url.trim()).filter(Boolean).map((url) => ({ type: "video_url", role: "reference_video", video_url: { url } })),
+    ...videoReferenceAudios.split(/\r?\n/).map((url) => url.trim()).filter(Boolean).map((url) => ({ type: "audio_url", role: "reference_audio", audio_url: { url } })),
+  ];
+  const videoPayload = cleanPayload({
+    model,
+    prompt: seedanceSpec ? undefined : prompt,
+    seconds: Number(videoSeconds),
+    content: seedanceSpec && seedanceContent.length > 0 ? seedanceContent : undefined,
+    resolution: seedanceSpec ? videoResolution : undefined,
+    ratio: seedanceSpec ? videoRatio : undefined,
+    omni_reference_task_type: seedanceSpec ? videoTaskType : undefined,
+    generate_audio: seedanceSpec && videoGenerateAudio ? true : undefined,
+    return_last_frame: seedanceSpec && videoReturnLastFrame ? true : undefined,
+    output_format: seedanceSpec ? videoOutputFormat : undefined,
+    execution_expires_after: seedanceSpec && videoExecutionExpiry ? Number(videoExecutionExpiry) : undefined,
+    priority: seedanceSpec && videoPriority ? Number(videoPriority) : undefined,
+    tools: seedanceSpec && videoWebSearch ? [{ type: "web_search" }] : undefined,
+  });
+  const videoHasReferences = seedanceContent.some((item) => item.type !== "text");
   const payload = kind === "image"
     ? cleanPayload({ model, prompt, n: Number(imageCount), size: imageSize, quality: imageQuality, response_format: imageFormat })
-    : cleanPayload({ model, prompt, seconds: Number(videoSeconds) });
+    : videoPayload;
   const endpoint = `${endpointRoot.replace(/\/+$/, "")}/v1/${kind === "image" ? "images/generations" : "videos"}`;
   const curl = curlExample(endpoint, payload);
 
@@ -198,7 +259,7 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
       setError(t("mediaLabKeyRequired"));
       return;
     }
-    if (!prompt.trim()) {
+    if (!prompt.trim() && !(seedanceSpec && videoHasReferences)) {
       setError(t("mediaLabPromptRequired"));
       return;
     }
@@ -276,7 +337,8 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
                 </div>
                 <Field label={t("mediaLabApiKey")}><Input type="password" value={apiKey} onChange={(event) => setAPIKey(event.target.value)} placeholder={t("mediaLabApiKeyPlaceholder")} autoComplete="off" /></Field>
                 <Field label={t("mediaLabPrompt")}><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t("mediaLabPromptPlaceholder")} className="min-h-32 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></Field>
-                {isImage ? <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Field label={t("mediaLabImageCount")}><select value={imageCount} onChange={(event) => setImageCount(event.target.value)} className={selectClass}><option value="1">1</option><option value="2">2</option><option value="4">4</option></select></Field><Field label={t("mediaLabImageSize")}><select value={imageSize} onChange={(event) => setImageSize(event.target.value)} className={selectClass}><option value="1024x1024">1024 x 1024</option><option value="1536x1024">1536 x 1024</option><option value="1024x1536">1024 x 1536</option></select></Field><Field label={t("mediaLabImageQuality")}><select value={imageQuality} onChange={(event) => setImageQuality(event.target.value)} className={selectClass}><option value="standard">standard</option><option value="hd">hd</option></select></Field><Field label={t("mediaLabResponseFormat")}><select value={imageFormat} onChange={(event) => setImageFormat(event.target.value)} className={selectClass}><option value="url">url</option><option value="b64_json">b64_json</option></select></Field></div> : <div className="max-w-xs"><Field label={t("mediaLabVideoDuration")}><select value={videoSeconds} onChange={(event) => setVideoSeconds(event.target.value)} className={selectClass}><option value="4">4 s</option><option value="8">8 s</option><option value="12">12 s</option></select></Field></div>}
+                {isImage ? <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Field label={t("mediaLabImageCount")}><select value={imageCount} onChange={(event) => setImageCount(event.target.value)} className={selectClass}><option value="1">1</option><option value="2">2</option><option value="4">4</option></select></Field><Field label={t("mediaLabImageSize")}><select value={imageSize} onChange={(event) => setImageSize(event.target.value)} className={selectClass}><option value="1024x1024">1024 x 1024</option><option value="1536x1024">1536 x 1024</option><option value="1024x1536">1024 x 1536</option></select></Field><Field label={t("mediaLabImageQuality")}><select value={imageQuality} onChange={(event) => setImageQuality(event.target.value)} className={selectClass}><option value="standard">standard</option><option value="hd">hd</option></select></Field><Field label={t("mediaLabResponseFormat")}><select value={imageFormat} onChange={(event) => setImageFormat(event.target.value)} className={selectClass}><option value="url">url</option><option value="b64_json">b64_json</option></select></Field></div> : <VideoControls t={t} seedance={seedanceSpec} videoSeconds={videoSeconds} setVideoSeconds={setVideoSeconds} videoResolution={videoResolution} setVideoResolution={setVideoResolution} videoRatio={videoRatio} setVideoRatio={setVideoRatio} videoTaskType={videoTaskType} setVideoTaskType={setVideoTaskType} videoGenerateAudio={videoGenerateAudio} setVideoGenerateAudio={setVideoGenerateAudio} videoReturnLastFrame={videoReturnLastFrame} setVideoReturnLastFrame={setVideoReturnLastFrame} videoOutputFormat={videoOutputFormat} setVideoOutputFormat={setVideoOutputFormat} videoExecutionExpiry={videoExecutionExpiry} setVideoExecutionExpiry={setVideoExecutionExpiry} videoPriority={videoPriority} setVideoPriority={setVideoPriority} videoWebSearch={videoWebSearch} setVideoWebSearch={setVideoWebSearch} videoFirstFrameURL={videoFirstFrameURL} setVideoFirstFrameURL={setVideoFirstFrameURL} videoLastFrameURL={videoLastFrameURL} setVideoLastFrameURL={setVideoLastFrameURL} videoReferenceImages={videoReferenceImages} setVideoReferenceImages={setVideoReferenceImages} videoReferenceVideos={videoReferenceVideos} setVideoReferenceVideos={setVideoReferenceVideos} videoReferenceAudios={videoReferenceAudios} setVideoReferenceAudios={setVideoReferenceAudios} />}
+                {!isImage && seedanceSpec ? <SeedanceGuide t={t} model={selectedModel} spec={seedanceSpec} /> : null}
                 {error ? <div className="flex items-start gap-2 rounded-md border border-rose-500/30 bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"><CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
                 <Button type="button" onClick={() => void submit()} disabled={busy || availableModels.length === 0} className={cn("w-full gap-2 sm:w-auto", isImage ? "bg-fuchsia-600 hover:bg-fuchsia-700" : "bg-cyan-600 hover:bg-cyan-700")}><Play className="h-4 w-4" />{busy ? <><LoaderCircle className="h-4 w-4 animate-spin" />{actionBusy}</> : action}</Button>
               </CardContent>
@@ -295,6 +357,62 @@ export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = f
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="block space-y-2"><span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{label}</span>{children}</label>;
+}
+
+function VideoControls({
+  t, seedance, videoSeconds, setVideoSeconds, videoResolution, setVideoResolution, videoRatio, setVideoRatio,
+  videoTaskType, setVideoTaskType, videoGenerateAudio, setVideoGenerateAudio, videoReturnLastFrame, setVideoReturnLastFrame,
+  videoOutputFormat, setVideoOutputFormat, videoExecutionExpiry, setVideoExecutionExpiry, videoPriority, setVideoPriority,
+  videoWebSearch, setVideoWebSearch, videoFirstFrameURL, setVideoFirstFrameURL, videoLastFrameURL, setVideoLastFrameURL,
+  videoReferenceImages, setVideoReferenceImages, videoReferenceVideos, setVideoReferenceVideos, videoReferenceAudios, setVideoReferenceAudios,
+}: {
+  t: (key: TranslationKey) => string;
+  seedance: SeedanceSpec | null;
+  videoSeconds: string; setVideoSeconds: (value: string) => void;
+  videoResolution: string; setVideoResolution: (value: string) => void;
+  videoRatio: string; setVideoRatio: (value: string) => void;
+  videoTaskType: string; setVideoTaskType: (value: string) => void;
+  videoGenerateAudio: boolean; setVideoGenerateAudio: (value: boolean) => void;
+  videoReturnLastFrame: boolean; setVideoReturnLastFrame: (value: boolean) => void;
+  videoOutputFormat: string; setVideoOutputFormat: (value: string) => void;
+  videoExecutionExpiry: string; setVideoExecutionExpiry: (value: string) => void;
+  videoPriority: string; setVideoPriority: (value: string) => void;
+  videoWebSearch: boolean; setVideoWebSearch: (value: boolean) => void;
+  videoFirstFrameURL: string; setVideoFirstFrameURL: (value: string) => void;
+  videoLastFrameURL: string; setVideoLastFrameURL: (value: string) => void;
+  videoReferenceImages: string; setVideoReferenceImages: (value: string) => void;
+  videoReferenceVideos: string; setVideoReferenceVideos: (value: string) => void;
+  videoReferenceAudios: string; setVideoReferenceAudios: (value: string) => void;
+}) {
+  const durations = seedance ? [...(seedance.version === "2.5" ? ["-1"] : []), ...Array.from({ length: seedance.maxDuration - 3 }, (_, index) => String(index + 4))] : ["4", "8", "12"];
+  return <div className="space-y-4">
+    <div className="max-w-xs"><Field label={t("mediaLabVideoDuration")}><select value={videoSeconds} onChange={(event) => setVideoSeconds(event.target.value)} className={selectClass}>{durations.map((value) => <option key={value} value={value}>{value === "-1" ? t("mediaLabVideoAutoDuration") : `${value} s`}</option>)}</select></Field></div>
+    {seedance ? <section className="space-y-4 rounded-xl border border-cyan-500/20 bg-cyan-500/[0.04] p-4 dark:border-cyan-400/20 dark:bg-cyan-500/[0.06]">
+      <div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("mediaLabSeedanceAdvancedTitle")}</div><p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400">{t("mediaLabSeedanceAdvancedHint")}</p></div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t("mediaLabSeedanceResolution")}><select value={videoResolution} onChange={(event) => setVideoResolution(event.target.value)} className={selectClass}><option value="">{t("mediaLabDefaultOption")}</option>{seedance.resolutions.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
+        <Field label={t("mediaLabSeedanceRatio")}><select value={videoRatio} onChange={(event) => setVideoRatio(event.target.value)} className={selectClass}><option value="">{t("mediaLabDefaultOption")}</option>{["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((value) => <option key={value} value={value}>{value}</option>)}</select></Field>
+        {seedance.supportsOmniTaskType ? <Field label={t("mediaLabSeedanceTaskType")}><select value={videoTaskType} onChange={(event) => setVideoTaskType(event.target.value)} className={selectClass}><option value="">{t("mediaLabDefaultOption")}</option><option value="auto">auto</option><option value="reference">reference</option><option value="edit">edit</option><option value="extend">extend</option></select></Field> : null}
+        {seedance.supportsOutputFormat ? <Field label={t("mediaLabSeedanceOutputFormat")}><select value={videoOutputFormat} onChange={(event) => setVideoOutputFormat(event.target.value)} className={selectClass}><option value="">mp4</option><option value="mp4">mp4</option><option value="mov">mov</option></select></Field> : null}
+        <Field label={t("mediaLabSeedanceExecutionExpiry")}><Input type="number" min={3600} max={259200} value={videoExecutionExpiry} onChange={(event) => setVideoExecutionExpiry(event.target.value)} placeholder="3600" /></Field>
+        <Field label={t("mediaLabSeedancePriority")}><select value={videoPriority} onChange={(event) => setVideoPriority(event.target.value)} className={selectClass}><option value="">{t("mediaLabDefaultOption")}</option>{[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((value) => <option key={value} value={String(value)}>{value}</option>)}</select></Field>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3"><Toggle label={t("mediaLabSeedanceGenerateAudio")} checked={videoGenerateAudio} onChange={setVideoGenerateAudio} /><Toggle label={t("mediaLabSeedanceReturnLastFrame")} checked={videoReturnLastFrame} onChange={setVideoReturnLastFrame} disabled={!seedance.supportsReturnLastFrame} /><Toggle label={t("mediaLabSeedanceWebSearch")} checked={videoWebSearch} onChange={setVideoWebSearch} /></div>
+      <div className="grid gap-4 sm:grid-cols-2"><URLField label={t("mediaLabSeedanceFirstFrame")} value={videoFirstFrameURL} onChange={setVideoFirstFrameURL} placeholder={t("mediaLabSeedanceURLPlaceholder")} /><URLField label={t("mediaLabSeedanceLastFrame")} value={videoLastFrameURL} onChange={setVideoLastFrameURL} placeholder={t("mediaLabSeedanceURLPlaceholder")} /><URLField label={`${t("mediaLabSeedanceReferenceImages")} (${seedance.maxReferenceImages})`} value={videoReferenceImages} onChange={setVideoReferenceImages} placeholder={t("mediaLabSeedanceURLsPlaceholder")} /><URLField label={`${t("mediaLabSeedanceReferenceVideos")} (${seedance.maxReferenceVideos})`} value={videoReferenceVideos} onChange={setVideoReferenceVideos} placeholder={t("mediaLabSeedanceURLsPlaceholder")} /><URLField label={`${t("mediaLabSeedanceReferenceAudios")} (${seedance.maxReferenceAudios})`} value={videoReferenceAudios} onChange={setVideoReferenceAudios} placeholder={t("mediaLabSeedanceURLsPlaceholder")} /></div>
+    </section> : null}
+  </div>;
+}
+
+function Toggle({ label, checked, onChange, disabled = false }: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
+  return <label className={cn("flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-200", disabled && "opacity-50")}><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} disabled={disabled} className="h-4 w-4 accent-cyan-600" />{label}</label>;
+}
+
+function URLField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
+  return <label className="block space-y-2 sm:col-span-1"><span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{label}</span><textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="min-h-20 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-900 outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>;
+}
+
+function SeedanceGuide({ t, model, spec }: { t: (key: TranslationKey) => string; model?: PublicModelSummary; spec: SeedanceSpec }) {
+  return <div className="space-y-3 rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-4 dark:border-indigo-400/20 dark:bg-indigo-500/[0.06]"><div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-semibold text-indigo-900 dark:text-indigo-100"><span>{t("mediaLabSeedanceGuideTitle")}</span><code className="rounded bg-white/70 px-2 py-1 font-mono text-xs dark:bg-slate-950/50">{model?.name || "-"}</code><span>Seedance {spec.version}</span></div><div className="grid gap-2 text-xs leading-5 text-slate-600 dark:text-slate-300 sm:grid-cols-2"><span>{t("mediaLabSeedanceDurationRule")} 4-{spec.maxDuration}s{spec.version === "2.5" ? ` / ${t("mediaLabVideoAutoDuration")}` : ""}</span><span>{t("mediaLabSeedanceResolutionRule")} {spec.resolutions.join(", ")}</span><span>{t("mediaLabSeedanceReferenceRule")} {spec.maxReferenceImages} {t("mediaLabSeedanceImageUnit")} · {spec.maxReferenceVideos} {t("mediaLabSeedanceVideoUnit")} · {spec.maxReferenceAudios} {t("mediaLabSeedanceAudioUnit")}</span><span>{spec.audioOnlyReference ? t("mediaLabSeedanceAudioOnly") : t("mediaLabSeedanceVisualRequired")}</span></div><p className="text-xs leading-5 text-slate-600 dark:text-slate-300">{t("mediaLabSeedanceModelIDRule")}</p><p className="text-xs leading-5 text-slate-600 dark:text-slate-300">{t("mediaLabSeedanceContentRule")}</p><p className="text-xs leading-5 text-slate-600 dark:text-slate-300">{spec.version === "2.5" ? t("mediaLabSeedance25TaskRule") : t("mediaLabSeedance20TaskRule")}</p></div>;
 }
 
 function RequestDetails({ t, payload, curl, copy, copyState }: { t: (key: TranslationKey) => string; payload: Record<string, unknown>; curl: string; copy: (value: string, target: string) => Promise<void>; copyState: string }) {
@@ -432,6 +550,27 @@ function videoStatusLabel(status: string, t: (key: TranslationKey) => string) {
 function formatElapsed(value: number) {
   const seconds = Math.max(0, Math.floor(value / 1000));
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+function seedanceCapability(model: PublicModelSummary): SeedanceSpec | null {
+  const capabilities = model.capabilities || {};
+  const version = typeof capabilities.seedance_version === "string" ? capabilities.seedance_version.trim() : "";
+  if (!version) return null;
+  const numberValue = (value: unknown, fallback: number) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const stringValues = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim()) : [];
+  return {
+    version,
+    defaultDuration: numberValue(capabilities.default_duration_seconds, version === "2.5" ? -1 : 5),
+    maxDuration: numberValue(capabilities.max_duration_seconds, version === "2.5" ? 30 : 15),
+    maxReferenceImages: numberValue(capabilities.max_reference_images, version === "2.5" ? 30 : 9),
+    maxReferenceVideos: numberValue(capabilities.max_reference_videos, version === "2.5" ? 10 : 3),
+    maxReferenceAudios: numberValue(capabilities.max_reference_audios, version === "2.5" ? 10 : 3),
+    audioOnlyReference: capabilities.audio_only_reference === true,
+    resolutions: stringValues(capabilities.supported_resolutions).length > 0 ? stringValues(capabilities.supported_resolutions) : version === "2.5" ? ["480p", "720p", "1080p"] : ["480p", "720p", "1080p", "4k"],
+    supportsOutputFormat: capabilities.supports_output_format === true,
+    supportsOmniTaskType: capabilities.supports_omni_task_type === true,
+    supportsReturnLastFrame: capabilities.supports_return_last_frame === true,
+  };
 }
 
 const selectClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100";
