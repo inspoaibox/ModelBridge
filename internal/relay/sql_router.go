@@ -116,6 +116,63 @@ const (
 	channelCircuitDuration  = 5 * time.Minute
 )
 
+const probeFailureThreshold = 3
+
+func (r *SQLChannelRouter) RecordChannelModelProbeFailure(ctx context.Context, channelID, model string, statusCode int) error {
+	if r == nil || r.db == nil {
+		return ErrUnavailable
+	}
+	channelID = strings.TrimSpace(channelID)
+	model = strings.TrimSpace(model)
+	if channelID == "" || !ids.Valid(channelID) || model == "" || statusCode < 0 || statusCode > 599 {
+		return ErrInvalidRequest
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE channel_models cm
+		SET probe_consecutive_failures = cm.probe_consecutive_failures + 1,
+		    probe_last_failure_status = NULLIF($3, 0),
+		    probe_last_failure_at = now(),
+		    probe_health = CASE
+		        WHEN cm.probe_consecutive_failures + 1 >= $4 THEN 'unavailable'
+		        ELSE 'degraded'
+		    END,
+		    updated_at = now()
+		FROM models m, channels c
+		WHERE cm.channel_id = $1::uuid
+		  AND cm.model_id = m.id
+		  AND c.id = cm.channel_id
+		  AND m.provider = c.provider
+		  AND m.model_name = $2
+	`, channelID, model, statusCode, probeFailureThreshold)
+	return err
+}
+
+func (r *SQLChannelRouter) RecordChannelModelProbeSuccess(ctx context.Context, channelID, model string) error {
+	if r == nil || r.db == nil {
+		return ErrUnavailable
+	}
+	channelID = strings.TrimSpace(channelID)
+	model = strings.TrimSpace(model)
+	if channelID == "" || !ids.Valid(channelID) || model == "" {
+		return ErrInvalidRequest
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE channel_models cm
+		SET probe_consecutive_failures = 0,
+		    probe_last_failure_status = NULL,
+		    probe_last_success_at = now(),
+		    probe_health = 'normal',
+		    updated_at = now()
+		FROM models m, channels c
+		WHERE cm.channel_id = $1::uuid
+		  AND cm.model_id = m.id
+		  AND c.id = cm.channel_id
+		  AND m.provider = c.provider
+		  AND m.model_name = $2
+	`, channelID, model)
+	return err
+}
+
 func (r *SQLChannelRouter) RecordChannelFailure(ctx context.Context, channelID string, statusCode int) error {
 	if r == nil || r.db == nil {
 		return ErrUnavailable
@@ -621,6 +678,11 @@ func (r *SQLChannelRouter) SetChannelStatus(
 		    last_failure_status = NULL,
 		    last_failure_at = NULL,
 		    last_success_at = NULL,
+		    probe_consecutive_failures = 0,
+		    probe_last_failure_status = NULL,
+		    probe_last_failure_at = NULL,
+		    probe_last_success_at = NULL,
+		    probe_health = 'unknown',
 		    health_status = 'unknown',
 		    updated_at = now()
 			WHERE channel_id = $1::uuid
@@ -837,9 +899,9 @@ func (r *SQLChannelRouter) replaceChannelModels(
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO channel_models (
-				channel_id, model_id, upstream_model_name, enabled, health_status
+				channel_id, model_id, upstream_model_name, enabled, health_status, probe_health
 			) VALUES (
-				$1, $2, $3, $4, 'unknown'
+				$1, $2, $3, $4, 'unknown', 'unknown'
 			)
 		`, channelID, storedModelID, model.UpstreamModel, channelModelEnabled(model)); err != nil {
 			return err
@@ -1073,7 +1135,8 @@ func channelListQuery(where string) string {
 		                   'provider', m.provider,
 		                   'upstream_model', cm.upstream_model_name,
 		                   'enabled', cm.enabled,
-		                   'health_status', cm.health_status
+						   'health_status', cm.health_status,
+						   'probe_health', cm.probe_health
 		               )
 		               ORDER BY m.provider, m.model_name
 		           ) FILTER (WHERE m.id IS NOT NULL),

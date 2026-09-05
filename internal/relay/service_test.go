@@ -699,6 +699,37 @@ type fakeChannelRouter struct {
 	groupPolicyErr  error
 	rpmAllowed      *bool
 	rpmCalls        int
+	healthFailures  int
+	healthSuccesses int
+	modelFailures   int
+	modelSuccesses  int
+	probeFailures   int
+	probeSuccesses  int
+}
+
+func (r *fakeChannelRouter) RecordChannelFailure(_ context.Context, _ string, _ int) error {
+	r.healthFailures++
+	return nil
+}
+func (r *fakeChannelRouter) RecordChannelSuccess(_ context.Context, _ string) error {
+	r.healthSuccesses++
+	return nil
+}
+func (r *fakeChannelRouter) RecordChannelModelFailure(_ context.Context, _, _ string, _ int) error {
+	r.modelFailures++
+	return nil
+}
+func (r *fakeChannelRouter) RecordChannelModelSuccess(_ context.Context, _, _ string) error {
+	r.modelSuccesses++
+	return nil
+}
+func (r *fakeChannelRouter) RecordChannelModelProbeFailure(_ context.Context, _, _ string, _ int) error {
+	r.probeFailures++
+	return nil
+}
+func (r *fakeChannelRouter) RecordChannelModelProbeSuccess(_ context.Context, _, _ string) error {
+	r.probeSuccesses++
+	return nil
 }
 
 func (r *fakeChannelRouter) Select(_ context.Context, model string) (Channel, error) {
@@ -1054,10 +1085,11 @@ func TestProbeModelUsesMinimalProviderCompatibleRequestWithoutBilling(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			provider := &recordingProvider{}
 			biller := &fakeBillingService{reservation: billing.Reservation{ID: "must-not-be-used"}}
+			router := &fakeChannelRouter{candidates: []Channel{{
+				ID: "channel-1", Provider: test.provider, ModelName: "gpt-5", CredentialRef: "env:KEY", Priority: 100, Weight: 100,
+			}}}
 			service, err := NewService(
-				&fakeChannelRouter{candidates: []Channel{{
-					ID: "channel-1", Provider: test.provider, CredentialRef: "env:KEY", Priority: 100, Weight: 100,
-				}}},
+				router,
 				EnvCredentialResolver{Lookup: func(string) string { return "sk-probe" }},
 				map[string]Provider{test.provider: provider},
 				biller,
@@ -1083,6 +1115,12 @@ func TestProbeModelUsesMinimalProviderCompatibleRequestWithoutBilling(t *testing
 			}
 			if (provider.received.Request.MaxCompletionTokens != nil) != test.wantMaxCompletionTokens {
 				t.Fatalf("max_completion_tokens presence = %v, want %v", provider.received.Request.MaxCompletionTokens != nil, test.wantMaxCompletionTokens)
+			}
+			if router.healthFailures != 0 || router.healthSuccesses != 0 || router.modelFailures != 0 || router.modelSuccesses != 0 {
+				t.Fatalf("probe must not mutate customer health state: %#v", router)
+			}
+			if router.probeSuccesses != 1 || router.probeFailures != 0 {
+				t.Fatalf("probe health state was not recorded separately: %#v", router)
 			}
 		})
 	}

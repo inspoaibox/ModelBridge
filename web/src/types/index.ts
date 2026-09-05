@@ -5,8 +5,8 @@ export type Language = "zh" | "en";
 export type Audience = "admin" | "console";
 export type TranslationKey = keyof (typeof translations)["zh"];
 export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "usage" | "audit" | "enterprise" | "settings";
-export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "billing-records" | "billing-center" | "billing-orders" | "enterprise" | "profile" | "docs";
-export type View = "home" | "models" | "image-lab" | "video-lab" | "login" | "admin-login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
+export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "billing-records" | "billing-center" | "billing-orders" | "interface-debug-text" | "interface-debug-model" | "interface-debug-image" | "enterprise" | "profile" | "docs";
+export type View = "home" | "models" | "login" | "admin-login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
 
 export interface Principal {
   id: string;

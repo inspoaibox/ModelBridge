@@ -13,7 +13,9 @@ import {
   Gauge,
   KeyRound,
   LayoutDashboard,
+  Image,
   LogOut,
+  MessageSquare,
   Network,
   Pencil,
   Pause,
@@ -25,13 +27,14 @@ import {
   Ban,
   Trash2,
   UserRound,
+  Video,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, EnterpriseVerification, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, PaymentOrder, PaymentOrderList, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, PublicPaymentProvider, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
+import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, EnterpriseVerification, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, PaymentOrder, PaymentOrderList, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, PublicModelSummary, PublicPaymentProvider, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn, formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import { ProfilePanel } from "@/components/ProfilePanel";
@@ -41,6 +44,8 @@ import { ModelStatusPanel } from "@/components/ModelStatusPanel";
 import { EnterpriseVerificationPanel } from "@/components/EnterpriseVerificationPanel";
 import { PaymentRechargePanel } from "@/components/PaymentRechargePanel";
 import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
+import { ImageLabView, VideoLabView } from "@/components/MediaLabsView";
+import { TextDebugPanel } from "@/components/TextDebugPanel";
 
 interface ConsoleViewProps {
   language: Language;
@@ -99,6 +104,7 @@ interface ConsoleViewProps {
   consoleUsageTo: string;
   setConsoleUsageTo: (value: string) => void;
   apiEndpoints: PublicAPIEndpoint[];
+  models: PublicModelSummary[];
   modelStatusEnabled: boolean;
   modelStatusReport: ModelStatusReport | null;
   modelStatusBusy: boolean;
@@ -166,6 +172,12 @@ const consoleSections: Array<{ id: ConsoleSection; icon: typeof LayoutDashboard;
   { id: "enterprise", icon: Building2, label: "consoleNavEnterprise", title: "enterpriseTitle", description: "enterpriseDescription", permission: "enterprise:read" },
   { id: "profile", icon: UserRound, label: "consoleNavProfile", title: "consoleProfileTitle", description: "consoleProfileDescription" },
   { id: "docs", icon: BookOpen, label: "consoleNavDocs", title: "consoleDocsTitle", description: "consoleDocsDescription" },
+];
+
+const interfaceDebugSections: Array<{ id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey }> = [
+  { id: "interface-debug-text", icon: MessageSquare, label: "consoleNavDebugText", title: "consoleDebugTextTitle", description: "consoleDebugTextDescription" },
+  { id: "interface-debug-model", icon: Video, label: "consoleNavDebugModel", title: "consoleDebugModelTitle", description: "consoleDebugModelDescription" },
+  { id: "interface-debug-image", icon: Image, label: "consoleNavDebugImage", title: "consoleDebugImageTitle", description: "consoleDebugImageDescription" },
 ];
 
 export function ConsoleView({
@@ -279,12 +291,15 @@ export function ConsoleView({
   updateProjectMember,
   removeProjectMember,
   projectMemberActionBusy,
+  models,
 }: ConsoleViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const hasPermission = (permission?: string) => !permission || principal?.permissions?.includes(permission) === true;
   const visibleSections = consoleSections.filter((item) => item.id !== "model-status" || modelStatusEnabled).filter((item) => hasPermission(item.permission));
-  const displayedSection = visibleSections.some((item) => item.id === section) ? section : "dashboard";
-  const activeSection = visibleSections.find((item) => item.id === displayedSection) || consoleSections[0];
+  const visibleInterfaceDebugSections = interfaceDebugSections;
+  const allVisibleSections = [...visibleSections, ...visibleInterfaceDebugSections];
+  const displayedSection = allVisibleSections.some((item) => item.id === section) ? section : "dashboard";
+  const activeSection = allVisibleSections.find((item) => item.id === displayedSection) || consoleSections[0];
   const selectSection = (next: ConsoleSection) => {
     const normalized = next === "usage" ? "billing-records" : next;
     setSection(normalized);
@@ -303,6 +318,7 @@ export function ConsoleView({
         <div className="mb-6 rounded-2xl border border-indigo-500/20 bg-gradient-to-br from-indigo-500/10 via-cyan-500/5 to-transparent p-4 dark:border-indigo-400/20"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"><ShieldCheck className="h-4 w-4" />{t("consoleWorkspaceEyebrow")}</div><div className="mt-3 truncate text-sm font-semibold text-slate-900 dark:text-white">{principal?.tenant_id || t("consoleTenantUnknown")}</div><div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{t("consoleTenantWorkspace")}</div></div>
         <nav className="flex-1 space-y-1" aria-label={t("consoleNavigation")}>
           {visibleSections.map((item) => { const Icon = item.icon; const active = item.id === displayedSection; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-all", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>; })}
+          <div className="mt-5 border-t border-slate-200/80 pt-4 dark:border-slate-800/80"><div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{t("consoleNavInterfaceDebug")}</div>{visibleInterfaceDebugSections.map((item) => { const Icon = item.icon; const active = item.id === displayedSection; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-all", active ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-500/20" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white")}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{t(item.label)}</span>{active ? <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white" /> : null}</button>; })}</div>
         </nav>
         <div className="space-y-3 border-t border-slate-200/80 pt-4 dark:border-slate-800/80"><Button variant="outline" size="sm" onClick={handleSignOut} className="w-full gap-2 text-xs"><LogOut className="h-3.5 w-3.5" />{t("signOut")}</Button></div>
       </aside>
@@ -311,7 +327,7 @@ export function ConsoleView({
         <div className="mx-auto max-w-[1560px] space-y-6">
           <div className="flex flex-col gap-4 border-b border-slate-200/80 pb-5 dark:border-slate-800/80 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400"><span>{t("consoleWorkspaceEyebrow")}</span><span>/</span><span className="text-slate-700 dark:text-slate-300">{t(activeSection.label)}</span></div><h1 className="mt-2 text-2xl font-extrabold tracking-tight text-slate-950 dark:text-white sm:text-3xl">{t(activeSection.title)}</h1><p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">{t(activeSection.description)}</p></div><div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/80 px-3.5 py-2 shadow-sm dark:border-slate-800 dark:bg-slate-900/80"><div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-xs font-bold uppercase text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300">{(principal?.id || "U").slice(0, 2)}</div><div><div className="text-[10px] font-bold uppercase text-slate-400">{t("consoleCurrentUser")}</div><div className="max-w-[180px] truncate font-mono text-xs text-slate-800 dark:text-slate-200">{principal?.id || "-"}</div></div></div></div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{visibleSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === displayedSection ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}</div>
+          <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{visibleSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === displayedSection ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}<span className="inline-flex shrink-0 items-center px-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{t("consoleNavInterfaceDebug")}</span>{visibleInterfaceDebugSections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => selectSection(item.id)} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", item.id === displayedSection ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Icon className="h-3.5 w-3.5" />{t(item.label)}</button>; })}</div>
 
           {displayedSection === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
           {displayedSection === "model-status" ? <ModelStatusPanel language={language} report={modelStatusReport} busy={modelStatusBusy} message={modelStatusMessage} refresh={refreshModelStatus} /> : null}
@@ -320,6 +336,9 @@ export function ConsoleView({
           {displayedSection === "tokens" ? <TokensPanel language={language} t={t} tokens={tokens} tokensBusy={tokensBusy} tokensMessage={tokensMessage} refreshTokens={refreshTokens} editToken={editToken} pauseToken={pauseToken} resumeToken={resumeToken} terminateToken={terminateToken} deleteToken={deleteToken} copyToken={copyToken} tokenSecretAvailable={tokenSecretAvailable} tokenActionBusy={tokenActionBusy} openCreateToken={openCreateToken} canCreateToken={canCreateToken} canRevokeToken={canRevokeToken} canUpdateToken={hasPermission("token:update")} apiEndpoints={apiEndpoints} /> : null}
           {displayedSection === "billing" || displayedSection === "billing-center" ? <BillingPanel language={language} t={t} billingAccount={billingAccount} billingBusy={billingBusy} billingMessage={billingMessage} refreshBilling={refreshBilling} paymentProviders={paymentProviders} paymentBusy={paymentBusy} paymentMessage={paymentMessage} paymentOrder={paymentOrder} createPaymentOrder={createPaymentOrder} refreshPaymentOrder={refreshPaymentOrder} capturePayPal={capturePayPal} /> : null}
           {displayedSection === "billing-orders" ? <PaymentOrdersPanel language={language} t={t} report={paymentOrders} busy={paymentOrdersBusy} refresh={refreshPaymentOrders} /> : null}
+          {displayedSection === "interface-debug-text" ? <TextDebugPanel language={language} models={models} apiEndpoints={apiEndpoints} /> : null}
+          {displayedSection === "interface-debug-model" ? <VideoLabView language={language} models={models} apiEndpoints={apiEndpoints} routeTo={routeTo} embedded /> : null}
+          {displayedSection === "interface-debug-image" ? <ImageLabView language={language} models={models} apiEndpoints={apiEndpoints} routeTo={routeTo} embedded /> : null}
           {displayedSection === "enterprise" ? <EnterpriseVerificationPanel language={language} item={enterpriseVerification} busy={enterpriseBusy} message={enterpriseMessage} refresh={refreshEnterprise} submit={submitEnterprise} /> : null}
           {displayedSection === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} totpEnabled={totpEnabled} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
           {displayedSection === "docs" ? <UsageDocsPanel language={language} routeTo={routeTo} apiEndpoints={apiEndpoints} /> : null}

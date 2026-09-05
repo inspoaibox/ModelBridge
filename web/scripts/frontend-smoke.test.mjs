@@ -39,19 +39,20 @@ test("home hash route is wired into the application", () => {
   assert.match(app, /currentView === "home"/);
 });
 
-test("image and video testing labs are available from the model plaza", () => {
+test("interface debugging is available inside the customer console", () => {
   const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
   const types = readFileSync(resolve(root, "src", "types", "index.ts"), "utf8");
   const plaza = readFileSync(resolve(root, "src", "components", "ModelPlazaView.tsx"), "utf8");
   const labs = readFileSync(resolve(root, "src", "components", "MediaLabsView.tsx"), "utf8");
-  assert.match(types, /"image-lab"/);
-  assert.match(types, /"video-lab"/);
-  assert.match(app, /raw === "image-lab"/);
-  assert.match(app, /raw === "video-lab"/);
-  assert.match(app, /<ImageLabView/);
-  assert.match(app, /<VideoLabView/);
-  assert.match(plaza, /routeTo\("#image-lab"\)/);
-  assert.match(plaza, /routeTo\("#video-lab"\)/);
+  assert.match(types, /"interface-debug-text"/);
+  assert.match(types, /"interface-debug-model"/);
+  assert.match(types, /"interface-debug-image"/);
+  assert.match(app, /value === "interface-debug-text"/);
+  assert.match(app, /value === "interface-debug-model"/);
+  assert.match(app, /value === "interface-debug-image"/);
+  assert.match(plaza, /export function ModelPlazaView/);
+  assert.doesNotMatch(plaza, /routeTo\("#image-lab"\)/);
+  assert.doesNotMatch(plaza, /routeTo\("#video-lab"\)/);
   assert.match(labs, /kind === "image" \? "images\/generations" : "videos"/);
   assert.match(labs, /\/v1\/videos/);
   assert.match(labs, /navigator\.clipboard\.writeText/);

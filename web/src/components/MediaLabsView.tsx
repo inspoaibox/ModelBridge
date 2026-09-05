@@ -23,11 +23,12 @@ import { translations } from "@/locales/translations";
 
 type LabKind = "image" | "video";
 
-interface MediaLabProps {
+export interface MediaLabProps {
   language: Language;
   models: PublicModelSummary[];
   apiEndpoints: PublicAPIEndpoint[];
   routeTo: (target: string) => void;
+  embedded?: boolean;
 }
 
 interface EndpointOption {
@@ -66,7 +67,7 @@ export function VideoLabView(props: MediaLabProps) {
   return <MediaLab {...props} kind="video" />;
 }
 
-function MediaLab({ language, models, apiEndpoints, routeTo, kind }: MediaLabProps & { kind: LabKind }) {
+export function MediaLab({ language, models, apiEndpoints, routeTo, embedded = false, kind }: MediaLabProps & { kind: LabKind }) {
   const t = useCallback((key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key, [language]);
   const endpointOptions = useMemo(() => endpointChoices(apiEndpoints, t("mediaLabCurrentGateway")), [apiEndpoints, t]);
   const availableModels = useMemo(
@@ -254,10 +255,10 @@ function MediaLab({ language, models, apiEndpoints, routeTo, kind }: MediaLabPro
   const actionBusy = isImage ? t("mediaLabGeneratingImage") : t("mediaLabCreatingVideo");
 
   return (
-    <div className="min-h-[calc(100vh-72px)] bg-slate-50 px-4 py-6 dark:bg-slate-950 sm:px-6 lg:px-10">
+    <div className={embedded ? "space-y-5" : "min-h-[calc(100vh-72px)] bg-slate-50 px-4 py-6 dark:bg-slate-950 sm:px-6 lg:px-10"}>
       <div className="mx-auto max-w-[1480px] space-y-5">
         <section className={cn("overflow-hidden border px-5 py-6 shadow-sm sm:px-7", isImage ? "border-fuchsia-500/20 bg-fuchsia-500/[0.045] dark:border-fuchsia-400/20" : "border-cyan-500/20 bg-cyan-500/[0.045] dark:border-cyan-400/20")}>
-          <Button type="button" variant="ghost" size="sm" onClick={() => routeTo("#models")} className="-ml-2 mb-5 gap-1.5 text-slate-600 dark:text-slate-300"><ArrowLeft className="h-4 w-4" />{t("mediaLabBackToModels")}</Button>
+          {!embedded ? <Button type="button" variant="ghost" size="sm" onClick={() => routeTo("#models")} className="-ml-2 mb-5 gap-1.5 text-slate-600 dark:text-slate-300"><ArrowLeft className="h-4 w-4" />{t("mediaLabBackToModels")}</Button> : null}
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-3xl"><div className={cn("flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em]", isImage ? "text-fuchsia-700 dark:text-fuchsia-300" : "text-cyan-700 dark:text-cyan-300")}><Icon className="h-4 w-4" />{isImage ? t("mediaLabImageEyebrow") : t("mediaLabVideoEyebrow")}</div><h1 className="mt-3 text-3xl font-bold text-slate-950 dark:text-white">{title}</h1><p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-400">{description}</p></div>
             <div className="max-w-sm rounded-lg border border-slate-200/80 bg-white/80 px-4 py-3 text-xs leading-5 text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300"><KeyRound className="mr-2 inline h-4 w-4 text-emerald-600 dark:text-emerald-300" />{t("mediaLabKeyNotice")}</div>

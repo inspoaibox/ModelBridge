@@ -32,7 +32,8 @@ export function ModelStatusPanel({ language, report, busy, message, refresh }: M
   const groups = report?.groups || [];
   const models = groups.flatMap((group) => group.models);
   const normal = models.filter((model) => model.status === "normal").length;
-  const attention = models.filter((model) => model.status !== "normal").length;
+  const attention = models.filter((model) => model.status === "degraded" || model.status === "pending").length;
+  const unavailable = models.filter((model) => model.status === "unavailable" || model.status === "disabled").length;
 
   return (
     <div className="space-y-6">
@@ -51,11 +52,12 @@ export function ModelStatusPanel({ language, report, busy, message, refresh }: M
             {t("consoleRefresh")}
           </Button>
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <SummaryMetric icon={Layers3} label={t("consoleModelStatusGroups")} value={String(groups.length)} tone="indigo" />
           <SummaryMetric icon={Server} label={t("consoleModelStatusModels")} value={String(models.length)} tone="cyan" />
           <SummaryMetric icon={CheckCircle2} label={t("consoleModelStatusNormal")} value={String(normal)} tone="emerald" />
           <SummaryMetric icon={TriangleAlert} label={t("consoleModelStatusAttention")} value={String(attention)} tone="amber" />
+          <SummaryMetric icon={CircleOff} label={t("consoleModelStatusUnavailableLabel")} value={String(unavailable)} tone="rose" />
         </div>
         <div className="mt-4 flex flex-col gap-2 text-xs text-slate-500 dark:text-slate-400 sm:flex-row sm:items-center sm:justify-between">
           <span className="flex items-center gap-1.5">
@@ -86,13 +88,15 @@ export function ModelStatusPanel({ language, report, busy, message, refresh }: M
   );
 }
 
-function SummaryMetric({ icon: Icon, label, value, tone }: { icon: typeof Activity; label: string; value: string; tone: "indigo" | "cyan" | "emerald" | "amber" }) {
+function SummaryMetric({ icon: Icon, label, value, tone }: { icon: typeof Activity; label: string; value: string; tone: "indigo" | "cyan" | "emerald" | "amber" | "rose" }) {
   const style = tone === "cyan"
     ? "border-cyan-500/20 bg-cyan-500/[0.06] text-cyan-700 dark:text-cyan-300"
     : tone === "emerald"
     ? "border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-700 dark:text-emerald-300"
     : tone === "amber"
     ? "border-amber-500/20 bg-amber-500/[0.06] text-amber-700 dark:text-amber-300"
+    : tone === "rose"
+    ? "border-rose-500/20 bg-rose-500/[0.06] text-rose-700 dark:text-rose-300"
     : "border-indigo-500/20 bg-indigo-500/[0.06] text-indigo-700 dark:text-indigo-300";
   return (
     <div className={cn("flex items-center gap-3 rounded-xl border px-4 py-3", style)}>

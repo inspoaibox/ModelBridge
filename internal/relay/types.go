@@ -143,6 +143,14 @@ type ChannelModelHealthRecorder interface {
 	RecordChannelModelSuccess(context.Context, string, string) error
 }
 
+// ChannelModelProbeHealthRecorder stores active probe observations separately
+// from real customer traffic. Probe results are diagnostics only and never
+// affect routing eligibility or customer-facing health state.
+type ChannelModelProbeHealthRecorder interface {
+	RecordChannelModelProbeFailure(context.Context, string, string, int) error
+	RecordChannelModelProbeSuccess(context.Context, string, string) error
+}
+
 // ModelProbeService performs an explicit, non-tenant probe against the
 // configured upstream route. It must never create a billing reservation or a
 // customer usage record.
@@ -272,6 +280,7 @@ type ChannelModelSummary struct {
 	UpstreamModel string `json:"upstream_model"`
 	Enabled       bool   `json:"enabled"`
 	HealthStatus  string `json:"health_status"`
+	ProbeHealth   string `json:"probe_health,omitempty"`
 }
 
 type ChannelLister interface {
@@ -976,6 +985,18 @@ func (s *Service) recordChannelFailure(ctx context.Context, channel Channel, err
 	}
 }
 
+func (s *Service) recordChannelProbeFailure(ctx context.Context, channel Channel, err error) {
+	if recorder, ok := s.router.(ChannelModelProbeHealthRecorder); ok && strings.TrimSpace(channel.ModelName) != "" {
+		_ = recorder.RecordChannelModelProbeFailure(ctx, channel.ID, channel.ModelName, upstreamStatusCode(err))
+	}
+}
+
+func (s *Service) recordChannelProbeSuccess(ctx context.Context, channel Channel) {
+	if recorder, ok := s.router.(ChannelModelProbeHealthRecorder); ok && strings.TrimSpace(channel.ModelName) != "" {
+		_ = recorder.RecordChannelModelProbeSuccess(ctx, channel.ID, channel.ModelName)
+	}
+}
+
 func (s *Service) recordChannelSuccess(ctx context.Context, channel Channel) {
 	if recorder, ok := s.router.(ChannelHealthRecorder); ok {
 		_ = recorder.RecordChannelSuccess(ctx, channel.ID)
@@ -1051,7 +1072,7 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 		apiKey, resolveErr := s.credentials.Resolve(ctx, channel.CredentialRef)
 		if resolveErr != nil {
 			lastErr = resolveErr
-			s.recordChannelFailure(ctx, channel, resolveErr)
+			s.recordChannelProbeFailure(ctx, channel, resolveErr)
 			continue
 		}
 		upstreamModel := strings.TrimSpace(channel.UpstreamModelName)
@@ -1063,11 +1084,11 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 			Channel: channel, APIKey: apiKey, Request: probeRequest, UpstreamModel: upstreamModel,
 		})
 		if callErr == nil {
-			s.recordChannelSuccess(ctx, channel)
+			s.recordChannelProbeSuccess(ctx, channel)
 			return nil
 		}
 		lastErr = callErr
-		s.recordChannelFailure(ctx, channel, callErr)
+		s.recordChannelProbeFailure(ctx, channel, callErr)
 		if ctx.Err() != nil || !retryableUpstreamError(callErr) {
 			break
 		}

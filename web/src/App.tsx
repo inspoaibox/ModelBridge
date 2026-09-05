@@ -83,8 +83,6 @@ import { translations } from "@/locales/translations";
 const adminEntryPathPattern = /^\/admin-[A-Za-z0-9_-]{16,160}$/;
 const HomeView = lazy(() => import("@/components/HomeView").then((module) => ({ default: module.HomeView })));
 const ModelPlazaView = lazy(() => import("@/components/ModelPlazaView").then((module) => ({ default: module.ModelPlazaView })));
-const ImageLabView = lazy(() => import("@/components/MediaLabsView").then((module) => ({ default: module.ImageLabView })));
-const VideoLabView = lazy(() => import("@/components/MediaLabsView").then((module) => ({ default: module.VideoLabView })));
 const LoginView = lazy(() => import("@/components/LoginView").then((module) => ({ default: module.LoginView })));
 const RegisterView = lazy(() => import("@/components/RegisterView").then((module) => ({ default: module.RegisterView })));
 const ConsoleView = lazy(() => import("@/components/ConsoleView").then((module) => ({ default: module.ConsoleView })));
@@ -129,12 +127,6 @@ function parseRoute(hash: string): SectionRoute {
   if (raw === "models") {
     return { view: "models", section: "dashboard" };
   }
-  if (raw === "image-lab") {
-    return { view: "image-lab", section: "dashboard" };
-  }
-  if (raw === "video-lab") {
-    return { view: "video-lab", section: "dashboard" };
-  }
   if (raw === "admin" || raw.startsWith("admin/")) {
     if (!isAdminEntryLocation()) {
       return { view: "not-found", section: "dashboard" };
@@ -153,7 +145,7 @@ function normalizeConsoleSection(value: string): ConsoleSection {
   if (value === "security") return "profile";
   if (value === "usage") return "billing-records";
   if (value === "billing-center") return "billing";
-  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "billing-records" || value === "billing-center" || value === "billing-orders" || value === "enterprise" || value === "profile" || value === "docs"
+  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "billing-records" || value === "billing-center" || value === "billing-orders" || value === "interface-debug-text" || value === "interface-debug-model" || value === "interface-debug-image" || value === "enterprise" || value === "profile" || value === "docs"
     ? value
     : "dashboard";
 }
@@ -1109,9 +1101,9 @@ export default function App() {
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
-    if (route.view !== "home" && route.view !== "models" && route.view !== "image-lab" && route.view !== "video-lab") return;
+    if (route.view !== "home" && route.view !== "models" && !(route.view === "console" && (consoleSection === "interface-debug-text" || consoleSection === "interface-debug-model" || consoleSection === "interface-debug-image"))) return;
     refreshModelCatalog(true);
-  }, [route.view, language]);
+  }, [route.view, consoleSection, language]);
 
   useEffect(() => {
     if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "groups" && adminSection !== "tokens" && adminSection !== "model-status")) {
@@ -1275,7 +1267,10 @@ export default function App() {
 		if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "model-status") return;
 		void refreshAdminModelMonitors(true);
 		void refreshAdminModelStatus(true);
-		const interval = window.setInterval(() => void refreshAdminModelStatus(false), 15_000);
+		const interval = window.setInterval(() => {
+			void refreshAdminModelMonitors(false);
+			void refreshAdminModelStatus(false);
+		}, 15_000);
 		return () => window.clearInterval(interval);
 	}, [signedIn, audience, route.view, adminSection, language]);
 
@@ -1291,7 +1286,7 @@ export default function App() {
     }
     if (
       isAdminEntryLocation() &&
-      (target === "#home" || target === "#login" || target === "#register" || target === "#models" || target === "#image-lab" || target === "#video-lab")
+      (target === "#home" || target === "#login" || target === "#register" || target === "#models")
     ) {
       window.location.assign(`/${target}`);
       return;
@@ -4263,7 +4258,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       />
 
       {/* Main View Router */}
-      <main className={currentView === "admin" || currentView === "console" || currentView === "models" || currentView === "image-lab" || currentView === "video-lab" ? "flex-1 w-full flex flex-col min-w-0" : "flex-1 w-full max-w-[1720px] mx-auto px-4 sm:px-6 lg:px-8"}>
+      <main className={currentView === "admin" || currentView === "console" || currentView === "models" ? "flex-1 w-full flex flex-col min-w-0" : "flex-1 w-full max-w-[1720px] mx-auto px-4 sm:px-6 lg:px-8"}>
         <Suspense fallback={
           <div className="flex min-h-[50vh] items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500/30 border-t-indigo-500" />
@@ -4293,12 +4288,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             busy={modelCatalogBusy}
             message={modelCatalogMessage}
             refresh={refreshModelCatalog}
-            routeTo={routeTo}
             />
-          ) : currentView === "image-lab" ? (
-            <ImageLabView language={language} models={modelCatalog} apiEndpoints={publicAPIEndpoints} routeTo={routeTo} />
-          ) : currentView === "video-lab" ? (
-            <VideoLabView language={language} models={modelCatalog} apiEndpoints={publicAPIEndpoints} routeTo={routeTo} />
           ) : currentView === "login" || currentView === "admin-login" ? (
             <LoginView
             language={language}
@@ -4413,6 +4403,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             consoleUsageTo={consoleUsageTo}
             setConsoleUsageTo={setConsoleUsageTo}
             apiEndpoints={publicAPIEndpoints}
+            models={modelCatalog}
             modelStatusEnabled={publicFeatures?.model_status_enabled !== false}
             modelStatusReport={modelStatusReport}
             modelStatusBusy={modelStatusBusy}
