@@ -140,6 +140,9 @@ type FinanceRechargeOrder struct {
 	ProviderOrderID string     `json:"provider_order_id,omitempty"`
 	Amount          string     `json:"amount"`
 	CreditedAmount  string     `json:"credited_amount"`
+	PackageID       string     `json:"package_id,omitempty"`
+	BonusAmount     string     `json:"bonus_amount,omitempty"`
+	ValidUntil      *time.Time `json:"valid_until,omitempty"`
 	RechargeRate    string     `json:"recharge_rate"`
 	Currency        string     `json:"currency"`
 	Status          string     `json:"status"`
@@ -543,7 +546,8 @@ func (s *SQLService) financeRechargeOrders(ctx context.Context, query FinanceQue
 		SELECT po.id::text, po.tenant_id::text, ten.name, ten.slug,
 		       po.user_id::text, COALESCE(u.email, ''), po.provider,
 		       po.merchant_order_no, COALESCE(po.provider_order_id, ''),
-		       po.amount::text, po.credited_amount::text, po.recharge_rate::text,
+		       po.amount::text, po.credited_amount::text, COALESCE(po.package_id::text, ''),
+		       COALESCE(po.bonus_amount::text, '0'), po.valid_until, po.recharge_rate::text,
 		       po.currency, po.status, COALESCE(po.failure_reason, ''),
 		       po.paid_at, po.expires_at, po.created_at, po.updated_at
 		FROM payment_orders po
@@ -557,14 +561,14 @@ func (s *SQLService) financeRechargeOrders(ctx context.Context, query FinanceQue
 	}
 	defer rows.Close()
 	orders := make([]FinanceRechargeOrder, 0, query.Limit)
-	for rows.Next() {
-		var item FinanceRechargeOrder
-		var paidAt sql.NullTime
-		if err := rows.Scan(
-			&item.ID, &item.TenantID, &item.TenantName, &item.TenantSlug,
-			&item.UserID, &item.UserEmail, &item.Provider,
-			&item.MerchantOrderNo, &item.ProviderOrderID,
-			&item.Amount, &item.CreditedAmount, &item.RechargeRate,
+		for rows.Next() {
+			var item FinanceRechargeOrder
+			var paidAt, validUntil sql.NullTime
+			if err := rows.Scan(
+				&item.ID, &item.TenantID, &item.TenantName, &item.TenantSlug,
+				&item.UserID, &item.UserEmail, &item.Provider,
+				&item.MerchantOrderNo, &item.ProviderOrderID,
+				&item.Amount, &item.CreditedAmount, &item.PackageID, &item.BonusAmount, &validUntil, &item.RechargeRate,
 			&item.Currency, &item.Status, &item.FailureReason,
 			&paidAt, &item.ExpiresAt, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
@@ -573,12 +577,17 @@ func (s *SQLService) financeRechargeOrders(ctx context.Context, query FinanceQue
 		item.Provider = strings.ToLower(strings.TrimSpace(item.Provider))
 		item.Currency = strings.ToUpper(strings.TrimSpace(item.Currency))
 		item.Amount = normalizeDecimalText(item.Amount)
-		item.CreditedAmount = normalizeDecimalText(item.CreditedAmount)
+			item.CreditedAmount = normalizeDecimalText(item.CreditedAmount)
+			item.BonusAmount = normalizeDecimalText(item.BonusAmount)
 		item.RechargeRate = normalizeDecimalText(item.RechargeRate)
-		if paidAt.Valid {
-			value := paidAt.Time
-			item.PaidAt = &value
-		}
+			if paidAt.Valid {
+				value := paidAt.Time
+				item.PaidAt = &value
+			}
+			if validUntil.Valid {
+				value := validUntil.Time
+				item.ValidUntil = &value
+			}
 		orders = append(orders, item)
 	}
 	if err := rows.Err(); err != nil {

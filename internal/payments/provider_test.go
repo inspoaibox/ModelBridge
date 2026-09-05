@@ -81,6 +81,46 @@ func TestRechargePresetsNormalizeAndValidate(t *testing.T) {
 	}
 }
 
+func TestRechargePackagesNormalizeBonusAndValidity(t *testing.T) {
+	packages, _, err := normalizeRechargePackages([]RechargePackage{{
+		ID: "", Name: "Starter", Kind: "recharge", Currency: "usd", Amount: "100.00", BonusAmount: "10.000", ValidityDays: 0, Enabled: true,
+	}})
+	if err != nil || len(packages) != 1 {
+		t.Fatalf("normalizeRechargePackages() = %#v, %v", packages, err)
+	}
+	if packages[0].Amount != "100" || packages[0].BonusAmount != "10" || packages[0].CreditedAmount != "110" || packages[0].Currency != "USD" {
+		t.Fatalf("normalized package = %#v", packages[0])
+	}
+	if _, _, err := normalizeRechargePackages([]RechargePackage{{ID: "", Name: "Bad", Kind: "recharge", Currency: "USD", Amount: "10", BonusAmount: "-1", Enabled: true}}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("negative bonus must be rejected, got %v", err)
+	}
+}
+
+func TestRechargePackageIDsAreStableWhenMissing(t *testing.T) {
+	input := []RechargePackage{{Name: "Starter", Kind: "recharge", Currency: "USD", Amount: "10", BonusAmount: "0", Enabled: true}}
+	first, _, err := normalizeRechargePackages(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := normalizeRechargePackages(input)
+	if err != nil || first[0].ID != second[0].ID {
+		t.Fatalf("missing package ID changed between reads: %q vs %q", first[0].ID, second[0].ID)
+	}
+}
+
+func TestPublicRechargePackagesFilterCampaignWindow(t *testing.T) {
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	packages := []RechargePackage{
+		{ID: "active", Name: "Active", Kind: "recharge", Currency: "USD", Amount: "10", CreditedAmount: "10", Enabled: true, StartsAt: now.Add(-time.Hour).Format(time.RFC3339), EndsAt: now.Add(time.Hour).Format(time.RFC3339)},
+		{ID: "future", Name: "Future", Kind: "recharge", Currency: "USD", Amount: "20", CreditedAmount: "20", Enabled: true, StartsAt: now.Add(time.Hour).Format(time.RFC3339)},
+		{ID: "subscription", Name: "Subscription", Kind: "subscription", Currency: "USD", Amount: "30", CreditedAmount: "30", Enabled: true},
+	}
+	got := publicRechargePackages(packages, now)
+	if len(got) != 1 || got[0].ID != "active" {
+		t.Fatalf("publicRechargePackages() = %#v", got)
+	}
+}
+
 func TestDisabledProviderCanBeSavedWithIncompleteConfiguration(t *testing.T) {
 	if err := validateProviderConfig(ProviderWechat, map[string]string{}); err != nil {
 		t.Fatalf("disabling an incomplete WeChat provider must remain possible: %v", err)
