@@ -106,6 +106,21 @@ function paymentReturnURL() {
   return url.toString();
 }
 
+function tokenSecretStorageKey(principal: Principal | null) {
+  return principal?.id && principal.tenant_id ? `ai-token-console-token-secrets:${principal.id}:${principal.tenant_id}` : "";
+}
+
+function readTokenSecrets(key: string): Record<string, string> {
+  if (!key) return {};
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(key) || "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === "string" && value.trim() !== ""));
+  } catch {
+    return {};
+  }
+}
+
 function parseRoute(hash: string): SectionRoute {
   const raw = hash.replace(/^#/, "");
   if (isAdminEntryLocation() && (raw === "" || raw === "admin-login")) {
@@ -762,6 +777,8 @@ export default function App() {
   const [issuedToken, setIssuedToken] = useState<IssuedTokenResponse | null>(null);
   const [tokenEditingID, setTokenEditingID] = useState("");
   const [consoleTokenSecrets, setConsoleTokenSecrets] = useState<Record<string, string>>({});
+  const tokenSecretKey = tokenSecretStorageKey(principal);
+  const skipTokenSecretSave = useRef(false);
   const [consoleTokenGroups, setConsoleTokenGroups] = useState<TokenGroupOption[]>([]);
   const [consoleTokenGroupsBusy, setConsoleTokenGroupsBusy] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -778,6 +795,24 @@ export default function App() {
   const [projectMembersMessage, setProjectMembersMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [selectedProjectID, setSelectedProjectID] = useState("");
   const [projectMemberActionBusy, setProjectMemberActionBusy] = useState("");
+
+  useEffect(() => {
+    skipTokenSecretSave.current = true;
+    setConsoleTokenSecrets(readTokenSecrets(tokenSecretKey));
+  }, [tokenSecretKey]);
+
+  useEffect(() => {
+    if (!tokenSecretKey) return;
+    if (skipTokenSecretSave.current) {
+      skipTokenSecretSave.current = false;
+      return;
+    }
+    try {
+      window.localStorage.setItem(tokenSecretKey, JSON.stringify(consoleTokenSecrets));
+    } catch {
+      // Clipboard recovery remains available for the current session if storage is blocked.
+    }
+  }, [consoleTokenSecrets, tokenSecretKey]);
   const [channelFormOpen, setChannelFormOpen] = useState(false);
   const [channelForm, setChannelForm] = useState<ChannelFormState>(() => defaultChannelForm());
   const [channelActionBusy, setChannelActionBusy] = useState("");
@@ -3623,6 +3658,11 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         credentials: "same-origin",
       });
       if (!response.ok) throw new Error("token delete failed");
+      setConsoleTokenSecrets((current) => {
+        const next = { ...current };
+        delete next[token.id];
+        return next;
+      });
       await refreshConsoleTokens(false);
       setTokensMessage({ kind: "success", text: t("tokensDeleteSuccess") });
     } catch {
@@ -4199,7 +4239,6 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
     setTokenCreateMessage({ kind: "", text: "" });
     setIssuedToken(null);
     setTokenEditingID("");
-    setConsoleTokenSecrets({});
     setConsoleTokenGroups([]);
     setConsoleTokenGroupsBusy(false);
     setProjects([]);
