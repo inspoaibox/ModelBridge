@@ -595,16 +595,47 @@ function resolveEnterpriseError(status: number, error: string | undefined, t: (k
   }
 }
 
-function resolvePaymentError(status: number, error: string | undefined, t: (key: TranslationKey) => string, message?: string) {
+function resolvePaymentError(status: number, error: string | undefined, t: (key: TranslationKey) => string, message?: string, stage?: string) {
+  const stageLabel = stage ? paymentFailureStage(stage, t) : "";
+  const withStage = (value: string) => stageLabel ? `${value}（${stageLabel}）` : value;
   switch (error) {
-    case "PAYMENT_PROVIDER_DISABLED": return t("rechargeProviderDisabled");
-    case "PAYMENT_PROVIDER_UNCONFIGURED": return t("rechargeProviderUnconfigured");
-    case "PAYMENT_ORDER_NOT_FOUND": return t("rechargeOrderNotFound");
-    case "PAYMENT_ORDER_CLOSED": return t("rechargeOrderClosed");
-    case "INVALID_PAYMENT_REQUEST": return t("rechargeInvalid");
-    case "PAYMENT_PROVIDER_FAILED": return message?.trim() ? `${t("rechargeProviderFailed")} ${message.trim()}` : t("rechargeFailed");
-    default: return status === 503 ? t("rechargeUnavailable") : t("rechargeFailed");
+    case "PAYMENT_PROVIDER_DISABLED": return withStage(t("rechargeProviderDisabled"));
+    case "PAYMENT_PROVIDER_UNCONFIGURED": return withStage(t("rechargeProviderUnconfigured"));
+    case "PAYMENT_ORDER_NOT_FOUND": return withStage(t("rechargeOrderNotFound"));
+    case "PAYMENT_ORDER_CLOSED": return withStage(t("rechargeOrderClosed"));
+    case "INVALID_PAYMENT_REQUEST": return withStage(t("rechargeInvalid"));
+    case "PAYMENT_PROVIDER_FAILED": {
+      const detail = message?.trim() || "";
+      const providerFailure = /provider returned|provider request|stripe provider|paypal provider/i.test(detail);
+      return detail ? `${withStage(providerFailure ? t("rechargeProviderFailed") : t("rechargeFailed"))} ${detail}` : `${withStage(t("rechargeFailed"))} (HTTP ${status})`;
+    }
+    case "BILLING_ACCOUNT_NOT_FOUND": return withStage(t("rechargeBillingAccountMissing"));
+    case "PAYMENTS_UNAVAILABLE": return withStage(t("rechargeUnavailable"));
+    default: return `${withStage(status === 503 ? t("rechargeUnavailable") : t("rechargeFailed"))} (HTTP ${status})`;
   }
+}
+
+function paymentFailureStage(stage: string, t: (key: TranslationKey) => string) {
+  switch (stage) {
+    case "billing_account": return t("rechargeStageBillingAccount");
+    case "provider_config": return t("rechargeStageProviderConfig");
+    case "package_validation": return t("rechargeStagePackage");
+    case "order_persistence": return t("rechargeStageOrder");
+    case "provider_checkout": return t("rechargeStageCheckout");
+    default: return stage;
+  }
+}
+
+async function parsePaymentPayload(response: Response) {
+  const raw = await response.text();
+  let payload: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (parsed && typeof parsed === "object") payload = parsed as Record<string, unknown>;
+  } catch {
+    payload = { error: "PAYMENT_PROVIDER_FAILED", message: `HTTP ${response.status}${raw.trim() ? `: ${raw.trim().slice(0, 240)}` : ""}` };
+  }
+  return payload;
 }
 
 function featureSettingsUpdatePayload(settings: FeatureSettings) {
@@ -2832,8 +2863,8 @@ export default function App() {
         credentials: "same-origin",
         body: JSON.stringify({ provider, amount, currency, package_id: packageID || "", return_url: paymentReturnURL() }),
       });
-		const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string; message?: string };
-		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message));
+			const result = await parsePaymentPayload(response) as unknown as PaymentOrder & { error?: string; message?: string; stage?: string };
+		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message, result.stage));
       setPaymentOrder(result);
       setPaymentMessage({ kind: "success", text: t("rechargeCreated") });
       await refreshPaymentOrders(0);
@@ -2852,8 +2883,8 @@ export default function App() {
     setPaymentBusy(true);
     try {
       const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(orderID)}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
-		const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string; message?: string };
-		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message));
+			const result = await parsePaymentPayload(response) as unknown as PaymentOrder & { error?: string; message?: string; stage?: string };
+		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message, result.stage));
       setPaymentOrder(result);
       if (result.status === "paid") {
         await refreshConsoleBilling();
@@ -2881,8 +2912,8 @@ export default function App() {
     setPaymentMessage({ kind: "pending", text: t("rechargeConfirming") });
     try {
       const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(paymentOrder.id)}/capture`, { method: "POST", headers: { Accept: "application/json" }, credentials: "same-origin" });
-		const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string; message?: string };
-		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message));
+			const result = await parsePaymentPayload(response) as unknown as PaymentOrder & { error?: string; message?: string; stage?: string };
+		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message, result.stage));
       setPaymentOrder(result);
       await refreshConsoleBilling();
       setPaymentMessage({ kind: "success", text: t("rechargePaid") });

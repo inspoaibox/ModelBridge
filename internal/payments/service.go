@@ -44,6 +44,34 @@ var (
 	ErrCurrencyMismatch  = errors.New("payment currency does not match order")
 )
 
+// OperationError keeps the failing payment stage available to the HTTP layer
+// without exposing database or credential internals to the customer.
+type OperationError struct {
+	Stage string
+	Err   error
+}
+
+func (e *OperationError) Error() string {
+	if e == nil || e.Err == nil {
+		return "payment operation failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *OperationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func operationError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &OperationError{Stage: stage, Err: err}
+}
+
 type ProviderConfig struct {
 	Provider     string            `json:"provider"`
 	Enabled      bool              `json:"enabled"`
@@ -867,32 +895,32 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	}
 	account, err := s.biller.GetPrepaidAccount(ctx, request.TenantID, request.Currency)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, operationError("billing_account", err)
 	}
 	if account.Currency != request.Currency {
-		return CreateResult{}, ErrCurrencyMismatch
+		return CreateResult{}, operationError("billing_account", ErrCurrencyMismatch)
 	}
 	config, err := s.readRawConfig(ctx, request.Provider)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, operationError("provider_config", err)
 	}
 	var enabled bool
 	if err := s.db.QueryRowContext(ctx, `SELECT enabled FROM payment_provider_configs WHERE provider = $1`, request.Provider).Scan(&enabled); errors.Is(err, sql.ErrNoRows) {
-		return CreateResult{}, ErrProviderDisabled
+		return CreateResult{}, operationError("provider_config", ErrProviderDisabled)
 	} else if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, operationError("provider_config", err)
 	}
 	if !enabled {
-		return CreateResult{}, ErrProviderDisabled
+		return CreateResult{}, operationError("provider_config", ErrProviderDisabled)
 	}
 	if !hasRequiredFields(request.Provider, config) {
-		return CreateResult{}, ErrProviderUnconfig
+		return CreateResult{}, operationError("provider_config", ErrProviderUnconfig)
 	}
 	var selectedPackage *RechargePackage
 	if request.PackageID != "" {
 		packages, packageErr := s.GetRechargePackages(ctx)
 		if packageErr != nil {
-			return CreateResult{}, packageErr
+			return CreateResult{}, operationError("package_validation", packageErr)
 		}
 		for index := range packages {
 			candidate := packages[index]
@@ -902,7 +930,7 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 			}
 		}
 		if selectedPackage == nil || !sameAmount(paidAmount, selectedPackage.Amount, request.Currency) {
-			return CreateResult{}, ErrInvalidRequest
+			return CreateResult{}, operationError("package_validation", ErrInvalidRequest)
 		}
 	}
 	rate := normalizedRechargeRate(config["recharge_rate"])
@@ -919,7 +947,7 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	}
 	creditedAmount, err := applyRechargeRate(creditBasis, rate, request.Currency)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, operationError("provider_config", err)
 	}
 	var existing Order
 	if err := s.scanOrder(s.db.QueryRowContext(ctx, orderSelect+` WHERE po.idempotency_key = $1 AND po.tenant_id = $2::uuid`, request.IdempotencyKey, request.TenantID), &existing); err == nil {
@@ -942,20 +970,20 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 		if isUniqueViolation(err) {
 			return s.getExistingByIdempotency(ctx, request.TenantID, request.IdempotencyKey)
 		}
-		return CreateResult{}, err
+		return CreateResult{}, operationError("order_persistence", err)
 	}
 	order, err := s.getOrderByID(ctx, request.TenantID, id)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, operationError("order_persistence", err)
 	}
 	providerResult, err := s.createProviderOrder(ctx, order, config, request.ReturnURL)
 	if err != nil {
 		_ = s.markFailed(ctx, id, err.Error())
-		return CreateResult{}, err
+		return CreateResult{}, operationError("provider_checkout", err)
 	}
 	updated, err := s.updateProviderOrder(ctx, order, providerResult)
 	if err != nil {
-		return CreateResult{}, err
+		return CreateResult{}, operationError("order_persistence", err)
 	}
 	return CreateResult{Order: updated}, nil
 }

@@ -17,6 +17,7 @@ import (
 	"ai-token/internal/mfa"
 	"ai-token/internal/modelprices"
 	"ai-token/internal/models"
+	"ai-token/internal/payments"
 	"ai-token/internal/relay"
 	"ai-token/internal/tokens"
 	"ai-token/internal/users"
@@ -46,6 +47,14 @@ func TestHealthIsPublicAndProtectedRoutesAreNot(t *testing.T) {
 	handler.ServeHTTP(adminRec, adminReq)
 	if adminRec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected admin 401, got %d", adminRec.Code)
+	}
+}
+
+func TestWritePaymentErrorIncludesFailureStage(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writePaymentError(recorder, &payments.OperationError{Stage: "provider_checkout", Err: &payments.ProviderError{Provider: payments.ProviderStripe, StatusCode: http.StatusBadRequest, Detail: "invalid currency"}})
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), `"stage":"provider_checkout"`) || !strings.Contains(recorder.Body.String(), "invalid currency") {
+		t.Fatalf("payment error did not include stage and provider detail: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

@@ -330,7 +330,13 @@ func paymentCreateOrderHandler(service payments.Service) http.Handler {
 		}
 		result, err := service.CreateOrder(r.Context(), payments.CreateRequest{TenantID: principal.TenantID, UserID: principal.ID, Provider: payload.Provider, Amount: payload.Amount, Currency: payload.Currency, IdempotencyKey: key, ReturnURL: returnURL, PackageID: payload.PackageID})
 		if err != nil {
-			log.Printf("payment create order failed request_id=%s tenant_id=%s provider=%s error=%v", r.Header.Get("X-Request-ID"), principal.TenantID, strings.TrimSpace(payload.Provider), err)
+			var operationErr *payments.OperationError
+			_ = errors.As(err, &operationErr)
+			stage := "request_validation"
+			if operationErr != nil && operationErr.Stage != "" {
+				stage = operationErr.Stage
+			}
+			log.Printf("payment create order failed request_id=%s tenant_id=%s provider=%s stage=%s error=%v", r.Header.Get("X-Request-ID"), principal.TenantID, strings.TrimSpace(payload.Provider), stage, err)
 			writePaymentError(w, err)
 			return
 		}
@@ -518,28 +524,43 @@ func writeEnterpriseError(w http.ResponseWriter, err error) {
 }
 
 func writePaymentError(w http.ResponseWriter, err error) {
+	var operationErr *payments.OperationError
+	_ = errors.As(err, &operationErr)
+	stage := ""
+	if operationErr != nil {
+		stage = operationErr.Stage
+	}
+	withStage := func(code string) map[string]string {
+		payload := map[string]string{"error": code}
+		if stage != "" {
+			payload["stage"] = stage
+		}
+		return payload
+	}
 	switch {
 	case errors.Is(err, payments.ErrInvalidRequest), errors.Is(err, payments.ErrCallbackInvalid), errors.Is(err, payments.ErrAmountMismatch), errors.Is(err, payments.ErrCurrencyMismatch):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PAYMENT_REQUEST"})
+		writeJSON(w, http.StatusBadRequest, withStage("INVALID_PAYMENT_REQUEST"))
 	case errors.Is(err, payments.ErrProviderDisabled):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "PAYMENT_PROVIDER_DISABLED"})
+		writeJSON(w, http.StatusConflict, withStage("PAYMENT_PROVIDER_DISABLED"))
 	case errors.Is(err, payments.ErrProviderUnconfig):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "PAYMENT_PROVIDER_UNCONFIGURED"})
+		writeJSON(w, http.StatusConflict, withStage("PAYMENT_PROVIDER_UNCONFIGURED"))
 	case errors.Is(err, payments.ErrCallbackUntrusted):
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "PAYMENT_CALLBACK_UNTRUSTED"})
+		writeJSON(w, http.StatusUnauthorized, withStage("PAYMENT_CALLBACK_UNTRUSTED"))
 	case errors.Is(err, payments.ErrOrderNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "PAYMENT_ORDER_NOT_FOUND"})
+		writeJSON(w, http.StatusNotFound, withStage("PAYMENT_ORDER_NOT_FOUND"))
 	case errors.Is(err, payments.ErrOrderClosed):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "PAYMENT_ORDER_CLOSED"})
+		writeJSON(w, http.StatusConflict, withStage("PAYMENT_ORDER_CLOSED"))
 	case errors.Is(err, payments.ErrUnavailable):
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PAYMENTS_UNAVAILABLE"})
+		writeJSON(w, http.StatusServiceUnavailable, withStage("PAYMENTS_UNAVAILABLE"))
 	case errors.Is(err, billing.ErrAccountNotFound):
-		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BILLING_ACCOUNT_NOT_FOUND"})
+		writeJSON(w, http.StatusPaymentRequired, withStage("BILLING_ACCOUNT_NOT_FOUND"))
 	default:
-		response := map[string]string{"error": "PAYMENT_PROVIDER_FAILED"}
+		response := withStage("PAYMENT_PROVIDER_FAILED")
 		var providerErr *payments.ProviderError
 		if errors.As(err, &providerErr) {
 			response["message"] = providerErr.Error()
+		} else if stage != "" {
+			response["message"] = "payment operation failed at " + stage
 		}
 		writeJSON(w, http.StatusBadGateway, response)
 	}
