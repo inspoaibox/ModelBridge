@@ -55,10 +55,11 @@ type ProviderConfig struct {
 }
 
 type PublicProvider struct {
-	Provider       string `json:"provider"`
-	Enabled        bool   `json:"enabled"`
-	RechargeRate   string `json:"recharge_rate,omitempty"`
-	PublishableKey string `json:"publishable_key,omitempty"`
+	Provider        string   `json:"provider"`
+	Enabled         bool     `json:"enabled"`
+	RechargeRate    string   `json:"recharge_rate,omitempty"`
+	RechargePresets []string `json:"recharge_presets,omitempty"`
+	PublishableKey  string   `json:"publishable_key,omitempty"`
 }
 
 type OrderQuery struct {
@@ -180,17 +181,17 @@ var allowedFieldsByProvider = map[string]map[string]struct{}{
 	ProviderWechat: {
 		"app_id": {}, "mch_id": {}, "serial_no": {}, "platform_certificate_serial_no": {},
 		"private_key_pem": {}, "api_v3_key": {}, "platform_certificate_pem": {},
-		"notify_url": {}, "api_base_url": {}, "recharge_rate": {},
+		"notify_url": {}, "api_base_url": {}, "recharge_rate": {}, "recharge_presets": {},
 	},
 	ProviderAlipay: {
 		"app_id": {}, "seller_id": {}, "private_key_pem": {}, "alipay_public_key_pem": {},
-		"notify_url": {}, "gateway": {}, "recharge_rate": {},
+		"notify_url": {}, "gateway": {}, "recharge_rate": {}, "recharge_presets": {},
 	},
 	ProviderStripe: {
-		"secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "api_base_url": {}, "payment_method_types": {}, "recharge_rate": {},
+		"secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "api_base_url": {}, "payment_method_types": {}, "recharge_rate": {}, "recharge_presets": {},
 	},
 	ProviderPayPal: {
-		"client_id": {}, "client_secret": {}, "webhook_id": {}, "environment": {}, "recharge_rate": {},
+		"client_id": {}, "client_secret": {}, "webhook_id": {}, "environment": {}, "recharge_rate": {}, "recharge_presets": {},
 	},
 }
 
@@ -232,6 +233,7 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 			continue
 		}
 		item.RechargeRate = normalizedRechargeRate(values["recharge_rate"])
+		item.RechargePresets = normalizedRechargePresets(values["recharge_presets"])
 		item.PublishableKey = strings.TrimSpace(values["publishable_key"])
 		items = append(items, item)
 	}
@@ -267,6 +269,12 @@ func (s *SQLService) AdminUpdate(ctx context.Context, actorID, provider string, 
 		}
 		if key == "recharge_rate" {
 			value, err = normalizeRechargeRate(value)
+			if err != nil {
+				return ProviderConfig{}, err
+			}
+		}
+		if key == "recharge_presets" {
+			value, err = normalizeRechargePresetsValue(value)
 			if err != nil {
 				return ProviderConfig{}, err
 			}
@@ -380,7 +388,7 @@ func validConfigKey(provider, key string) bool {
 	known := map[string]struct{}{
 		"app_id": {}, "mch_id": {}, "serial_no": {}, "platform_certificate_serial_no": {}, "private_key_pem": {}, "api_v3_key": {}, "platform_certificate_pem": {}, "notify_url": {}, "api_base_url": {},
 		"gateway": {}, "seller_id": {}, "alipay_public_key_pem": {}, "secret_key": {}, "publishable_key": {}, "webhook_secret": {}, "payment_method_types": {}, "client_id": {}, "client_secret": {}, "environment": {}, "webhook_id": {},
-		"recharge_rate": {},
+		"recharge_rate": {}, "recharge_presets": {},
 	}
 	if _, ok := known[key]; !ok || !supportedProvider(provider) {
 		return false
@@ -442,6 +450,9 @@ func validateProviderConfig(provider string, values map[string]string) error {
 	if _, err := normalizeRechargeRate(values["recharge_rate"]); err != nil {
 		return err
 	}
+	if _, err := normalizeRechargePresetsValue(values["recharge_presets"]); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -494,6 +505,39 @@ func normalizedRechargeRate(value string) string {
 		return "1"
 	}
 	return normalized
+}
+
+func normalizeRechargePresetsValue(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		normalized, err := normalizeAmount(strings.TrimSpace(part), "USD")
+		if err != nil {
+			return "", ErrInvalidRequest
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		values = append(values, normalized)
+		if len(values) > 24 {
+			return "", ErrInvalidRequest
+		}
+	}
+	return strings.Join(values, ","), nil
+}
+
+func normalizedRechargePresets(value string) []string {
+	normalized, err := normalizeRechargePresetsValue(value)
+	if err != nil || normalized == "" {
+		return nil
+	}
+	return strings.Split(normalized, ",")
 }
 
 func applyRechargeRate(amount, rate, currency string) (string, error) {

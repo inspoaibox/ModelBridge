@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, CheckCircle2, Copy, CreditCard, ExternalLink, Info, Save } from "lucide-react";
+import { BookOpen, CheckCircle2, Copy, CreditCard, ExternalLink, Info, Plus, Save, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ type Field = { key: string; label: TranslationKey; secret?: boolean; multiline?:
 const fields: Record<Provider, Field[]> = {
   wechat: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
+    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "app_id", label: "paymentWechatAppID" },
     { key: "mch_id", label: "paymentWechatMchID" },
     { key: "serial_no", label: "paymentWechatSerial" },
@@ -37,6 +38,7 @@ const fields: Record<Provider, Field[]> = {
   ],
   alipay: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
+    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "app_id", label: "paymentAlipayAppID" },
     { key: "seller_id", label: "paymentAlipaySellerID" },
     { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true },
@@ -46,6 +48,7 @@ const fields: Record<Provider, Field[]> = {
   ],
   stripe: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
+    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "secret_key", label: "paymentStripeSecretKey", secret: true },
     { key: "publishable_key", label: "paymentStripePublishableKey" },
     { key: "webhook_secret", label: "paymentStripeWebhookSecret", secret: true },
@@ -53,6 +56,7 @@ const fields: Record<Provider, Field[]> = {
   ],
   paypal: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
+    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "client_id", label: "paymentPayPalClientID" },
     { key: "client_secret", label: "paymentPayPalClientSecret", secret: true },
     { key: "webhook_id", label: "paymentPayPalWebhookID" },
@@ -140,7 +144,9 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
                   <div key={field.key} className={field.multiline ? "space-y-2 sm:col-span-2" : "space-y-2"}>
                     <Label htmlFor={`payment-${provider}-${field.key}`}>{t(field.label)}</Label>
                     {field.hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{t(field.hint)}</p> : null}
-                    {field.multiline ? (
+                    {field.key === "recharge_presets" ? (
+                      <RechargePresetsEditor id={`payment-${provider}-${field.key}`} value={draft[field.key] || ""} onChange={(value) => setDraft((current) => ({ ...current, [field.key]: value }))} disabled={busy || !canUpdate} t={t} />
+                    ) : field.multiline ? (
                       <textarea id={`payment-${provider}-${field.key}`} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} rows={6} className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder={configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />
                     ) : (
                       <Input id={`payment-${provider}-${field.key}`} type={field.secret ? "password" : "text"} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} placeholder={field.secret && configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />
@@ -160,6 +166,21 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
       </Card>
     </div>
   );
+}
+
+function RechargePresetsEditor({ id, value, onChange, disabled, t }: { id: string; value: string; onChange: (value: string) => void; disabled: boolean; t: (key: TranslationKey) => string }) {
+  const [input, setInput] = useState("");
+  const presets = value.split(",").map((item) => item.trim()).filter(Boolean);
+  function add() {
+    const next = input.trim();
+    if (!next || presets.includes(next)) return;
+    onChange([...presets, next].join(","));
+    setInput("");
+  }
+  function remove(preset: string) {
+    onChange(presets.filter((item) => item !== preset).join(","));
+  }
+  return <div className="space-y-2"><div className="flex gap-2"><Input id={id} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); add(); } }} placeholder={t("paymentRechargePresetPlaceholder")} inputMode="decimal" disabled={disabled} /><Button type="button" variant="outline" onClick={add} disabled={disabled || !input.trim()} className="shrink-0 gap-1.5"><Plus className="h-3.5 w-3.5" />{t("paymentRechargePresetAdd")}</Button></div>{presets.length > 0 ? <div className="flex flex-wrap gap-2">{presets.map((preset) => <span key={preset} className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{preset}<button type="button" onClick={() => remove(preset)} disabled={disabled} title={t("paymentRechargePresetRemove")} aria-label={t("paymentRechargePresetRemove")} className="rounded-full p-0.5 hover:bg-emerald-500/20 disabled:opacity-50"><X className="h-3 w-3" /></button></span>)}</div> : null}</div>;
 }
 
 function PaymentSetupGuide({ provider, t }: { provider: Provider; t: (key: TranslationKey) => string }) {

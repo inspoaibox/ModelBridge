@@ -32,20 +32,33 @@ const providerLabels: Record<PaymentOrder["provider"], TranslationKey> = {
 
 export function PaymentRechargePanel({ language, account, providers, busy, message, order, createOrder, refreshOrder, capturePayPal }: Props) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
-  const [provider, setProvider] = useState<PaymentOrder["provider"]>("wechat");
-  const [amount, setAmount] = useState("10");
+  const [provider, setProvider] = useState<PaymentOrder["provider"]>("stripe");
+  const [amount, setAmount] = useState("");
   const currency = account?.currency || "USD";
 
   const activeProviders = providers.filter((item) => item.enabled && (item.provider !== "wechat" && item.provider !== "alipay" || currency === "CNY"));
 
   useEffect(() => {
     const first = activeProviders[0]?.provider;
-    if (first) setProvider(first);
+    if (!first) return;
+    setProvider((current) => activeProviders.some((item) => item.provider === current) ? current : first);
+    setAmount((current) => current || activeProviders[0]?.recharge_presets?.[0] || "");
   }, [providers, currency]);
+
+  const selectedProvider = activeProviders.find((item) => item.provider === provider) || activeProviders[0];
+  const presets = selectedProvider?.recharge_presets || [];
+  const rate = selectedProvider?.recharge_rate || "1";
+
+  function selectProvider(next: PaymentOrder["provider"]) {
+    setProvider(next);
+    setAmount(activeProviders.find((item) => item.provider === next)?.recharge_presets?.[0] || "");
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await createOrder(provider, amount, currency);
+    const selected = selectedProvider?.provider;
+    if (!selected) return;
+    await createOrder(selected, amount, currency);
   }
 
   const canCreate = activeProviders.length > 0 && Boolean(account) && !busy;
@@ -64,13 +77,12 @@ export function PaymentRechargePanel({ language, account, providers, busy, messa
           <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-800"><div className="text-xs text-slate-500">{t("rechargeProviders")}</div><div className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{activeProviders.length}</div></div>
           <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-800"><div className="text-xs text-slate-500">{t("rechargeCurrency")}</div><div className="mt-2 font-mono text-2xl font-bold text-slate-900 dark:text-white">{currency}</div></div>
         </div>
-        {activeProviders.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">{t("rechargeUnavailable")}</div> : <form className="grid gap-4 rounded-xl border border-emerald-500/20 bg-emerald-50/40 p-4 dark:bg-emerald-500/5 sm:grid-cols-[minmax(0,1fr)_180px_auto] sm:items-end" onSubmit={(event) => void submit(event)}>
-          <div className="space-y-2"><Label htmlFor="recharge-amount">{t("rechargeAmount")}</Label><div className="flex flex-wrap gap-2">{["10", "50", "100", "500", "1000", "5000"].map((preset) => <button key={preset} type="button" onClick={() => setAmount(preset)} className={cn("rounded-lg border px-3 py-2 text-xs font-semibold transition-colors", amount === preset ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-emerald-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200")}>{currency} {preset}</button>)}</div><Input id="recharge-amount" inputMode="decimal" min="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="10.00" required /></div>
-          <div className="space-y-2"><Label>{t("rechargeProvider")}</Label>{activeProviders.length === 1 ? <div className="flex h-10 items-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">{t(providerLabels[activeProviders[0].provider])}</div> : <select id="recharge-provider" value={provider} onChange={(event) => setProvider(event.target.value as PaymentOrder["provider"])} className="flex h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">{activeProviders.map((item) => <option key={item.provider} value={item.provider}>{t(providerLabels[item.provider])}</option>)}</select>}</div>
-          <Button type="submit" disabled={!canCreate} className="gap-2"><BadgeDollarSign className="h-4 w-4" />{busy ? t("rechargeCreating") : t("rechargeCreate")}</Button>
-          {activeProviders.length > 0 ? <p className="text-xs text-slate-500 sm:col-span-3">{t("rechargeRateHint")} {activeProviders.find((item) => item.provider === provider)?.recharge_rate || "1"}</p> : null}
+        {activeProviders.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">{t("rechargeUnavailable")}</div> : <form className="space-y-5 rounded-2xl border border-emerald-500/20 bg-emerald-50/40 p-4 dark:bg-emerald-500/5 sm:p-5" onSubmit={(event) => void submit(event)}>
+          <div className="space-y-3"><Label>{t("rechargeProvider")}</Label><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{activeProviders.map((item) => { const active = selectedProvider?.provider === item.provider; return <button key={item.provider} type="button" onClick={() => selectProvider(item.provider)} className={cn("flex min-h-20 flex-col items-start justify-between rounded-xl border px-4 py-3 text-left transition-all", active ? "border-indigo-500 bg-white shadow-md shadow-indigo-500/10 dark:border-indigo-400 dark:bg-slate-900" : "border-slate-200 bg-white/70 hover:border-indigo-300 dark:border-slate-700 dark:bg-slate-950/40")}><span className="text-sm font-semibold text-slate-900 dark:text-white">{t(providerLabels[item.provider])}</span><span className={cn("text-xs", active ? "text-indigo-600 dark:text-indigo-300" : "text-slate-500")}>{t("rechargeRate")} x{item.recharge_rate || "1"}</span></button>; })}</div></div>
+          <div className="space-y-3"><Label htmlFor="recharge-amount">{t("rechargeAmount")}</Label>{presets.length > 0 ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{presets.map((preset) => <button key={preset} type="button" onClick={() => setAmount(preset)} className={cn("rounded-xl border bg-white px-4 py-3 text-left transition-all dark:bg-slate-950/60", amount === preset ? "border-emerald-600 bg-emerald-50 shadow-md shadow-emerald-500/10 dark:border-emerald-400 dark:bg-emerald-500/10" : "border-slate-200 hover:border-emerald-400 dark:border-slate-700")}><span className="block text-lg font-bold text-slate-900 dark:text-white">{currency} {formatMoney(preset)}</span><span className="mt-1 block text-xs text-slate-500">{t("rechargeCreditedAmount")} {currency} {previewCredited(preset, rate)}</span></button>)}</div> : <p className="rounded-lg border border-dashed border-slate-300 px-3 py-3 text-xs text-slate-500 dark:border-slate-700">{t("rechargeCustomOnly")}</p>}<Input id="recharge-amount" inputMode="decimal" min="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("rechargeCustomAmountPlaceholder")} required /><p className="text-xs text-slate-500">{t("rechargeRateHint")} {rate}</p></div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><p className="max-w-xl text-xs leading-5 text-slate-500">{t("rechargeCustomAmountHint")}</p><Button type="submit" disabled={!canCreate} className="gap-2 sm:min-w-44"><BadgeDollarSign className="h-4 w-4" />{busy ? t("rechargeCreating") : t("rechargeCreate")}</Button></div>
         </form>}
-      {order ? <OrderStatus t={t} order={order} qrValue={qrValue} stripePublishableKey={activeProviders.find((item) => item.provider === "stripe")?.publishable_key || ""} busy={busy} refreshOrder={refreshOrder} capturePayPal={capturePayPal} /> : null}
+        {order ? <OrderStatus t={t} order={order} qrValue={qrValue} stripePublishableKey={activeProviders.find((item) => item.provider === "stripe")?.publishable_key || ""} busy={busy} refreshOrder={refreshOrder} capturePayPal={capturePayPal} /> : null}
       </CardContent>
     </Card>
   );
@@ -78,6 +90,11 @@ export function PaymentRechargePanel({ language, account, providers, busy, messa
 
 function formatMoney(value?: string) {
   return formatDecimalWithoutTrailingZeros(value);
+}
+
+function previewCredited(amount: string, rate: string) {
+  const value = Number(amount) * Number(rate || "1");
+  return Number.isFinite(value) ? formatMoney(value.toFixed(2)) : "-";
 }
 
 function OrderStatus({ t, order, qrValue, stripePublishableKey, busy, refreshOrder, capturePayPal }: { t: (key: TranslationKey) => string; order: PaymentOrder; qrValue: string; stripePublishableKey: string; busy: boolean; refreshOrder: () => Promise<void>; capturePayPal: () => Promise<void> }) {

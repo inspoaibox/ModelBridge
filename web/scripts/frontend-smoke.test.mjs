@@ -93,3 +93,13 @@ test("API endpoints are configured centrally and shown on the customer token pag
   assert.doesNotMatch(usageDocs, /window\.location\.origin \+ "\/v1"/);
   assert.doesNotMatch(readFileSync(resolve(root, "src", "components", "HomeView.tsx"), "utf8"), /window\.location\.origin \+ "\/v1"/);
 });
+
+test("recharge presets come from payment configuration", () => {
+  const panel = readFileSync(resolve(root, "src", "components", "PaymentRechargePanel.tsx"), "utf8");
+  const settings = readFileSync(resolve(root, "src", "components", "admin", "PaymentSettingsPanel.tsx"), "utf8");
+  const types = readFileSync(resolve(root, "src", "types", "index.ts"), "utf8");
+  assert.match(types, /recharge_presets\?: string\[\]/);
+  assert.match(panel, /selectedProvider\?\.recharge_presets/);
+  assert.doesNotMatch(panel, /\["10", "50", "100", "500", "1000", "5000"\]/);
+  assert.match(settings, /paymentRechargePresets/);
+});

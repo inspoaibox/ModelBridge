@@ -65,6 +65,22 @@ func TestRechargeRateCalculatesCreditedAmount(t *testing.T) {
 	}
 }
 
+func TestRechargePresetsNormalizeAndValidate(t *testing.T) {
+	got, err := normalizeRechargePresetsValue("10.00, 50, 10, 100.50")
+	if err != nil || got != "10,50,100.5" {
+		t.Fatalf("normalizeRechargePresetsValue() = %q, %v; want 10,50,100.5", got, err)
+	}
+	if _, err := normalizeRechargePresetsValue("10.001"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("sub-cent preset must be rejected, got %v", err)
+	}
+	if _, err := normalizeRechargePresetsValue("0,50"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("zero preset must be rejected, got %v", err)
+	}
+	if got := normalizedRechargePresets("10,50"); len(got) != 2 || got[0] != "10" || got[1] != "50" {
+		t.Fatalf("normalizedRechargePresets() = %#v", got)
+	}
+}
+
 func TestDisabledProviderCanBeSavedWithIncompleteConfiguration(t *testing.T) {
 	if err := validateProviderConfig(ProviderWechat, map[string]string{}); err != nil {
 		t.Fatalf("disabling an incomplete WeChat provider must remain possible: %v", err)

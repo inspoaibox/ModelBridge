@@ -660,6 +660,7 @@ export interface PublicPaymentProvider {
   provider: PaymentProviderConfig["provider"];
   enabled: boolean;
   recharge_rate?: string;
+  recharge_presets?: string[];
   publishable_key?: string;
 }
 
