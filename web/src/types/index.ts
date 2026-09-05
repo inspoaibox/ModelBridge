@@ -821,6 +821,45 @@ export interface UsageReport {
   offset: number;
 }
 
+export interface ConsoleDashboardModel {
+  model: string;
+  provider: string;
+  requests: number;
+  total_tokens: number;
+  total_cost: string;
+}
+
+export interface ConsoleDashboardTrendPoint {
+  at: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  total_cost: string;
+}
+
+export interface ConsoleDashboardReport {
+  collected_at: string;
+  system_status: string;
+  uptime_seconds: number;
+  range_from: string;
+  range_to: string;
+  total_requests: number;
+  today_requests: number;
+  total_tokens: number;
+  today_tokens: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  today_input_tokens: number;
+  today_output_tokens: number;
+  total_cost: string;
+  today_cost: string;
+  realtime_rpm: number;
+  realtime_tpm: number;
+  models: ConsoleDashboardModel[];
+  token_trend: ConsoleDashboardTrendPoint[];
+}
+
 export interface FinanceCurrencySummary {
   currency: string;
   customer_count: number;

@@ -77,6 +77,7 @@ import {
   TranslationKey,
   TenantMember,
   UsageReport,
+  ConsoleDashboardReport,
   UserAdminFormState,
   UserSummary,
 } from "@/types";
@@ -638,7 +639,10 @@ export default function App() {
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false);
   const [modelCatalogMessage, setModelCatalogMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [usageStatus, setUsageStatus] = useState<ConsoleUsageStatus | null>(null);
-	const [consoleUsageReport, setConsoleUsageReport] = useState<UsageReport | null>(null);
+		const [consoleUsageReport, setConsoleUsageReport] = useState<UsageReport | null>(null);
+		const [consoleDashboardReport, setConsoleDashboardReport] = useState<ConsoleDashboardReport | null>(null);
+		const [consoleDashboardBusy, setConsoleDashboardBusy] = useState(false);
+		const [consoleDashboardMessage, setConsoleDashboardMessage] = useState<LoginMessage>({ kind: "", text: "" });
 	const [consoleUsageOffset, setConsoleUsageOffset] = useState(0);
   const [consoleUsageTokenName, setConsoleUsageTokenName] = useState("");
   const [consoleUsageModel, setConsoleUsageModel] = useState("");
@@ -1144,9 +1148,9 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || !["billing", "billing-center", "billing-records", "billing-orders"].includes(consoleSection)) return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || !["dashboard", "billing", "billing-center", "billing-records", "billing-orders"].includes(consoleSection)) return;
     refreshConsoleBilling();
-    refreshPaymentProviders();
+    if (consoleSection !== "dashboard") refreshPaymentProviders();
     if (consoleSection === "billing-orders") refreshPaymentOrders();
   }, [signedIn, audience, route.view, consoleSection, language]);
 
@@ -1177,8 +1181,15 @@ export default function App() {
   }, [signedIn, audience, route.view, consoleSection, paymentOrder?.id, paymentOrder?.status]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "console" || route.view !== "console" || (consoleSection !== "dashboard" && consoleSection !== "billing-records")) return;
+    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "billing-records") return;
     refreshConsoleUsage();
+  }, [signedIn, audience, route.view, consoleSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console" || consoleSection !== "dashboard") return;
+    void refreshConsoleDashboard();
+    const interval = window.setInterval(() => void refreshConsoleDashboard(), 30_000);
+    return () => window.clearInterval(interval);
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
@@ -2866,6 +2877,29 @@ export default function App() {
     setAdminEnterpriseMessage({ kind: "success", text: t("enterpriseReviewed") });
   }
 
+	async function refreshConsoleDashboard(from = "", to = "") {
+		if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("usage:read")) return;
+		setConsoleDashboardBusy(true);
+		try {
+			const params = new URLSearchParams();
+			if (from) params.set("from", from);
+			if (to) params.set("to", to);
+			const suffix = params.toString() ? `?${params.toString()}` : "";
+			const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/dashboard${suffix}`, {
+				headers: { Accept: "application/json" },
+				credentials: "same-origin",
+			});
+			const result = (await response.json().catch(() => ({}))) as ConsoleDashboardReport & { error?: string };
+			if (!response.ok) throw new Error(result.error || "dashboard unavailable");
+			setConsoleDashboardReport(result);
+			setConsoleDashboardMessage({ kind: "", text: "" });
+		} catch {
+			setConsoleDashboardMessage({ kind: "error", text: t("consoleDashboardUnavailable") });
+		} finally {
+			setConsoleDashboardBusy(false);
+		}
+	}
+
 	async function refreshConsoleUsage(showPending = false, offset = consoleUsageOffset) {
     if (!signedIn || audience !== "console" || !principal?.tenant_id || !hasConsolePermission("usage:read")) return;
     setUsageBusy(true);
@@ -4430,6 +4464,10 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             usageStatus={usageStatus}
             usageBusy={usageBusy}
             usageMessage={usageMessage}
+            dashboardReport={consoleDashboardReport}
+            dashboardBusy={consoleDashboardBusy}
+            dashboardMessage={consoleDashboardMessage}
+            refreshDashboard={refreshConsoleDashboard}
             refreshUsage={refreshConsoleUsage}
 			 consoleUsageReport={consoleUsageReport}
             consoleUsageTokens={tokens}

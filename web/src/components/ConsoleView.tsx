@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Activity,
   BadgeDollarSign,
@@ -36,7 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BillingAccount, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, EnterpriseVerification, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, PaymentOrder, PaymentOrderList, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, PublicModelSummary, PublicPaymentProvider, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
+import { BillingAccount, ConsoleDashboardReport, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, EnterpriseVerification, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, PaymentOrder, PaymentOrderList, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, PublicModelSummary, PublicPaymentProvider, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn, formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import { ProfilePanel } from "@/components/ProfilePanel";
@@ -93,6 +93,10 @@ interface ConsoleViewProps {
   usageStatus: ConsoleUsageStatus | null;
   usageBusy: boolean;
   usageMessage: LoginMessage;
+  dashboardReport: ConsoleDashboardReport | null;
+  dashboardBusy: boolean;
+  dashboardMessage: LoginMessage;
+  refreshDashboard: (from?: string, to?: string) => Promise<void>;
   refreshUsage: (showPending?: boolean, offset?: number) => Promise<void>;
   consoleUsageReport: UsageReport | null;
   consoleUsageTokens: TokenSummary[];
@@ -239,6 +243,10 @@ export function ConsoleView({
   usageStatus,
   usageBusy,
   usageMessage,
+  dashboardReport,
+  dashboardBusy,
+  dashboardMessage,
+  refreshDashboard,
   refreshUsage,
   consoleUsageReport,
   consoleUsageTokens,
@@ -329,7 +337,6 @@ export function ConsoleView({
     routeTo(`#console/${normalized}`);
   };
   const activeTokens = tokens.filter((token) => token.status === "active").length;
-  const projectCount = projects.length;
   const canManageTenant = hasPermission("member:invite");
   const canManageProjects = hasPermission("project:update");
   const canCreateToken = hasPermission("token:create");
@@ -351,7 +358,7 @@ export function ConsoleView({
 
           <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">{visibleSections.map((item) => item.id === navGroupAnchorID ? <React.Fragment key={item.id}><button type="button" onClick={() => setInterfaceDebugExpanded((current) => !current)} aria-expanded={interfaceDebugExpanded} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", interfaceDebugActive ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><Code2 className="h-3.5 w-3.5" />{t("consoleNavInterfaceDebug")} {interfaceDebugExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</button>{interfaceDebugExpanded ? visibleInterfaceDebugSections.map((debug) => <ConsoleCompactSectionButton key={debug.id} item={debug} active={debug.id === displayedSection} onSelect={selectSection} t={t} />) : null}<button type="button" onClick={() => setFinanceExpanded((current) => !current)} aria-expanded={financeExpanded} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold", financeActive ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300")}><BadgeDollarSign className="h-3.5 w-3.5" />{t("consoleNavFinance")} {financeExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</button>{financeExpanded ? visibleFinanceSections.map((finance) => <ConsoleCompactSectionButton key={finance.id} item={finance} active={finance.id === displayedSection} onSelect={selectSection} t={t} />) : null}<ConsoleCompactSectionButton item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} /></React.Fragment> : <ConsoleCompactSectionButton key={item.id} item={item} active={item.id === displayedSection} onSelect={selectSection} t={t} />)}</div>
 
-          {displayedSection === "dashboard" ? <DashboardPanel t={t} tokens={tokens} activeTokens={activeTokens} projectCount={projectCount} principal={principal} usageStatus={usageStatus} usageBusy={usageBusy} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
+          {displayedSection === "dashboard" ? <DashboardPanel language={language} t={t} tokens={tokens} activeTokens={activeTokens} principal={principal} billingAccount={billingAccount} dashboardReport={dashboardReport} dashboardBusy={dashboardBusy} dashboardMessage={dashboardMessage} refreshDashboard={refreshDashboard} canCreateToken={canCreateToken} onNavigate={selectSection} /> : null}
           {displayedSection === "model-status" ? <ModelStatusPanel language={language} report={modelStatusReport} busy={modelStatusBusy} message={modelStatusMessage} refresh={refreshModelStatus} /> : null}
           {displayedSection === "billing-records" ? <UsagePanel language={language} t={t} usageStatus={usageStatus} usageReport={consoleUsageReport} usageBusy={usageBusy} usageMessage={usageMessage} refreshUsage={refreshUsage} tokens={consoleUsageTokens} groups={consoleUsageGroups} tokenName={consoleUsageTokenName} setTokenName={setConsoleUsageTokenName} model={consoleUsageModel} setModel={setConsoleUsageModel} group={consoleUsageGroup} setGroup={setConsoleUsageGroup} from={consoleUsageFrom} setFrom={setConsoleUsageFrom} to={consoleUsageTo} setTo={setConsoleUsageTo} /> : null}
           {displayedSection === "projects" ? <TenantWorkspacePanel language={language} canManageTenant={canManageTenant} canManageProjects={canManageProjects} projects={projects} projectsBusy={projectsBusy} projectsMessage={projectsMessage} refreshProjects={refreshProjects} saveProject={saveProject} deleteProject={deleteProject} projectActionBusy={projectActionBusy} projectDeleteConfirm={projectDeleteConfirm} members={members} membersBusy={membersBusy} membersMessage={membersMessage} refreshMembers={refreshMembers} addMember={addMember} updateMember={updateMember} removeMember={removeMember} memberActionBusy={memberActionBusy} projectMembers={projectMembers} projectMembersBusy={projectMembersBusy} projectMembersMessage={projectMembersMessage} selectedProjectID={selectedProjectID} selectProject={selectProject} refreshProjectMembers={refreshProjectMembers} addProjectMember={addProjectMember} updateProjectMember={updateProjectMember} removeProjectMember={removeProjectMember} projectMemberActionBusy={projectMemberActionBusy} /> : null}
@@ -370,9 +377,76 @@ export function ConsoleView({
   );
 }
 
-function DashboardPanel({ t, tokens, activeTokens, projectCount, principal, usageStatus, usageBusy, canCreateToken, onNavigate }: { t: (key: TranslationKey) => string; tokens: TokenSummary[]; activeTokens: number; projectCount: number; principal: Principal | null; usageStatus: ConsoleUsageStatus | null; usageBusy: boolean; canCreateToken: boolean; onNavigate: (section: ConsoleSection) => void }) {
-  const cards = [{ label: t("consoleStatProjects"), value: String(projectCount), icon: FolderKanban, tone: "indigo" }, { label: t("consoleStatTokens"), value: String(tokens.length), icon: KeyRound, tone: "cyan" }, { label: t("consoleStatActiveTokens"), value: String(activeTokens), icon: CheckCircle2, tone: "emerald" }, { label: t("consoleStatUsage"), value: usageBusy ? "..." : usageStatus?.status === "ready" ? t("consoleReady") : "-", icon: Gauge, tone: "amber" }];
-  return <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map((card) => <Card key={card.label} className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardDescription>{card.label}</CardDescription><div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", card.tone === "emerald" ? "bg-emerald-500/10 text-emerald-600" : card.tone === "cyan" ? "bg-cyan-500/10 text-cyan-600" : card.tone === "amber" ? "bg-amber-500/10 text-amber-600" : "bg-indigo-500/10 text-indigo-600")}><card.icon className="h-4 w-4" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-slate-950 dark:text-white">{card.value}</div></CardContent></Card>)}</div><div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]"><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleOverviewTitle")}</CardTitle><CardDescription>{t("consoleOverviewHint")}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleTenantID")}</span><code className="max-w-[65%] truncate text-xs text-slate-700 dark:text-slate-300">{principal?.tenant_id || "-"}</code></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleRoles")}</span><span className="font-medium text-slate-800 dark:text-slate-200">{principal?.roles?.join(", ") || "-"}</span></div></CardContent></Card><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Network className="h-5 w-5 text-cyan-600" />{t("consoleQuickActions")}</CardTitle></CardHeader><CardContent className="space-y-2">{canCreateToken ? <button type="button" onClick={() => onNavigate("tokens")} className="flex w-full items-center gap-3 rounded-xl bg-indigo-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-indigo-500/10 dark:text-slate-300"><KeyRound className="h-4 w-4 text-indigo-600" />{t("consoleQuickToken")}</button> : null}<button type="button" onClick={() => onNavigate("usage")} className="flex w-full items-center gap-3 rounded-xl bg-cyan-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-cyan-500/10 dark:text-slate-300"><Activity className="h-4 w-4 text-cyan-600" />{t("consoleQuickUsage")}</button></CardContent></Card></div></div>;
+type DashboardRange = "today" | "yesterday" | "3d" | "7d" | "15d" | "30d" | "60d" | "90d" | "custom";
+
+function DashboardPanel({ language, t, tokens, activeTokens, principal, billingAccount, dashboardReport, dashboardBusy, dashboardMessage, refreshDashboard, canCreateToken, onNavigate }: { language: Language; t: (key: TranslationKey) => string; tokens: TokenSummary[]; activeTokens: number; principal: Principal | null; billingAccount: BillingAccount | null; dashboardReport: ConsoleDashboardReport | null; dashboardBusy: boolean; dashboardMessage: LoginMessage; refreshDashboard: (from?: string, to?: string) => Promise<void>; canCreateToken: boolean; onNavigate: (section: ConsoleSection) => void }) {
+  const [range, setRange] = useState<DashboardRange>("today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  useEffect(() => {
+    const bounds = dashboardRangeBounds(range, customFrom, customTo);
+    if (bounds) void refreshDashboard(bounds.from, bounds.to);
+  }, [range, customFrom, customTo]);
+
+  const report = dashboardReport;
+  const currency = billingAccount?.currency || "USD";
+  const cost = (value?: string) => `${currency} ${formatDecimalWithoutTrailingZeros(value || "0", "0")}`;
+  const tokenDetail = (input: number, output: number) => `${t("consoleDashboardInput")} ${formatInteger(input)} · ${t("consoleDashboardOutput")} ${formatInteger(output)}`;
+  const cards = [
+    { label: t("consoleDashboardAPIKeys"), value: String(tokens.length), detail: `${t("consoleDashboardActive")} ${activeTokens}`, icon: KeyRound, tone: "cyan" },
+    { label: t("consoleDashboardTodayRequests"), value: formatInteger(report?.today_requests || 0), detail: `${t("consoleDashboardTotalRequests")} ${formatInteger(report?.total_requests || 0)}`, icon: Activity, tone: "indigo" },
+    { label: t("consoleDashboardBalance"), value: billingAccount ? cost(billingAccount.balance) : "-", detail: `${t("consoleDashboardTodaySpend")} ${cost(report?.today_cost)}`, icon: BadgeDollarSign, tone: "emerald" },
+    { label: t("consoleDashboardSystem"), value: dashboardBusy ? "..." : report?.system_status === "normal" ? t("consoleDashboardNormal") : report?.system_status || "-", detail: `${t("consoleDashboardUptime")} ${formatUptime(report?.uptime_seconds || 0)}`, icon: CheckCircle2, tone: "emerald" },
+    { label: t("consoleDashboardTodayTokens"), value: formatInteger(report?.today_tokens || 0), detail: tokenDetail(report?.today_input_tokens || 0, report?.today_output_tokens || 0), icon: Gauge, tone: "amber" },
+    { label: t("consoleDashboardTotalTokens"), value: formatInteger(report?.total_tokens || 0), detail: `${cost(report?.total_cost)} · ${tokenDetail(report?.total_input_tokens || 0, report?.total_output_tokens || 0)}`, icon: Network, tone: "cyan" },
+    { label: t("consoleDashboardRealtimeRPM"), value: formatInteger(report?.realtime_rpm || 0), detail: t("consoleDashboardRequestsPerMinute"), icon: Activity, tone: "indigo" },
+    { label: t("consoleDashboardRealtimeTPM"), value: formatInteger(report?.realtime_tpm || 0), detail: t("consoleDashboardTokensPerMinute"), icon: Gauge, tone: "amber" },
+  ];
+  const rangeOptions: Array<[DashboardRange, TranslationKey]> = [["today", "consoleDashboardToday"], ["yesterday", "consoleDashboardYesterday"], ["3d", "consoleDashboard3Days"], ["7d", "consoleDashboard7Days"], ["15d", "consoleDashboard15Days"], ["30d", "consoleDashboard30Days"], ["60d", "consoleDashboard60Days"], ["90d", "consoleDashboard90Days"], ["custom", "consoleDashboardCustom"]];
+  const models = report?.models || [];
+  const maxModelTokens = Math.max(1, ...models.map((item) => item.total_tokens));
+  const trend = report?.token_trend || [];
+  const maxTrendTokens = Math.max(1, ...trend.map((item) => item.total_tokens));
+  const chartWidth = 760;
+  const chartHeight = 190;
+  const points = trend.map((item, index) => `${trend.length === 1 ? chartWidth / 2 : (index / (trend.length - 1)) * chartWidth},${chartHeight - (item.total_tokens / maxTrendTokens) * (chartHeight - 18)}`).join(" ");
+  return <div className="space-y-6">
+    {dashboardMessage.text ? <div className="rounded-xl border border-rose-500/30 bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{dashboardMessage.text}</div> : null}
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{cards.map((card) => <Card key={card.label} className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardDescription>{card.label}</CardDescription><div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", card.tone === "emerald" ? "bg-emerald-500/10 text-emerald-600" : card.tone === "cyan" ? "bg-cyan-500/10 text-cyan-600" : card.tone === "amber" ? "bg-amber-500/10 text-amber-600" : "bg-indigo-500/10 text-indigo-600")}><card.icon className="h-4 w-4" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-slate-950 dark:text-white">{card.value}</div><div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={card.detail}>{card.detail}</div></CardContent></Card>)}</div>
+    <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader className="flex flex-col gap-3 border-b border-slate-200/80 pb-4 dark:border-slate-800/80 sm:flex-row sm:items-center sm:justify-between"><div><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleDashboardAnalyticsTitle")}</CardTitle><CardDescription>{t("consoleDashboardAnalyticsDescription")}</CardDescription></div><div className="flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-950/50">{rangeOptions.map(([value, label]) => <button key={value} type="button" onClick={() => setRange(value)} className={cn("rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors", range === value ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-900")}>{t(label)}</button>)}</div></CardHeader><CardContent className="space-y-4 pt-4">{range === "custom" ? <div className="flex flex-wrap items-center gap-2"><label className="text-xs font-semibold text-slate-500">{t("consoleDashboardFrom")}</label><Input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} className="h-9 w-auto text-xs" /><label className="text-xs font-semibold text-slate-500">{t("consoleDashboardTo")}</label><Input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} className="h-9 w-auto text-xs" /></div> : null}<div className="grid gap-6 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.2fr)]"><div><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("consoleDashboardModelDistribution")}</h3><span className="text-xs text-slate-500">{models.length} {t("consoleDashboardModels")}</span></div>{models.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 py-12 text-center text-xs text-slate-500 dark:border-slate-700">{t("consoleDashboardNoUsage")}</div> : <div className="space-y-3">{models.slice(0, 8).map((item) => <div key={`${item.provider}:${item.model}`}><div className="flex items-center justify-between gap-3 text-xs"><span className="min-w-0 truncate font-semibold text-slate-800 dark:text-slate-200" title={item.model}>{item.model}</span><span className="shrink-0 font-mono text-slate-500">{formatInteger(item.total_tokens)}</span></div><div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(2, (item.total_tokens / maxModelTokens) * 100)}%` }} /></div><div className="mt-1 text-[10px] text-slate-500">{item.provider} · {formatInteger(item.requests)} {t("consoleDashboardRequestsUnit")}</div></div>)}</div>}</div><div><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-semibold text-slate-900 dark:text-white">{t("consoleDashboardTokenTrend")}</h3><span className="text-xs text-slate-500">{dashboardBusy ? t("consoleDashboardLoading") : `${formatInteger(report?.total_tokens || 0)} ${t("consoleDashboardTokensUnit")}`}</span></div>{trend.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 py-12 text-center text-xs text-slate-500 dark:border-slate-700">{t("consoleDashboardNoUsage")}</div> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:bg-slate-950/40"><svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="h-48 w-full" preserveAspectRatio="none" role="img" aria-label={t("consoleDashboardTokenTrend")}><polyline points={points} fill="none" stroke="currentColor" strokeWidth="4" vectorEffect="non-scaling-stroke" className="text-indigo-500" />{trend.map((item, index) => <circle key={item.at} cx={trend.length === 1 ? chartWidth / 2 : (index / (trend.length - 1)) * chartWidth} cy={chartHeight - (item.total_tokens / maxTrendTokens) * (chartHeight - 18)} r="4" className="fill-emerald-500" />)}</svg><div className="mt-2 flex justify-between gap-2 text-[10px] text-slate-500"><span>{formatDate(trend[0].at, language)}</span><span>{formatDate(trend[trend.length - 1].at, language)}</span></div></div>}</div></div></CardContent></Card>
+    <div className="grid gap-6 xl:grid-cols-2"><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Activity className="h-5 w-5 text-indigo-600" />{t("consoleOverviewTitle")}</CardTitle><CardDescription>{t("consoleOverviewHint")}</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleTenantID")}</span><code className="max-w-[65%] truncate text-xs text-slate-700 dark:text-slate-300">{principal?.tenant_id || "-"}</code></div><div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/50"><span className="text-slate-500">{t("consoleRoles")}</span><span className="font-medium text-slate-800 dark:text-slate-200">{principal?.roles?.join(", ") || "-"}</span></div></CardContent></Card><Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Network className="h-5 w-5 text-cyan-600" />{t("consoleQuickActions")}</CardTitle></CardHeader><CardContent className="space-y-2">{canCreateToken ? <button type="button" onClick={() => onNavigate("tokens")} className="flex w-full items-center gap-3 rounded-xl bg-indigo-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-indigo-500/10 dark:text-slate-300"><KeyRound className="h-4 w-4 text-indigo-600" />{t("consoleQuickToken")}</button> : null}<button type="button" onClick={() => onNavigate("usage")} className="flex w-full items-center gap-3 rounded-xl bg-cyan-500/5 p-3 text-left text-sm text-slate-700 transition-colors hover:bg-cyan-500/10 dark:text-slate-300"><Activity className="h-4 w-4 text-cyan-600" />{t("consoleQuickUsage")}</button></CardContent></Card></div>
+  </div>;
+}
+
+function dashboardRangeBounds(range: DashboardRange, customFrom: string, customTo: string) {
+  const now = new Date();
+  if (range === "custom") {
+    if (!customFrom || !customTo) return null;
+    const from = new Date(`${customFrom}T00:00:00`);
+    const to = new Date(`${customTo}T23:59:59.999`);
+    return Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to ? null : { from: from.toISOString(), to: to.toISOString() };
+  }
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (range === "yesterday") {
+    const from = new Date(start);
+    from.setDate(from.getDate() - 1);
+    return { from: from.toISOString(), to: start.toISOString() };
+  }
+  const days = range === "today" ? 1 : Number.parseInt(range, 10) || 1;
+  const from = new Date(start);
+  from.setDate(from.getDate() - days + 1);
+  return { from: from.toISOString(), to: now.toISOString() };
+}
+
+function formatUptime(seconds: number) {
+  if (!seconds || seconds < 0) return "-";
+  const minutes = Math.floor(seconds / 60);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const remaining = minutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${remaining}m`;
+  return `${remaining}m`;
 }
 
 function UsagePanel({

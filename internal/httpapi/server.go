@@ -38,6 +38,8 @@ import (
 	"ai-token/internal/users"
 )
 
+var processStartedAt = time.Now()
+
 func New(authMiddleware *auth.Middleware, services *auth.Services, secureCookies bool, webDir string) http.Handler {
 	return NewWithRelay(authMiddleware, services, nil, secureCookies, webDir)
 }
@@ -680,6 +682,14 @@ func newHandler(
 			consoleUsageHandler(billingService),
 		),
 	))
+
+	mux.Handle("GET /console/v1/tenants/{tenantID}/dashboard", authMiddleware.Protect(
+		auth.AudienceConsole,
+		"usage:read",
+	)(
+		auth.RequireTenantPath("tenantID")(
+			consoleDashboardHandler(billingService),
+		)))
 
 	mux.Handle("GET /console/v1/tenants/{tenantID}/billing/account", authMiddleware.Protect(
 		auth.AudienceConsole,
@@ -3940,6 +3950,44 @@ func consoleUsageHandler(service billing.AdminService) http.Handler {
 			report.Records[index].EstimatedUpstreamCost = ""
 			report.Records[index].UpstreamCostDiscount = ""
 		}
+		writeJSON(w, http.StatusOK, report)
+	})
+}
+
+func consoleDashboardHandler(service billing.AdminService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reporter, ok := service.(billing.ConsoleDashboardReporter)
+		if !ok || reporter == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "DASHBOARD_UNAVAILABLE"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok || principal.TenantID == "" || r.PathValue("tenantID") != principal.TenantID {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "RESOURCE_NOT_FOUND"})
+			return
+		}
+		from, to, err := reportTimeRange(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_DASHBOARD_QUERY"})
+			return
+		}
+		projectIDs := make([]string, 0, len(principal.ProjectIDs))
+		for projectID := range principal.ProjectIDs {
+			projectIDs = append(projectIDs, projectID)
+		}
+		sort.Strings(projectIDs)
+		if len(projectIDs) == 0 {
+			projectIDs = []string{"no-project-access"}
+		}
+		report, err := reporter.GetConsoleDashboard(r.Context(), billing.ConsoleDashboardQuery{
+			TenantID: principal.TenantID, ProjectIDs: projectIDs, From: from, To: to,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "DASHBOARD_UNAVAILABLE"})
+			return
+		}
+		report.SystemStatus = "normal"
+		report.UptimeSeconds = int64(time.Since(processStartedAt).Seconds())
 		writeJSON(w, http.StatusOK, report)
 	})
 }
