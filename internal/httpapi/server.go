@@ -995,9 +995,10 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 			// material. Never allow a browser or intermediary to cache them.
 			w.Header().Set("Cache-Control", "no-store")
 		}
-		// Brand assets may be hosted on an administrator-approved HTTPS CDN;
-		// keep every executable resource and connection same-origin.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		// Stripe.js and Embedded Checkout are the only third-party executable and
+		// framed resources used by the customer recharge page. Keep all other
+		// executable resources and connections same-origin.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://js.stripe.com; script-src-elem 'self' https://js.stripe.com; connect-src 'self' https://api.stripe.com https://r.stripe.com https://m.stripe.network https://q.stripe.com https://checkout.stripe.com; frame-src 'self' https://checkout.stripe.com https://js.stripe.com https://hooks.stripe.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://fonts.stripe.com; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://checkout.stripe.com")
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" && originAllowed(r, origin, allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -266,6 +267,7 @@ func paymentCreateOrderHandler(service payments.Service) http.Handler {
 		}
 		result, err := service.CreateOrder(r.Context(), payments.CreateRequest{TenantID: principal.TenantID, UserID: principal.ID, Provider: payload.Provider, Amount: payload.Amount, Currency: payload.Currency, IdempotencyKey: key, ReturnURL: returnURL})
 		if err != nil {
+			log.Printf("payment create order failed request_id=%s tenant_id=%s provider=%s error=%v", r.Header.Get("X-Request-ID"), principal.TenantID, strings.TrimSpace(payload.Provider), err)
 			writePaymentError(w, err)
 			return
 		}

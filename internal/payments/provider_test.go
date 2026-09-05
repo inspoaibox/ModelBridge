@@ -119,6 +119,24 @@ func TestStripePaymentMethodConfiguration(t *testing.T) {
 	}
 }
 
+func TestStripeAPIBaseURLNormalizesVersionSuffix(t *testing.T) {
+	tests := []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: "https://api.stripe.com"},
+		{value: "https://api.stripe.com", want: "https://api.stripe.com"},
+		{value: "https://api.stripe.com/", want: "https://api.stripe.com"},
+		{value: "https://api.stripe.com/v1", want: "https://api.stripe.com"},
+		{value: "https://proxy.example.com/stripe/v1/", want: "https://proxy.example.com/stripe"},
+	}
+	for _, test := range tests {
+		if got := stripeAPIBaseURL(test.value); got != test.want {
+			t.Fatalf("stripeAPIBaseURL(%q) = %q; want %q", test.value, got, test.want)
+		}
+	}
+}
+
 func TestPaymentReturnURLKeepsHashRouteAfterAddingProviderParameters(t *testing.T) {
 	got, err := paymentReturnURL("https://gateway.example.com/#console/billing", url.Values{
 		"payment_order_id": {"order-123"},

@@ -66,10 +66,7 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 		// capabilities when no explicit allow-list is configured.
 		form.Set("automatic_payment_methods[enabled]", "true")
 	}
-	endpoint := strings.TrimRight(config["api_base_url"], "/")
-	if endpoint == "" {
-		endpoint = "https://api.stripe.com"
-	}
+	endpoint := stripeAPIBaseURL(config["api_base_url"])
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/checkout/sessions", strings.NewReader(form.Encode()))
 	if err != nil {
 		return providerOrder{}, err
@@ -83,7 +80,7 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return providerOrder{}, fmt.Errorf("stripe checkout returned HTTP %d", resp.StatusCode)
+		return providerOrder{}, fmt.Errorf("stripe checkout returned HTTP %d: %s", resp.StatusCode, stripeErrorSummary(raw))
 	}
 	var payload struct {
 		ID           string `json:"id"`
@@ -94,6 +91,59 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 		return providerOrder{}, ErrCallbackInvalid
 	}
 	return providerOrder{ProviderOrderID: payload.ID, CheckoutURL: payload.URL, CheckoutClientSecret: payload.ClientSecret, Raw: raw}, nil
+}
+
+func stripeErrorSummary(raw []byte) string {
+	var payload struct {
+		Error struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &payload) == nil {
+		parts := make([]string, 0, 3)
+		if value := strings.TrimSpace(payload.Error.Type); value != "" {
+			parts = append(parts, value)
+		}
+		if value := strings.TrimSpace(payload.Error.Code); value != "" {
+			parts = append(parts, value)
+		}
+		if value := strings.TrimSpace(payload.Error.Message); value != "" {
+			parts = append(parts, value)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ": ")
+		}
+	}
+	value := strings.Join(strings.Fields(string(raw)), " ")
+	if len(value) > 240 {
+		value = value[:240]
+	}
+	if value == "" {
+		return "empty response"
+	}
+	return value
+}
+
+// stripeAPIBaseURL accepts both the documented API root and the common value
+// copied from Stripe's API documentation (which already includes /v1). The
+// checkout path below owns the version segment and must add it exactly once.
+func stripeAPIBaseURL(value string) string {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	if value == "" {
+		return "https://api.stripe.com"
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return value
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(parsed.Path, "/v1") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/v1")
+		parsed.RawPath = ""
+	}
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func verifyStripeWebhook(config map[string]string, headers http.Header, body []byte) (callbackPayment, error) {

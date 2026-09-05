@@ -124,8 +124,17 @@ func TestSecurityHeadersAllowConfiguredHTTPSBrandAssets(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	policy := rec.Header().Get("Content-Security-Policy")
-	if !strings.Contains(policy, "img-src 'self' https:") || !strings.Contains(policy, "frame-ancestors 'none'") {
-		t.Fatalf("unexpected content security policy: %q", policy)
+	for _, directive := range []string{
+		"script-src 'self' https://js.stripe.com",
+		"script-src-elem 'self' https://js.stripe.com",
+		"connect-src 'self' https://api.stripe.com",
+		"frame-src 'self' https://checkout.stripe.com",
+		"img-src 'self' data: https:",
+		"frame-ancestors 'none'",
+	} {
+		if !strings.Contains(policy, directive) {
+			t.Fatalf("content security policy must include %q, got %q", directive, policy)
+		}
 	}
 	if rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("API responses must not be cacheable, got %q", rec.Header().Get("Cache-Control"))
