@@ -25,7 +25,6 @@ type Field = { key: string; label: TranslationKey; secret?: boolean; multiline?:
 const fields: Record<Provider, Field[]> = {
   wechat: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
-    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "app_id", label: "paymentWechatAppID" },
     { key: "mch_id", label: "paymentWechatMchID" },
     { key: "serial_no", label: "paymentWechatSerial" },
@@ -38,7 +37,6 @@ const fields: Record<Provider, Field[]> = {
   ],
   alipay: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
-    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "app_id", label: "paymentAlipayAppID" },
     { key: "seller_id", label: "paymentAlipaySellerID" },
     { key: "private_key_pem", label: "paymentPrivateKey", secret: true, multiline: true },
@@ -48,7 +46,6 @@ const fields: Record<Provider, Field[]> = {
   ],
   stripe: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
-    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "secret_key", label: "paymentStripeSecretKey", secret: true },
     { key: "publishable_key", label: "paymentStripePublishableKey" },
     { key: "webhook_secret", label: "paymentStripeWebhookSecret", secret: true },
@@ -56,7 +53,6 @@ const fields: Record<Provider, Field[]> = {
   ],
   paypal: [
     { key: "recharge_rate", label: "paymentRechargeRate", hint: "paymentRechargeRateHint" },
-    { key: "recharge_presets", label: "paymentRechargePresets", hint: "paymentRechargePresetsHint" },
     { key: "client_id", label: "paymentPayPalClientID" },
     { key: "client_secret", label: "paymentPayPalClientSecret", secret: true },
     { key: "webhook_id", label: "paymentPayPalWebhookID" },
@@ -117,6 +113,7 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
         ))}
       </div>
 
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
       <Card className="border-cyan-500/20">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-cyan-600" />{t("paymentSettingsTitle")}</CardTitle>
@@ -164,8 +161,14 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
           <div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400"><Badge variant="muted">{t("paymentCallbackOnly")}</Badge><span>{t("paymentSecurityHint")}</span></div>
         </CardContent>
       </Card>
+      <RechargePackagePanel provider={provider} value={draft.recharge_presets || ""} onChange={(value) => setDraft((current) => ({ ...current, recharge_presets: value }))} disabled={busy || !canUpdate} t={t} />
+      </div>
     </div>
   );
+}
+
+function RechargePackagePanel({ provider, value, onChange, disabled, t }: { provider: Provider; value: string; onChange: (value: string) => void; disabled: boolean; t: (key: TranslationKey) => string }) {
+  return <Card className="h-fit border-emerald-500/25 bg-emerald-50/35 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-500/[0.06]"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />{t("paymentRechargePackagesTitle")}</CardTitle><CardDescription>{t("paymentRechargePackagesDescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-white/75 px-3 py-2 text-xs dark:bg-slate-950/40"><span className="text-slate-500">{t("paymentRechargePackagesProvider")}</span><strong className="text-slate-900 dark:text-white">{t(providerLabels[provider])}</strong></div><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentRechargePresets")}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePresetsHint")}</p></div><RechargePresetsEditor id={`payment-${provider}-recharge-presets`} value={value} onChange={onChange} disabled={disabled} t={t} /><p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePackagesSaveHint")}</p></CardContent></Card>;
 }
 
 function RechargePresetsEditor({ id, value, onChange, disabled, t }: { id: string; value: string; onChange: (value: string) => void; disabled: boolean; t: (key: TranslationKey) => string }) {

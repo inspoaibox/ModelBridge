@@ -102,6 +102,8 @@ test("recharge presets come from payment configuration", () => {
   assert.match(panel, /selectedProvider\?\.recharge_presets/);
   assert.doesNotMatch(panel, /\["10", "50", "100", "500", "1000", "5000"\]/);
   assert.match(settings, /paymentRechargePresets/);
+  assert.match(settings, /RechargePackagePanel/);
+  assert.match(settings, /xl:grid-cols-\[minmax\(0,1\.45fr\)_minmax\(320px,0\.75fr\)\]/);
 });
 
 test("customer finance navigation groups records, cost center, and orders", () => {
