@@ -33,6 +33,21 @@ https://<gateway-domain>/v1
 
 同样的兼容规则适用于模型、Responses、Embeddings、图片、音频、视频以及 Anthropic Messages 接口。服务端只为已定义的公开接口注册别名，所有别名仍经过同一个 API Token、模型权限、网络白名单、限流、渠道调度和计费流程。
 
+## 租户控制台工作区
+
+登录租户控制台后，客户可以在“总览”查看自己的 API Token 数量、活跃 Token、请求数、余额、今日消费、输入/输出 Token、实时 RPM/TPM、模型使用分布和 Token 趋势。总览默认统计当天 00:00 到当前时间，也支持昨天、3/7/15/30/60/90 天和自定义时间范围。Token 数量按当前登录用户创建的 Token 统计；用量和费用按当前账号可访问的租户项目范围统计。
+
+```text
+GET /console/v1/tenants/{tenantID}/dashboard?from=<RFC3339>&to=<RFC3339>
+GET /console/v1/tenants/{tenantID}/usage
+GET /console/v1/tenants/{tenantID}/billing/account
+GET /console/v1/tenants/{tenantID}/billing/recharge
+```
+
+“接口调试”是客户侧的临时测试工具，包含文本模型调试、视频模型调试和图片模型调试。测试 API Key 只用于当前浏览器请求，不写入本地存储；请求体、完整响应和 cURL 示例可在页面中复制。正式业务接入仍应在“API 令牌”中创建平台 Token，不要把上游 Key 放进前端应用。
+
+控制台的“费用中心”用于查看余额、选择全局充值套餐并创建支付订单；“订单中心”用于查看订单状态、到账额度、赠送金额和支付失败详情；“账单记录”用于核对模型调用用量和费用。支付成功必须以服务端回调确认，浏览器回跳只负责重新读取订单状态。
+
 ## 控制台模型状态
 
 登录租户控制台后，模型状态页面调用：
@@ -113,6 +128,7 @@ POST /admin/v1/enterprise-verifications/{verificationID}/review
 ```text
 POST /console/v1/tenants/{tenantID}/billing/recharge
 GET  /console/v1/tenants/{tenantID}/billing/recharge/{orderID}
+GET  /console/v1/tenants/{tenantID}/billing/recharge
 POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture
 ```
 
@@ -137,6 +153,16 @@ POST /console/v1/tenants/{tenantID}/billing/recharge/{orderID}/capture
 GET /admin/v1/settings/payments
 PUT /admin/v1/settings/payments/{provider}
 ```
+
+充值套餐是与支付方式同级的独立系统设置，所有支付方式共用同一组全局套餐：
+
+```text
+GET /admin/v1/settings/payment-packages
+PUT /admin/v1/settings/payment-packages
+GET /public/v1/payments/providers
+```
+
+每个套餐可以配置名称、说明、币种、充值金额 `amount`、到账金额 `credited_amount`、赠送金额 `bonus_amount`、生效/结束时间、有效期 `validity_days` 和启用状态。`credited_amount` 必须等于充值金额加赠送金额；`validity_days=0` 表示长期有效。`kind=subscription` 和 `subscription_plan_code` 为后续订阅套餐预留，当前充值流程只处理 `kind=recharge` 且处于有效时间窗口内的套餐。客户支付页面读取全局套餐，不再按某个支付方式单独维护档位。
 
 支付配置的私钥、证书、API Key 和 Webhook Secret 使用 SecretBox 加密；读取接口仅返回非敏感字段及是否已配置。禁用方式不会删除已保存配置；开启前必须满足该方式的完整字段校验。微信支付和支付宝当面付只接受 CNY 租户账户；Stripe 和 PayPal 使用租户预付账户币种，平台不会在未配置汇率的情况下自动换算。
 
@@ -171,6 +197,18 @@ POST /console/v1/auth/email/verify
 ```
 
 验证令牌 30 分钟有效且只能使用一次。若邮件丢失，可以调用 `POST /console/v1/auth/email/resend` 请求重发；接口对未知邮箱返回相同的 accepted 语义，不暴露账号存在性。生产还必须在应用前配置 Captcha/Bot 防护和 WAF。
+
+## OAuth 快捷登录
+
+管理员可以在“系统设置 -> 登录设置”启用 Google、GitHub 和 Linux.do。公开登录页通过以下接口读取已启用提供商：
+
+```text
+GET /public/v1/auth/providers
+GET /console/v1/auth/oauth/{provider}/start
+GET /console/v1/auth/oauth/{provider}/callback
+```
+
+生产环境须把每个提供商的回调地址配置为 `https://当前域名/console/v1/auth/oauth/{provider}/callback`。首次 OAuth 登录在允许注册时会创建客户账号、租户和默认项目；已有相同邮箱的账号会绑定到现有账号。客户端密钥只在服务端加密保存，不能写进前端代码。
 
 ## OpenAI Chat Completions
 
@@ -244,13 +282,13 @@ API Token 只能由当前登录用户在租户控制台创建，创建响应返�
 | 暂停 / 启用 | 在 `disabled` 与 `active` 之间切换；已过期或已终止的 Token 不能恢复 |
 | 终止 | 将状态改为 `revoked`，永久失效且不能恢复 |
 | 删除 | 软删除并终止 Token，只从用户列表隐藏，不破坏历史用量和财务记录 |
-| 复制密钥 | 只有当前页面会话中刚创建的明文密钥可复制；历史 Token 只能看到脱敏前缀 |
+| 复制密钥 | 当前浏览器会保存该用户新创建的明文密钥，刷新后仍可复制；清除浏览器存储或更换浏览器后无法从服务端恢复，历史 Token 只能看到脱敏前缀 |
 
 对应接口为 `PUT /console/v1/tenants/{tenantID}/tokens/{tokenID}`、`POST .../pause`、`POST .../resume`、`POST .../terminate` 和 `DELETE /console/v1/tenants/{tenantID}/tokens/{tokenID}`。所有接口都由服务端同时校验当前会话的租户、创建者和项目权限，客户端不能通过请求体修改 `tenant_id`、`created_by` 或 Token 状态。账号、租户成员或项目权限失效后，解析器会拒绝该 Token，相关项目权限降级也会撤销已有 Token。
 
 ## 图片、音频与视频
 
-媒体请求使用相同的 `Authorization: Bearer <下游令牌>`、分组模型白名单、IP/域名白名单和 `Idempotency-Key`。图片和音频接口保持 OpenAI 兼容格式，视频接口使用平台任务 ID，避免暴露上游任务标识。
+媒体请求使用相同的 `Authorization: Bearer <下游令牌>`、分组模型白名单和 IP/域名白名单，并支持 `Idempotency-Key` 防止重试重复计费。未提供该请求头时，平台会使用本次请求 ID 生成幂等键。图片和音频接口保持 OpenAI 兼容格式，视频接口使用平台任务 ID，避免暴露上游任务标识。
 
 ```text
 POST /v1/images/generations       application/json
