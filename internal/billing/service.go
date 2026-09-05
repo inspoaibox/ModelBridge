@@ -312,6 +312,7 @@ type CreditRequest struct {
 	Amount         string `json:"amount"`
 	IdempotencyKey string `json:"idempotency_key"`
 	Reason         string `json:"reason"`
+	Direction      string `json:"direction,omitempty"`
 }
 
 type AdminService interface {
@@ -426,10 +427,24 @@ func (s *SQLService) Credit(ctx context.Context, actorID string, request CreditR
 	request.Amount = strings.TrimSpace(request.Amount)
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	request.Reason = strings.TrimSpace(request.Reason)
+	request.Direction = strings.ToLower(strings.TrimSpace(request.Direction))
+	if request.Direction == "" {
+		request.Direction = "credit"
+	}
 	if !ids.Valid(request.TenantID) || request.IdempotencyKey == "" ||
 		len(request.IdempotencyKey) > 256 || len(request.Reason) > 1024 ||
-		!validPositiveDecimal(request.Amount) {
+		!validPositiveDecimal(request.Amount) || (request.Direction != "credit" && request.Direction != "debit") {
 		return AccountSummary{}, ErrInvalidRequest
+	}
+	accountDelta := request.Amount
+	transactionType := "account_credit"
+	accountDirection := "credit"
+	systemDirection := "debit"
+	if request.Direction == "debit" {
+		accountDelta = "-" + request.Amount
+		transactionType = "account_debit"
+		accountDirection = "debit"
+		systemDirection = "credit"
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -518,7 +533,7 @@ func (s *SQLService) Credit(ctx context.Context, actorID string, request CreditR
 		UPDATE ledger_accounts
 		SET balance = balance + $2::numeric
 		WHERE id = $1 AND status = 'active'
-	`, account.ID, request.Amount)
+	`, account.ID, accountDelta)
 	if err != nil {
 		return AccountSummary{}, err
 	}
@@ -539,8 +554,8 @@ func (s *SQLService) Credit(ctx context.Context, actorID string, request CreditR
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ledger_transactions (
 			id, idempotency_key, transaction_type, reference_type, reference_id
-		) VALUES ($1, $2, 'account_credit', 'tenant', $3)
-	`, transactionID, request.IdempotencyKey, request.TenantID); err != nil {
+		) VALUES ($1, $2, $3, 'tenant', $4)
+	`, transactionID, request.IdempotencyKey, transactionType, request.TenantID); err != nil {
 		if isUniqueViolation(err) {
 			return AccountSummary{}, ErrDuplicateTransaction
 		}
@@ -562,10 +577,10 @@ func (s *SQLService) Credit(ctx context.Context, actorID string, request CreditR
 		INSERT INTO ledger_lines (
 			id, transaction_id, account_id, direction, amount, currency, metadata_json
 		) VALUES
-			($1, $2, $3, 'credit', $4, $5, $6),
-			($7, $2, $8, 'debit', $4, $5, $6)
-	`, userLineID, transactionID, account.ID, request.Amount, request.Currency, metadata,
-		systemLineID, systemAccountID); err != nil {
+			($1, $2, $3, $4, $5, $6, $7),
+			($8, $2, $9, $10, $5, $6, $7)
+	`, userLineID, transactionID, account.ID, accountDirection, request.Amount, request.Currency, metadata,
+		systemLineID, systemAccountID, systemDirection); err != nil {
 		return AccountSummary{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `

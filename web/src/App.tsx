@@ -161,6 +161,7 @@ function normalizeSection(value: string): AdminSection {
     value === "channels" ||
     value === "billing" ||
     value === "finance" ||
+    value === "account-finance" ||
     value === "usage" ||
     value === "audit" ||
     value === "enterprise" ||
@@ -307,6 +308,7 @@ function defaultCreditForm(): CreditFormState {
     currency: "USD",
     amount: "",
     reason: "",
+    direction: "credit",
   };
 }
 
@@ -1254,7 +1256,7 @@ export default function App() {
   }, [signedIn, audience, route.view, adminSection, language, reportSearch, reportStatus, reportTenant, reportModel, reportGroup, reportFrom, reportTo]);
 
   useEffect(() => {
-    if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "finance") return;
+    if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "finance" && adminSection !== "account-finance")) return;
     refreshFinanceReport(true, 0);
   }, [signedIn, audience, route.view, adminSection, language, financeSearch, financeCurrency, financeFrom, financeTo]);
 
@@ -3741,6 +3743,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             currency: creditForm.currency.trim().toUpperCase(),
             amount: creditForm.amount.trim(),
             reason: creditForm.reason.trim(),
+            direction: creditForm.direction || "credit",
             idempotency_key: idempotencyKey,
           }),
         }
@@ -3752,7 +3755,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         throw new Error(result.error || "credit failed");
       }
       setBillingAccount(result);
-      setBillingMessage({ kind: "success", text: t("billingCreditSuccess") });
+      setBillingMessage({ kind: "success", text: creditForm.direction === "debit" ? t("accountFinanceDebitSuccess") : t("billingCreditSuccess") });
       setCreditForm((current) => ({ ...current, amount: "", reason: "" }));
     } catch {
       setBillingMessage({ kind: "error", text: t("billingInvalid") });

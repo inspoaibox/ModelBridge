@@ -455,7 +455,11 @@ func (s *SQLService) ListFinanceReport(ctx context.Context, query FinanceQuery) 
 		SELECT lt.id::text, lt.transaction_type, ll.direction, ll.amount::text, ll.currency,
 		       ten.id::text, ten.name, lt.reference_type, lt.reference_id::text,
 		       COALESCE(mod.model_name, ''), COALESCE(tok.name, ''),
-			   COALESCE(ll.metadata_json ->> 'reason', CASE WHEN lt.transaction_type = 'model_usage' THEN 'model usage' ELSE 'account credit' END),
+		       COALESCE(ll.metadata_json ->> 'reason', CASE
+		           WHEN lt.transaction_type = 'model_usage' THEN 'model usage'
+		           WHEN lt.transaction_type = 'account_debit' THEN 'account debit'
+		           ELSE 'account credit'
+		       END),
 			   lt.created_at, mr.usage_metrics_json, mr.charge_breakdown_json, mr.price_snapshot_json
 		FROM ledger_lines ll
 		JOIN ledger_accounts a ON a.id = ll.account_id AND a.account_type = 'prepaid_balance' AND a.status = 'active'

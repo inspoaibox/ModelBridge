@@ -26,13 +26,13 @@ import {
   Trash2,
   Users,
   Waypoints,
+  WalletCards,
   Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -81,6 +81,7 @@ import { translations } from "@/locales/translations";
 import { cn, formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import { AdminSettingsPanel } from "@/components/admin/AdminSettingsPanel";
 import { AdminFinancePanel } from "@/components/admin/AdminFinancePanel";
+import { AdminAccountFinancePanel } from "@/components/admin/AdminAccountFinancePanel";
 import { AdminUsagePanel } from "@/components/admin/AdminUsagePanel";
 import { AdminAuditPanel } from "@/components/admin/AdminAuditPanel";
 import { AdminRoleManagementPanel } from "@/components/admin/AdminRoleManagementPanel";
@@ -592,6 +593,7 @@ export function AdminConsole({
       group: language === "zh" ? "财务与审计" : "Finance & Audit",
       items: [
         { id: "finance" as const, label: t("adminNavFinance"), icon: Receipt, permission: "finance:read" },
+        { id: "account-finance" as const, label: t("adminNavAccountFinance"), icon: WalletCards, permission: "finance:read" },
         { id: "usage" as const, label: t("adminNavUsage"), icon: ClipboardList, permission: "usage:read" },
         { id: "audit" as const, label: t("adminNavAudit"), icon: ShieldAlert, permission: "audit:read" },
       ],
@@ -705,6 +707,8 @@ export function AdminConsole({
                   ? t("adminNavBilling")
                 : adminSection === "finance"
                   ? t("adminNavFinance")
+                : adminSection === "account-finance"
+                  ? t("adminNavAccountFinance")
                 : adminSection === "usage"
                   ? t("adminNavUsage")
                 : adminSection === "audit"
@@ -735,6 +739,8 @@ export function AdminConsole({
                   ? t("billingTitle")
                 : adminSection === "finance"
                   ? t("financeTitle")
+                : adminSection === "account-finance"
+                  ? t("accountFinanceTitle")
                 : adminSection === "usage"
                   ? t("usageRecordsTitle")
                 : adminSection === "audit"
@@ -1536,7 +1542,7 @@ export function AdminConsole({
         {/* Section 5: Billing & Pricing View */}
         {adminSection === "billing" && (
           <div className="space-y-6">
-            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
+            <div>
               {/* Publish Price Form */}
               <Card className="glass-panel">
                 <CardHeader className="space-y-3 pb-4">
@@ -1560,130 +1566,6 @@ export function AdminConsole({
                 </CardContent>
               </Card>
 
-              {/* Tenant Account & Credit Card */}
-              <Card className="glass-panel">
-                <CardHeader className="space-y-1 pb-4">
-                  <CardTitle className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <CircleDollarSign className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                    <span>{t("billingAccountTitle")}</span>
-                  </CardTitle>
-                  <CardDescription>{t("billingAccountHint")}</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <form className="space-y-4" onSubmit={creditBillingAccount}>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="credit-tenant-id" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        {t("billingTenantID")}
-                      </Label>
-                      <Input
-                        id="credit-tenant-id"
-                        value={creditForm.tenant_id}
-                        onChange={(e) => setCreditForm((curr) => ({ ...curr, tenant_id: e.target.value }))}
-                        placeholder="tenant_xxxxxxxxxxxx"
-                        className="font-mono text-xs"
-                        required
-                      />
-                    </div>
-
-                    {/* Quick Amount Buttons */}
-                    <div className="space-y-1.5">
-                      <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{language === "zh" ? "快捷充值预设" : "Quick Preset"}</div>
-                      <div className="flex flex-wrap gap-2">
-                        {["100", "500", "1000", "5000"].map((preset) => (
-                          <button
-                            key={preset}
-                            type="button"
-                            onClick={() => setCreditForm((curr) => ({ ...curr, amount: preset }))}
-                            className={cn(
-                              "rounded-lg border px-3 py-1 text-xs font-mono transition-all cursor-pointer",
-                              creditForm.amount === preset
-                                ? "border-emerald-500 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-bold"
-                                : "border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900/60 text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-                            )}
-                          >
-                            {creditForm.currency || "USD"} {preset}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="credit-currency" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                          {t("billingPriceCurrency")}
-                        </Label>
-                        <Input
-                          id="credit-currency"
-                          maxLength={3}
-                          value={creditForm.currency}
-                          onChange={(e) => setCreditForm((curr) => ({ ...curr, currency: e.target.value.toUpperCase() }))}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="credit-amount" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                          {t("billingAmount")}
-                        </Label>
-                        <Input
-                          id="credit-amount"
-                          inputMode="decimal"
-                          value={creditForm.amount}
-                          onChange={(e) => setCreditForm((curr) => ({ ...curr, amount: e.target.value }))}
-                          placeholder="0.00"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label htmlFor="credit-reason" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        {t("billingReason")}
-                      </Label>
-                      <Input
-                        id="credit-reason"
-                        value={creditForm.reason}
-                        onChange={(e) => setCreditForm((curr) => ({ ...curr, reason: e.target.value }))}
-                        placeholder="e.g. 2026 Q3 企业额度预付充值"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={loadBillingAccount}
-                       disabled={!canSeeAdminPermission("billing:read") || billingBusy}
-                        className="h-9 text-xs"
-                      >
-                        <RefreshCw className={cn("h-3.5 w-3.5 mr-1", billingBusy ? "animate-spin" : "")} />
-                        <span>{t("billingAccountLoad")}</span>
-                      </Button>
-
-                       <Button type="submit" size="sm" disabled={!canSeeAdminPermission("billing:update") || billingBusy} className="h-9 text-xs gap-1.5">
-                        <CircleDollarSign className="h-3.5 w-3.5" />
-                        <span>{billingBusy ? t("billingCrediting") : t("billingCredit")}</span>
-                      </Button>
-                    </div>
-                  </form>
-
-                  {/* Account Balance Lookup Result Box */}
-                  {billingAccount && (
-                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-50/80 dark:bg-emerald-950/20 p-4 space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold text-slate-700 dark:text-slate-300">{t("billingAccountBalance")}</span>
-                        <Badge variant="success">{billingAccount.status}</Badge>
-                      </div>
-                      <div className="text-2xl font-extrabold text-emerald-700 dark:text-emerald-400 font-mono">
-                        {billingAccount.currency} {formatMoney(billingAccount.balance)}
-                      </div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 font-mono truncate">
-                        {t("billingAccountID")}: {billingAccount.id}
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
             </div>
 
             {/* Status Message */}
@@ -1840,6 +1722,32 @@ export function AdminConsole({
             setTo={setFinanceTo}
           />
         )}
+        {adminSection === "account-finance" && (
+          <AdminAccountFinancePanel
+            language={language}
+            report={financeReport}
+            busy={financeReportBusy}
+            message={financeReportMessage}
+            refresh={refreshFinanceReport}
+            search={financeSearch}
+            setSearch={setFinanceSearch}
+            currency={financeCurrency}
+            setCurrency={setFinanceCurrency}
+            from={financeFrom}
+            setFrom={setFinanceFrom}
+            to={financeTo}
+            setTo={setFinanceTo}
+            billingAccount={billingAccount}
+            billingMessage={billingMessage}
+            billingBusy={billingBusy}
+            creditForm={creditForm}
+            setCreditForm={setCreditForm}
+            creditBillingAccount={creditBillingAccount}
+            loadBillingAccount={loadBillingAccount}
+            canReadBilling={canSeeAdminPermission("billing:read")}
+            canUpdateBilling={canSeeAdminPermission("billing:update")}
+          />
+        )}
         {adminSection === "audit" && (
           <AdminAuditPanel language={language} report={auditReport} busy={auditBusy} message={auditMessage} refresh={refreshAudit} />
         )}
@@ -1915,12 +1823,6 @@ function componentDisplayPrice(value: string, unit: string) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return "-";
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(parsed * componentUnitScale(unit));
-}
-
-function formatMoney(value?: string) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return "0";
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(parsed);
 }
 
 function formatMultiplier(value: string) {

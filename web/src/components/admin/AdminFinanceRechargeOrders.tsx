@@ -10,11 +10,13 @@ interface AdminFinanceRechargeOrdersProps {
   language: Language;
   report: FinanceReport | null;
   busy: boolean;
+  tenantID?: string;
+  currency?: string;
 }
 
-export function AdminFinanceRechargeOrders({ language, report, busy }: AdminFinanceRechargeOrdersProps) {
+export function AdminFinanceRechargeOrders({ language, report, busy, tenantID, currency }: AdminFinanceRechargeOrdersProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
-  const orders = report?.recharge_orders || [];
+  const orders = report?.recharge_orders.filter((order) => (!tenantID || order.tenant_id === tenantID) && (!currency || order.currency === currency)) || [];
 
   return (
     <Card className="border-slate-200/80 shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
@@ -22,7 +24,7 @@ export function AdminFinanceRechargeOrders({ language, report, busy }: AdminFina
         <CardTitle className="flex items-center gap-2 text-lg text-slate-950 dark:text-white">
           <Receipt className="h-5 w-5 text-emerald-600" />
           {t("financeRechargeOrdersTitle")}
-          {report ? <Badge variant="secondary" className="text-[10px]">{report.total_recharge_orders}</Badge> : null}
+          {report ? <Badge variant="secondary" className="text-[10px]">{orders.length}</Badge> : null}
         </CardTitle>
         <CardDescription>{t("financeRechargeOrdersDescription")}</CardDescription>
       </CardHeader>
@@ -65,7 +67,7 @@ export function AdminFinanceRechargeOrders({ language, report, busy }: AdminFina
             </tbody>
           </table>
         </div>
-        <div className="border-t border-slate-200/80 px-5 py-3 text-xs text-slate-500 dark:border-slate-800/80 dark:text-slate-400">{report ? `${report.total_recharge_orders} ${t("financeRechargeOrdersUnit")}` : "-"}</div>
+        <div className="border-t border-slate-200/80 px-5 py-3 text-xs text-slate-500 dark:border-slate-800/80 dark:text-slate-400">{report ? `${orders.length} ${t("financeRechargeOrdersUnit")}` : "-"}</div>
       </CardContent>
     </Card>
   );
