@@ -13,9 +13,10 @@ interface RegisterViewProps {
   routeTo: (target: string) => void;
   onRegistered: (email: string, tenantID: string, verificationRequired: boolean) => void;
   registrationEnabled: boolean;
+  oauthProviders?: Array<{ provider: string; enabled: boolean }>;
 }
 
-export function RegisterView({ language, routeTo, onRegistered, registrationEnabled }: RegisterViewProps) {
+export function RegisterView({ language, routeTo, onRegistered, registrationEnabled, oauthProviders = [] }: RegisterViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -80,7 +81,7 @@ export function RegisterView({ language, routeTo, onRegistered, registrationEnab
 
         <Card className="border-slate-200/80 shadow-xl dark:border-slate-800 dark:bg-slate-900/70">
           <CardHeader className="border-b border-slate-200/80 dark:border-slate-800"><CardTitle className="text-xl text-slate-950 dark:text-white">{t("registerFormTitle")}</CardTitle><CardDescription>{t("registerFormHint")}</CardDescription></CardHeader>
-          <CardContent className="pt-6"><form onSubmit={(event) => void submit(event)} className="space-y-5">
+          <CardContent className="pt-6">{oauthProviders.some((item) => item.enabled) ? <div className="mb-5 space-y-3"><div className="text-center text-xs font-semibold text-slate-500 dark:text-slate-400">{t("loginQuickAccess")}</div><div className="grid gap-2 sm:grid-cols-3">{oauthProviders.filter((item) => item.enabled).map((item) => <Button key={item.provider} type="button" variant="outline" onClick={() => window.location.assign(`/console/v1/auth/oauth/${encodeURIComponent(item.provider)}/start`)}><span className="truncate">{oauthProviderLabel(item.provider, t)}</span></Button>)}</div><div className="border-t border-slate-200 pt-5 dark:border-slate-800" /></div> : null}<form onSubmit={(event) => void submit(event)} className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2"><Label htmlFor="register-display-name">{t("registerDisplayName")}</Label><div className="relative"><UserRound className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input id="register-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="pl-9" required maxLength={100} /></div></div>
               <div className="space-y-2"><Label htmlFor="register-email">{t("fieldEmail")}</Label><div className="relative"><Mail className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input id="register-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="pl-9" required /></div></div>
@@ -100,4 +101,11 @@ export function RegisterView({ language, routeTo, onRegistered, registrationEnab
       </div>
     </div>
   );
+}
+
+function oauthProviderLabel(provider: string, t: (key: TranslationKey) => string) {
+  if (provider === "google") return t("loginProviderGoogle");
+  if (provider === "github") return t("loginProviderGitHub");
+  if (provider === "linuxdo") return t("loginProviderLinuxDo");
+  return provider;
 }

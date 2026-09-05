@@ -4443,7 +4443,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             oauthProviders={oauthProviders}
             />
           ) : currentView === "register" ? (
-            <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} registrationEnabled={publicFeatures?.registration_enabled !== false} />
+            <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} registrationEnabled={publicFeatures?.registration_enabled !== false} oauthProviders={oauthProviders} />
           ) : currentView === "reset" ? (
             <ResetPasswordView language={language} token={route.reset_token} routeTo={routeTo} />
           ) : currentView === "verify-email" ? (
