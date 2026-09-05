@@ -5,8 +5,8 @@ package payments
 // only source of truth used to credit a tenant account.
 
 import (
-	"crypto/md5"
 	"context"
+	"crypto/md5"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -56,12 +56,13 @@ type ProviderConfig struct {
 }
 
 type PublicProvider struct {
-	Provider        string   `json:"provider"`
-	Enabled         bool     `json:"enabled"`
-	RechargeRate    string   `json:"recharge_rate,omitempty"`
-	RechargePresets []string `json:"recharge_presets,omitempty"`
+	Provider         string            `json:"provider"`
+	Enabled          bool              `json:"enabled"`
+	RechargeRate     string            `json:"recharge_rate,omitempty"`
+	RechargePresets  []string          `json:"recharge_presets,omitempty"`
 	RechargePackages []RechargePackage `json:"recharge_packages,omitempty"`
-	PublishableKey  string   `json:"publishable_key,omitempty"`
+	PaymentMethods   []string          `json:"payment_method_types,omitempty"`
+	PublishableKey   string            `json:"publishable_key,omitempty"`
 }
 
 type RechargePackage struct {
@@ -81,8 +82,8 @@ type RechargePackage struct {
 }
 
 type RechargePackages struct {
-	Packages       []RechargePackage `json:"packages"`
-	RechargePresets []string `json:"recharge_presets"`
+	Packages        []RechargePackage `json:"packages"`
+	RechargePresets []string          `json:"recharge_presets"`
 }
 
 type OrderQuery struct {
@@ -273,6 +274,11 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 			item.RechargePresets = packageAmounts(item.RechargePackages)
 		}
 		item.PublishableKey = strings.TrimSpace(values["publishable_key"])
+		if item.Provider == ProviderStripe {
+			if methods, normalizeErr := normalizeStripePaymentMethods(values["payment_method_types"]); normalizeErr == nil && methods != "" {
+				item.PaymentMethods = strings.Split(methods, ",")
+			}
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -322,13 +328,13 @@ func (s *SQLService) globalRechargePackages(ctx context.Context) ([]RechargePack
 func normalizeRechargePackages(input []RechargePackage) ([]RechargePackage, bool, error) {
 	result := make([]RechargePackage, 0, len(input))
 	seen := make(map[string]struct{}, len(input))
-		for index, item := range input {
-			item.ID = strings.TrimSpace(item.ID)
-			if item.ID == "" {
-				// Keep IDs stable when reading a legacy or hand-written JSON setting.
-				// The same package must validate on the public-list request and the
-				// subsequent create-order request.
-				item.ID = generatedPackageID(item, index)
+	for index, item := range input {
+		item.ID = strings.TrimSpace(item.ID)
+		if item.ID == "" {
+			// Keep IDs stable when reading a legacy or hand-written JSON setting.
+			// The same package must validate on the public-list request and the
+			// subsequent create-order request.
+			item.ID = generatedPackageID(item, index)
 		}
 		if !ids.Valid(item.ID) || item.Name == "" || len(item.Name) > 128 || len(item.Description) > 500 {
 			return nil, true, ErrInvalidRequest

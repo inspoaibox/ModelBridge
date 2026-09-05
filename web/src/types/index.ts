@@ -668,6 +668,7 @@ export interface PublicPaymentProvider {
   recharge_rate?: string;
   recharge_presets?: string[];
   recharge_packages?: PaymentRechargePackage[];
+  payment_method_types?: string[];
   publishable_key?: string;
 }
 
