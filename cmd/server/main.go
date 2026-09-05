@@ -211,6 +211,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		oauthService, err := auth.NewSQLOAuthService(dbConn, sessions, settingsService)
+		if err != nil {
+			log.Fatal(err)
+		}
 		relayService, err = relay.NewServiceWithTokenLimiter(
 			channelRouter,
 			credentialResolver,
@@ -250,6 +254,7 @@ func main() {
 			MFA:                   mfaEnrollment,
 			StepUpMFA:             mfaEnrollment,
 			SecuritySettings:      settingsService,
+			OAuth:                 oauthService,
 		}
 	}
 

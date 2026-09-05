@@ -41,6 +41,7 @@ interface LoginViewProps {
   principal: Principal | null;
   handleSignOut: () => void;
   routeTo: (target: string) => void;
+  oauthProviders?: Array<{ provider: string; enabled: boolean }>;
 }
 
 export function LoginView({
@@ -63,6 +64,7 @@ export function LoginView({
   principal,
   handleSignOut,
   routeTo,
+  oauthProviders = [],
 }: LoginViewProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
 
@@ -289,6 +291,7 @@ export function LoginView({
                       </>
                     )}
                   </Button>
+                  {loginAudience === "console" && oauthProviders.some((item) => item.enabled) ? <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800"><div className="text-center text-xs font-semibold text-slate-500 dark:text-slate-400">{t("loginQuickAccess")}</div><div className="grid gap-2 sm:grid-cols-3">{oauthProviders.filter((item) => item.enabled).map((item) => <Button key={item.provider} type="button" variant="outline" className="gap-2" onClick={() => window.location.assign(`/console/v1/auth/oauth/${encodeURIComponent(item.provider)}/start`)} disabled={formBusy}><span className="truncate">{oauthProviderLabel(item.provider, t)}</span></Button>)}</div></div> : null}
                   {loginAudience === "console" ? (
                     <Button type="button" variant="ghost" size="sm" className="w-full" onClick={() => routeTo("#reset")}>
                       {language === "zh" ? "忘记密码？" : "Forgot password?"}
@@ -318,4 +321,11 @@ export function LoginView({
       </div>
     </div>
   );
+}
+
+function oauthProviderLabel(provider: string, t: (key: TranslationKey) => string) {
+  if (provider === "google") return t("loginProviderGoogle");
+  if (provider === "github") return t("loginProviderGitHub");
+  if (provider === "linuxdo") return t("loginProviderLinuxDo");
+  return provider;
 }

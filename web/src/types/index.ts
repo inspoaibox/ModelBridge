@@ -118,6 +118,23 @@ export interface SecuritySettings {
   updated_by: string;
 }
 
+export interface LoginProviderSettings {
+  provider: "google" | "github" | "linuxdo" | string;
+  enabled: boolean;
+  client_id: string;
+  client_secret_configured: boolean;
+  client_secret?: string;
+  clear_client_secret?: boolean;
+  authorization_url: string;
+  token_url: string;
+  userinfo_url: string;
+  scopes: string;
+}
+
+export interface LoginSettings {
+  providers: LoginProviderSettings[];
+}
+
 export interface SiteSettings {
   site_name: string;
   site_logo_url: string;

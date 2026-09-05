@@ -52,6 +52,7 @@ type Services struct {
 	MFA                   MFAEnrollmentProvider
 	StepUpMFA             MFAVerifier
 	SecuritySettings      SecuritySettingsProvider
+	OAuth                 OAuthLoginProvider
 }
 
 type SQLLoginService struct {

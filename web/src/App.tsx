@@ -32,6 +32,7 @@ import {
   IssuedTokenResponse,
   Language,
   LoginMessage,
+  LoginSettings,
   ConsoleProfile,
   EmailFormState,
 	EmailSettings,
@@ -665,6 +666,7 @@ export default function App() {
   const [adminModelMonitorForm, setAdminModelMonitorForm] = useState<ModelMonitorFormState>(() => defaultModelMonitorForm());
   const [adminModelMonitorActionBusy, setAdminModelMonitorActionBusy] = useState("");
   const [publicFeatures, setPublicFeatures] = useState<PublicFeatureSettings | null>(null);
+  const [oauthProviders, setOauthProviders] = useState<Array<{ provider: string; enabled: boolean }>>([]);
   const [consoleProfile, setConsoleProfile] = useState<ConsoleProfile | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileFormState>(() => defaultProfileForm());
   const [emailForm, setEmailForm] = useState<EmailFormState>(() => defaultEmailForm());
@@ -804,6 +806,9 @@ export default function App() {
   const [paymentConfigs, setPaymentConfigs] = useState<PaymentProviderConfig[]>([]);
   const [paymentSettingsBusy, setPaymentSettingsBusy] = useState(false);
   const [paymentSettingsMessage, setPaymentSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [loginSettings, setLoginSettings] = useState<LoginSettings>({ providers: [] });
+  const [loginSettingsBusy, setLoginSettingsBusy] = useState(false);
+  const [loginSettingsMessage, setLoginSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
   const [paymentRechargePackages, setPaymentRechargePackages] = useState<PaymentRechargePackage[]>([]);
   const [officialPriceSyncBusy, setOfficialPriceSyncBusy] = useState(false);
   const [modelPriceForm, setModelPriceForm] = useState<ModelPriceFormState>(() => defaultModelPriceForm());
@@ -922,6 +927,15 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    fetch("/public/v1/auth/providers", { headers: { Accept: "application/json" } })
+      .then(async (response) => (response.ok ? (await response.json()) as { providers?: Array<{ provider: string; enabled: boolean }> } : { providers: [] }))
+      .then((result) => { if (!cancelled) setOauthProviders(result.providers || []); })
+      .catch(() => { if (!cancelled) setOauthProviders([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     async function loadPublicFeatures() {
       try {
         const response = await fetch("/public/v1/features", { headers: { Accept: "application/json" } });
@@ -989,6 +1003,18 @@ export default function App() {
     onHashChange();
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  useEffect(() => {
+    if (route.view !== "login") return;
+    const query = new URLSearchParams(window.location.search);
+    const oauthError = query.get("oauth_error");
+    if (!oauthError) return;
+    const cleanURL = new URL(window.location.href);
+    cleanURL.searchParams.delete("oauth_error");
+    cleanURL.searchParams.delete("oauth_provider");
+    window.history.replaceState({}, document.title, `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+    setLoginMessage({ kind: "error", text: oauthError === "OAUTH_PROVIDER_UNAVAILABLE" ? t("oauthProviderUnavailable") : t("oauthLoginFailed") });
+  }, [route.view, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1614,7 +1640,7 @@ export default function App() {
     setAdminProfileBusy(true);
     if (showPending) setAdminProfileMessage({ kind: "pending", text: t("systemSettingsLoading") });
     try {
-	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse, paymentResponse, paymentPackagesResponse] = await Promise.all([
+	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse, paymentResponse, paymentPackagesResponse, loginResponse] = await Promise.all([
 	        fetch("/admin/v1/profile", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/auth/mfa/status", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
@@ -1624,6 +1650,7 @@ export default function App() {
 	        fetch("/admin/v1/settings/email/templates", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/payments", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/payment-packages", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/login", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	      ]);
       const profileResult = (await profileResponse.json().catch(() => ({}))) as ConsoleProfile & { error?: string };
 	      const mfaResult = (await mfaResponse.json().catch(() => ({}))) as MFAStatus & { error?: string };
@@ -1634,11 +1661,12 @@ export default function App() {
 	      const templateResult = (await templateResponse.json().catch(() => ({}))) as { templates?: EmailTemplate[]; error?: string };
 	      const paymentResult = (await paymentResponse.json().catch(() => ({}))) as { providers?: PaymentProviderConfig[]; error?: string };
 	      const paymentPackagesResult = (await paymentPackagesResponse.json().catch(() => ({}))) as PaymentRechargePackages & { error?: string };
+	      const loginResult = (await loginResponse.json().catch(() => ({}))) as LoginSettings & { error?: string };
 	      if (!profileResponse.ok) throw new Error(resolveProfileError(profileResponse.status, profileResult.error, t));
 	      if (!mfaResponse.ok) throw new Error(resolveProfileError(mfaResponse.status, mfaResult.error, t));
 	      if (!settingsResponse.ok) throw new Error(resolveSystemSettingsError(settingsResponse.status, settingsResult.error, t));
 	      if (!endpointResponse.ok) throw new Error(resolveAPIEndpointError(endpointResponse.status, endpointResult.error, t));
-	      if (!emailResponse.ok || !featureResponse.ok || !templateResponse.ok) throw new Error(t("emailSettingsUnavailable"));
+      if (!emailResponse.ok || !featureResponse.ok || !templateResponse.ok) throw new Error(t("emailSettingsUnavailable"));
       setAdminProfile(profileResult);
       setAdminProfileForm({ display_name: profileResult.display_name || "" });
       setAdminEmailForm({ email: profileResult.email || "", current_password: "" });
@@ -1673,7 +1701,9 @@ export default function App() {
       setEmailTemplates(templateResult.templates || []);
       setPaymentConfigs(paymentResponse.ok ? paymentResult.providers || [] : []);
       setPaymentSettingsMessage(paymentResponse.ok ? { kind: "", text: "" } : { kind: "error", text: t("paymentSettingsUnavailable") });
-      setPaymentRechargePackages(paymentPackagesResponse.ok ? paymentPackagesResult.packages || [] : []);
+	      setPaymentRechargePackages(paymentPackagesResponse.ok ? paymentPackagesResult.packages || [] : []);
+      setLoginSettings(loginResponse.ok ? { providers: loginResult.providers || [] } : { providers: [] });
+      setLoginSettingsMessage(loginResponse.ok ? { kind: "", text: "" } : { kind: "error", text: t("loginSettingsUnavailable") });
       setSiteSettings({
         site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
         site_logo_url: settingsResult.site_logo_url?.trim() || "",
@@ -2232,6 +2262,27 @@ export default function App() {
       setPaymentSettingsMessage({ kind: "error", text: error instanceof Error ? error.message : t("paymentRechargePackagesSaveFailed") });
     } finally {
       setPaymentSettingsBusy(false);
+    }
+  }
+
+  async function saveLoginSettings(settings: LoginSettings) {
+    setLoginSettingsBusy(true);
+    setLoginSettingsMessage({ kind: "pending", text: t("loginSettingsSaving") });
+    try {
+      const response = await fetchAdminSensitive("/admin/v1/settings/login", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ providers: settings.providers.map((item) => ({ provider: item.provider, enabled: item.enabled, client_id: item.client_id, client_secret: item.client_secret || "", clear_client_secret: Boolean(item.clear_client_secret), authorization_url: item.authorization_url, token_url: item.token_url, userinfo_url: item.userinfo_url, scopes: item.scopes })) }),
+      });
+      const result = (await response.json().catch(() => ({}))) as LoginSettings & { error?: string };
+      if (!response.ok) throw new Error(result.error || "login settings unavailable");
+      setLoginSettings({ providers: result.providers || [] });
+      setLoginSettingsMessage({ kind: "success", text: t("loginSettingsSaved") });
+    } catch (error) {
+      setLoginSettingsMessage({ kind: "error", text: error instanceof Error && error.message === "INVALID_LOGIN_SETTINGS" ? t("loginSettingsValidation") : t("loginSettingsSaveFailed") });
+    } finally {
+      setLoginSettingsBusy(false);
     }
   }
 
@@ -4389,6 +4440,7 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             principal={principal}
             handleSignOut={handleSignOut}
             routeTo={routeTo}
+            oauthProviders={oauthProviders}
             />
           ) : currentView === "register" ? (
             <RegisterView language={language} routeTo={routeTo} onRegistered={handleRegistered} registrationEnabled={publicFeatures?.registration_enabled !== false} />
@@ -4649,6 +4701,10 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             savePaymentConfig={savePaymentConfig}
             paymentRechargePackages={paymentRechargePackages}
             savePaymentRechargePackages={savePaymentRechargePackages}
+            loginSettings={loginSettings}
+            loginSettingsBusy={loginSettingsBusy}
+            loginSettingsMessage={loginSettingsMessage}
+            saveLoginSettings={saveLoginSettings}
             canUpdatePaymentSettings={principal?.permissions?.includes("payment:update") === true}
             usageReport={usageReport}
             usageReportBusy={usageReportBusy}

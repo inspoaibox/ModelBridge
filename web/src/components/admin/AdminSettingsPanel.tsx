@@ -47,12 +47,14 @@ import {
   SMTPSettingsForm,
   PaymentProviderConfig,
   PaymentRechargePackage,
+  LoginSettings,
   TranslationKey,
 } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn } from "@/lib/utils";
 import { PaymentSettingsPanel } from "@/components/admin/PaymentSettingsPanel";
 import { PaymentPackagesPanel } from "@/components/admin/PaymentPackagesPanel";
+import { LoginSettingsPanel } from "@/components/admin/LoginSettingsPanel";
 
 interface AdminSettingsPanelProps {
   language: Language;
@@ -128,12 +130,16 @@ interface AdminSettingsPanelProps {
   paymentRechargePackages: PaymentRechargePackage[];
   savePaymentRechargePackages: (packages: PaymentRechargePackage[]) => Promise<void>;
   canUpdatePaymentSettings: boolean;
+  loginSettings: LoginSettings;
+  loginSettingsBusy: boolean;
+  loginSettingsMessage: LoginMessage;
+  saveLoginSettings: (settings: LoginSettings) => Promise<void>;
 }
 
 export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
   const { language } = props;
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
-  const [tab, setTab] = useState<"admin" | "base" | "email" | "features" | "payments" | "packages">("admin");
+  const [tab, setTab] = useState<"admin" | "base" | "email" | "features" | "payments" | "packages" | "login">("admin");
 
   return (
     <div className="space-y-6">
@@ -144,6 +150,7 @@ export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
         <TabButton active={tab === "features"} icon={ToggleRight} label={t("systemSettingsFeaturesTab")} onClick={() => setTab("features")} />
         <TabButton active={tab === "payments"} icon={CreditCard} label={t("systemSettingsPaymentsTab")} onClick={() => setTab("payments")} />
         <TabButton active={tab === "packages"} icon={CreditCard} label={t("paymentRechargePackagesTitle")} onClick={() => setTab("packages")} />
+        <TabButton active={tab === "login"} icon={KeyRound} label={t("loginSettingsNav")} onClick={() => setTab("login")} />
       </div>
       {tab === "admin" ? <AdminTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "base" ? <BaseTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
@@ -151,6 +158,7 @@ export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
       {tab === "features" ? <FeatureTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "payments" ? <PaymentSettingsPanel language={language} configs={props.paymentConfigs} busy={props.paymentSettingsBusy} message={props.paymentSettingsMessage} save={props.savePaymentConfig} canUpdate={props.canUpdatePaymentSettings} /> : null}
       {tab === "packages" ? <PaymentPackagesPanel language={language} packages={props.paymentRechargePackages} busy={props.paymentSettingsBusy} message={props.paymentSettingsMessage} save={props.savePaymentRechargePackages} canUpdate={props.canUpdatePaymentSettings} /> : null}
+      {tab === "login" ? <LoginSettingsPanel language={language} settings={props.loginSettings} busy={props.loginSettingsBusy} message={props.loginSettingsMessage} save={props.saveLoginSettings} canUpdate={props.canUpdateSystemSettings} /> : null}
       {props.apiEndpointFormOpen ? <APIEndpointModal {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
     </div>
   );

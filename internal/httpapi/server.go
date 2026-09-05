@@ -262,6 +262,11 @@ func newHandler(
 
 	mux.HandleFunc("POST /admin/v1/auth/login", adminLoginHandler(services.Login, secureCookies, adminEntryPath))
 	mux.HandleFunc("POST /console/v1/auth/login", loginHandler(services.Login, auth.AudienceConsole, secureCookies))
+	if services.OAuth != nil {
+		mux.HandleFunc("GET /console/v1/auth/oauth/{provider}/start", oauthStartHandler(services.OAuth))
+		mux.HandleFunc("GET /console/v1/auth/oauth/{provider}/callback", oauthCallbackHandler(services.OAuth, secureCookies))
+		mux.HandleFunc("GET /public/v1/auth/providers", oauthPublicProvidersHandler(services.OAuth))
+	}
 	mux.HandleFunc("POST /console/v1/auth/register", registrationHandler(services.Registration, services.SecuritySettings))
 	mux.HandleFunc("POST /console/v1/auth/email/verify", emailVerificationHandler(services.Registration))
 	mux.HandleFunc("POST /console/v1/auth/email/resend", emailVerificationResendHandler(services.Registration))
@@ -410,6 +415,12 @@ func newHandler(
 	mux.Handle("POST /admin/v1/settings/email/templates", protectStepUp(adminsettings.StepUpOperationSystem, emailTemplateCreateHandler(services.SecuritySettings), "security:update"))
 	mux.Handle("PUT /admin/v1/settings/email/templates/{templateID}", protectStepUp(adminsettings.StepUpOperationSystem, emailTemplateUpdateHandler(services.SecuritySettings), "security:update"))
 	mux.Handle("DELETE /admin/v1/settings/email/templates/{templateID}", protectStepUp(adminsettings.StepUpOperationSystem, emailTemplateDeleteHandler(services.SecuritySettings), "security:update"))
+	mux.Handle("GET /admin/v1/settings/login", authMiddleware.Protect(
+		auth.AudienceAdmin, "security:read",
+	)(loginSettingsReadHandler(services.SecuritySettings)))
+	mux.Handle("PUT /admin/v1/settings/login", protectStepUp(
+		adminsettings.StepUpOperationSystem, loginSettingsUpdateHandler(services.SecuritySettings), "security:update",
+	))
 	mux.Handle("GET /admin/v1/settings/features", authMiddleware.Protect(
 		auth.AudienceAdmin,
 		"security:read",
@@ -1307,6 +1318,63 @@ func adminLoginHandler(service auth.LoginProvider, secureCookies bool, entryPath
 	}
 }
 
+func oauthPublicProvidersHandler(service auth.OAuthLoginProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		providers, err := service.Providers(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OAUTH_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
+	}
+}
+
+func oauthStartHandler(service auth.OAuthLoginProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		provider := strings.ToLower(strings.TrimSpace(r.PathValue("provider")))
+		redirectURI := targetOriginForRequest(r) + "/console/v1/auth/oauth/" + url.PathEscape(provider) + "/callback"
+		location, err := service.Start(r.Context(), provider, redirectURI)
+		if err != nil {
+			writeOAuthRedirectError(w, r, err)
+			return
+		}
+		http.Redirect(w, r, location, http.StatusFound)
+	}
+}
+
+func oauthCallbackHandler(service auth.OAuthLoginProvider, secureCookies bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		provider := strings.ToLower(strings.TrimSpace(r.PathValue("provider")))
+		if strings.TrimSpace(r.URL.Query().Get("error")) != "" {
+			redirectOAuthFailure(w, r, provider, "OAUTH_CANCELLED")
+			return
+		}
+		redirectURI := targetOriginForRequest(r) + "/console/v1/auth/oauth/" + url.PathEscape(provider) + "/callback"
+		session, err := service.Callback(r.Context(), provider, r.URL.Query().Get("code"), r.URL.Query().Get("state"), redirectURI)
+		if err != nil {
+			redirectOAuthFailure(w, r, provider, "OAUTH_LOGIN_FAILED")
+			return
+		}
+		if err := auth.SetSessionCookie(w, session, secureCookies); err != nil {
+			redirectOAuthFailure(w, r, provider, "AUTH_UNAVAILABLE")
+			return
+		}
+		http.Redirect(w, r, "/#console/dashboard", http.StatusFound)
+	}
+}
+
+func redirectOAuthFailure(w http.ResponseWriter, r *http.Request, provider, code string) {
+	http.Redirect(w, r, "/?oauth_provider="+url.QueryEscape(provider)+"&oauth_error="+url.QueryEscape(code)+"#login", http.StatusFound)
+}
+
+func writeOAuthRedirectError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, auth.ErrOAuthProviderDisabled) || errors.Is(err, auth.ErrOAuthProviderNotConfigured) || errors.Is(err, auth.ErrOAuthRegistrationDisabled) {
+		redirectOAuthFailure(w, r, r.PathValue("provider"), "OAUTH_PROVIDER_UNAVAILABLE")
+		return
+	}
+	redirectOAuthFailure(w, r, r.PathValue("provider"), "OAUTH_UNAVAILABLE")
+}
+
 func logoutHandler(service auth.LoginProvider, audience auth.Audience, secureCookies bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
@@ -1993,6 +2061,52 @@ func emailTestMessageHandler(service auth.SecuritySettingsProvider) http.Handler
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 	})
+}
+
+func loginSettingsReadHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.LoginSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "LOGIN_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		settings, err := provider.GetLoginSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "LOGIN_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	}
+}
+
+func loginSettingsUpdateHandler(service auth.SecuritySettingsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		provider, ok := service.(adminsettings.LoginSettingsProvider)
+		if !ok || provider == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "LOGIN_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		var payload adminsettings.LoginSettingsUpdate
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_LOGIN_SETTINGS"})
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		settings, err := provider.UpdateLoginSettings(r.Context(), principal.ID, payload)
+		if errors.Is(err, adminsettings.ErrInvalidSystemSettings) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_LOGIN_SETTINGS"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "LOGIN_SETTINGS_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	}
 }
 
 func featureSettingsReadHandler(service auth.SecuritySettingsProvider) http.Handler {

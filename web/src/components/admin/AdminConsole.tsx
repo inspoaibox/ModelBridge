@@ -54,6 +54,7 @@ import {
   GroupSummary,
   Language,
   LoginMessage,
+  LoginSettings,
   MFAEnrollment,
   MFAStatus,
   PasswordFormState,
@@ -222,7 +223,11 @@ interface AdminConsoleProps {
   savePaymentConfig: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
 	  paymentRechargePackages: PaymentRechargePackage[];
 	  savePaymentRechargePackages: (packages: PaymentRechargePackage[]) => Promise<void>;
-  canUpdatePaymentSettings: boolean;
+	  canUpdatePaymentSettings: boolean;
+	  loginSettings: LoginSettings;
+	  loginSettingsBusy: boolean;
+	  loginSettingsMessage: LoginMessage;
+	  saveLoginSettings: (settings: LoginSettings) => Promise<void>;
   usageReport: UsageReport | null;
   usageReportBusy: boolean;
   usageReportMessage: LoginMessage;
@@ -420,7 +425,11 @@ export function AdminConsole({
   savePaymentConfig,
 	  paymentRechargePackages,
 	  savePaymentRechargePackages,
-  canUpdatePaymentSettings,
+	  canUpdatePaymentSettings,
+	  loginSettings,
+	  loginSettingsBusy,
+	  loginSettingsMessage,
+	  saveLoginSettings,
   usageReport,
   usageReportBusy,
   usageReportMessage,
@@ -1725,6 +1734,10 @@ export function AdminConsole({
             paymentRechargePackages={paymentRechargePackages}
             savePaymentRechargePackages={savePaymentRechargePackages}
             canUpdatePaymentSettings={canUpdatePaymentSettings}
+            loginSettings={loginSettings}
+            loginSettingsBusy={loginSettingsBusy}
+            loginSettingsMessage={loginSettingsMessage}
+            saveLoginSettings={saveLoginSettings}
           />
         )}
         {adminSection === "usage" && (

@@ -191,6 +191,8 @@ GET  /v1/videos/{videoID}/content
 
 用户控制台将“账单记录”“费用中心”“订单中心”分开。费用中心提供余额、预设充值金额和支付入口；账单记录展示模型调用费用，订单中心展示充值订单及到账额度。管理员在“系统设置 -> 支付设置”分别配置并启用微信支付、支付宝、Stripe 或 PayPal，并可设置充值到账倍率（默认 1，0.98 表示扣除 2% 手续费）。微信支付使用 Native 二维码，支付宝使用当面付预创建二维码并直接显示在费用中心；Stripe 配置 Publishable Key 后使用 Embedded Checkout 在当前页显示卡、微信支付和支付宝，否则自动进入 Hosted Checkout；PayPal 使用 Orders 创建和 Capture。充值订单必须携带 `Idempotency-Key`，余额只由经过官方签名/官方 API 验证的支付结果入账。Stripe Webhook 地址为 `https://当前域名/payments/webhooks/stripe`，后台会显示并支持复制；成功/取消返回地址由 Checkout Session 自动生成并回到 `#console/billing`，不参与入账判断。
 
+管理员还可以在“系统设置 -> 登录设置”配置 Google、GitHub 和 Linux.do 客户快捷登录。启用提供商后，客户登录页会显示对应按钮；首次 OAuth 登录会自动创建客户租户和默认项目，已有相同邮箱的客户会绑定到现有账号。OAuth 客户端密钥加密保存，管理员后台不开放第三方快捷登录。生产环境需把各提供商的回调地址配置为 `https://当前域名/console/v1/auth/oauth/{provider}/callback`，并确认全局注册开关允许新客户注册。
+
 Stripe 支付方式可在支付配置中按需勾选 `card`、`alipay`、`wechat_pay`；全部不勾选时使用 Stripe Dashboard 动态支付方式。Apple Pay 和 Google Pay 属于卡支付钱包能力，不作为独立类型配置。当前白名单是全局配置；不同国家的固定支付方式规则需要额外的国家采集和服务端规则配置。
 
 支付配置中的密钥、私钥、证书和 Webhook Secret 使用应用 SecretBox 加密保存；读取接口只返回非敏感字段和“已配置”标记。微信回调必须校验平台证书序列号、时间戳、签名、AES-256-GCM、AppID 和商户号；支付宝回调必须校验 RSA2、AppID 和可选商户身份；Stripe 校验签名时间窗；PayPal 通过官方 `verify-webhook-signature` 验证并只接受 `PAYMENT.CAPTURE.COMPLETED`。上线前必须在各支付平台配置 HTTPS 回调地址并完成沙箱/小额真实支付验收。
