@@ -324,6 +324,10 @@ export interface PublicPlatformModelPrice {
   group_name: string;
   multiplier: string;
   billing_type: "prepaid" | "free";
+  metering_mode: "token" | "image_count" | "video_seconds" | "video_request" | string;
+  metering_price: string;
+  metering_price_per_unit?: string;
+  metering_unit?: "image" | "second" | "request" | string;
   input_price_per_million_tokens: string;
   output_price_per_million_tokens: string;
   cached_input_price_per_million_tokens: string;

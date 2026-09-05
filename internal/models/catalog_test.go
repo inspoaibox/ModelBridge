@@ -1,6 +1,9 @@
 package models
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestModelCategory(t *testing.T) {
 	tests := []struct {
@@ -34,5 +37,19 @@ func TestMultiplyDecimal(t *testing.T) {
 	}
 	if got := multiplyDecimal("10", "1.000000"); got != "10" {
 		t.Fatalf("multiplyDecimal() = %q, want 10", got)
+	}
+}
+
+func TestPlatformPricesExposeNonTokenMetering(t *testing.T) {
+	raw, err := json.Marshal([]groupPriceBase{{GroupID: "group-1", GroupCode: "images", GroupName: "Images", Multiplier: "1.2", BillingType: "prepaid", MeteringMode: "image_count", MeteringPrice: "0.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices := platformPrices(raw, &Pricing{Currency: "USD", InputPricePerMillionTokens: "1", Components: []PriceComponent{{ComponentCode: "input_tokens", Unit: "token", PricePerUnit: "0.000001"}}})
+	if len(prices) != 1 {
+		t.Fatalf("platform price count = %d", len(prices))
+	}
+	if prices[0].MeteringMode != "image_count" || prices[0].MeteringUnit != "image" || prices[0].MeteringPrice != "0.1" || prices[0].MeteringPricePerUnit != "0.12" {
+		t.Fatalf("unexpected non-token pricing: %#v", prices[0])
 	}
 }

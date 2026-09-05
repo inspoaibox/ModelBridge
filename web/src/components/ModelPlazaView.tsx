@@ -270,6 +270,15 @@ interface PriceSummary {
   output: string;
 }
 
+function meteringLabel(mode: string, t: (key: TranslationKey) => string) {
+  switch (mode) {
+    case "image_count": return t("modelsMeteringImageCount");
+    case "video_seconds": return t("modelsMeteringVideoSeconds");
+    case "video_request": return t("modelsMeteringVideoRequest");
+    default: return t("modelsMeteringToken");
+  }
+}
+
 function componentPrice(components: PriceComponents, codes: string[]) {
   const component = (components || []).find((item) => codes.includes(item.component_code));
   if (!component) return "-";
@@ -318,6 +327,7 @@ function CompactPriceRow({ pricing, tone = "official", t }: { pricing: PriceSumm
 function PriceComparison({ official, platform, language, t }: { official: NonNullable<PublicModelSummary["pricing"]>; platform?: PublicPlatformModelPrice; language: Language; t: (key: TranslationKey) => string }) {
   const officialPricing = officialPriceSummary(official);
   const platformPricing = platform ? platformPriceSummary(platform) : undefined;
+  const meteringMode = platform?.metering_mode?.trim() || "token";
   return <div className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t("modelsOfficialPrice")} · {official.currency} / 1M</span>
@@ -329,8 +339,21 @@ function PriceComparison({ official, platform, language, t }: { official: NonNul
         <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{t("modelsPlatformPricing")}</span>
         <span className="font-mono text-[10px] text-indigo-600 dark:text-indigo-300">{platform.group_name} · x{formatMultiplier(platform.multiplier)}</span>
       </div>
-      {platform.billing_type === "free" ? <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">{t("modelsPlatformFree")}</div> : <div className="mt-2"><CompactPriceRow pricing={platformPricing!} tone="platform" t={t} /></div>}
+      {platform.billing_type === "free" ? <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">{t("modelsPlatformFree")}</div> : meteringMode !== "token" ? <MeteringPriceRow platform={platform} mode={meteringMode} currency={official.currency} t={t} /> : <div className="mt-2"><CompactPriceRow pricing={platformPricing!} tone="platform" t={t} /></div>}
     </div> : null}
     {official.updated_at ? <div className="text-[10px] text-slate-400">{t("modelsPricingUpdated")} {new Date(official.updated_at).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US")}</div> : null}
   </div>;
+}
+
+function MeteringPriceRow({ platform, mode: meteringMode, currency, t }: { platform: PublicPlatformModelPrice; mode: string; currency: string; t: (key: TranslationKey) => string }) {
+  const mode = meteringLabel(meteringMode, t);
+  const value = platform.metering_price_per_unit || platform.metering_price || "";
+  const unit = platform.metering_unit || (meteringMode === "image_count" ? "image" : meteringMode === "video_seconds" ? "second" : "request");
+  return <div className="mt-2 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.06] px-3 py-2.5"><div className="text-[11px] text-slate-500 dark:text-slate-400">{t("modelsMeteringPrice")} · {mode}</div><div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1"><strong className="font-mono text-base text-indigo-700 dark:text-indigo-300">{value ? formatPrice(value) : "-"}</strong><span className="text-xs text-slate-500 dark:text-slate-400">{currency} / {platformCurrencyLabel(unit, t)}</span></div><div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">{t("modelsMeteringNoToken")}</div></div>;
+}
+
+function platformCurrencyLabel(unit: string, t: (key: TranslationKey) => string) {
+  if (unit === "image") return t("modelsMeteringPerImage");
+  if (unit === "second") return t("modelsMeteringPerSecond");
+  return t("modelsMeteringPerRequest");
 }

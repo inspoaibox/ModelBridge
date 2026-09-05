@@ -432,3 +432,5 @@ Seedance 完成任务后的官方 `usage.completion_tokens` 被记录为 `output
 ## 当前边界
 
 Anthropic 专用 Embeddings，以及完整 Responses 高级事件仍未开放。图片、视频和音频接口已经接入，但具体模型必须存在对应渠道映射，并且上游账户本身必须开通该模型能力；否则返回明确的 unsupported/invalid 错误，不会被静默降级成文本请求。
+
+模型广场的“平台调用价格”会跟随所选分组的计量方式：`token` 分组显示输入、输出、缓存和推理 Token 价格；`image_count` 显示每张图片价格，`video_seconds` 显示每秒视频价格，`video_request` 显示每次视频请求价格。非 Token 分组的展示价格为分组计量单价乘分组倍率，并明确标记不按 Token 计费。

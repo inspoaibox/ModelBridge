@@ -47,6 +47,10 @@ type PlatformPrice struct {
 	GroupName                          string           `json:"group_name"`
 	Multiplier                         string           `json:"multiplier"`
 	BillingType                        string           `json:"billing_type"`
+	MeteringMode                       string           `json:"metering_mode"`
+	MeteringPrice                      string           `json:"metering_price"`
+	MeteringPricePerUnit               string           `json:"metering_price_per_unit,omitempty"`
+	MeteringUnit                       string           `json:"metering_unit,omitempty"`
 	InputPricePerMillionTokens         string           `json:"input_price_per_million_tokens"`
 	OutputPricePerMillionTokens        string           `json:"output_price_per_million_tokens"`
 	CachedInputPricePerMillionTokens   string           `json:"cached_input_price_per_million_tokens"`
@@ -113,9 +117,11 @@ func (c *SQLCatalog) ListPublic(ctx context.Context) ([]Summary, error) {
 		               jsonb_build_object(
 		                   'group_id', rg.id::text,
 		                   'group_code', rg.code,
-		                   'group_name', rg.name,
-		                   'multiplier', rg.multiplier::text,
-		                   'billing_type', rg.billing_type
+				           'group_name', rg.name,
+				           'multiplier', rg.multiplier::text,
+				           'billing_type', rg.billing_type,
+				           'metering_mode', rg.metering_mode,
+				           'metering_price', rg.metering_price::text
 		               ) ORDER BY rg.priority DESC, rg.code ASC
 		           )
 			           FROM routing_groups rg
@@ -368,11 +374,13 @@ func publicComponentPrice(components []PriceComponent, code string) string {
 }
 
 type groupPriceBase struct {
-	GroupID     string `json:"group_id"`
-	GroupCode   string `json:"group_code"`
-	GroupName   string `json:"group_name"`
-	Multiplier  string `json:"multiplier"`
-	BillingType string `json:"billing_type"`
+	GroupID       string `json:"group_id"`
+	GroupCode     string `json:"group_code"`
+	GroupName     string `json:"group_name"`
+	Multiplier    string `json:"multiplier"`
+	BillingType   string `json:"billing_type"`
+	MeteringMode  string `json:"metering_mode"`
+	MeteringPrice string `json:"metering_price"`
 }
 
 func platformPrices(raw []byte, pricing *Pricing) []PlatformPrice {
@@ -386,12 +394,26 @@ func platformPrices(raw []byte, pricing *Pricing) []PlatformPrice {
 	prices := make([]PlatformPrice, 0, len(groups))
 	for _, group := range groups {
 		components := multiplyComponents(pricing.Components, group.Multiplier)
+		meteringMode := strings.ToLower(strings.TrimSpace(group.MeteringMode))
+		meteringUnit := ""
+		switch meteringMode {
+		case "image_count":
+			meteringUnit = "image"
+		case "video_seconds":
+			meteringUnit = "second"
+		case "video_request":
+			meteringUnit = "request"
+		}
 		prices = append(prices, PlatformPrice{
 			GroupID:                            group.GroupID,
 			GroupCode:                          group.GroupCode,
 			GroupName:                          group.GroupName,
 			Multiplier:                         group.Multiplier,
 			BillingType:                        group.BillingType,
+			MeteringMode:                       meteringMode,
+			MeteringPrice:                      strings.TrimSpace(group.MeteringPrice),
+			MeteringPricePerUnit:               multiplyDecimal(group.MeteringPrice, group.Multiplier),
+			MeteringUnit:                       meteringUnit,
 			InputPricePerMillionTokens:         multiplyDecimal(pricing.InputPricePerMillionTokens, group.Multiplier),
 			OutputPricePerMillionTokens:        multiplyDecimal(pricing.OutputPricePerMillionTokens, group.Multiplier),
 			CachedInputPricePerMillionTokens:   multiplyDecimal(pricing.CachedInputPricePerMillionTokens, group.Multiplier),
