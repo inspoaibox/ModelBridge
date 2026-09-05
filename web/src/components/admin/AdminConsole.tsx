@@ -6,6 +6,7 @@ import {
   CircleDollarSign,
   ClipboardList,
   Database,
+  Gauge,
   KeyRound,
   Layers,
   LayoutDashboard,
