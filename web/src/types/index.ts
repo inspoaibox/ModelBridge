@@ -737,6 +737,21 @@ export interface OperationsSnapshot {
   failed_requests_24h: number;
   spend_24h: string;
   average_latency_ms: number;
+  total_tokens: number;
+  today_requests: number;
+  today_input_tokens: number;
+  today_output_tokens: number;
+  today_tokens: number;
+  today_spend: string;
+  today_recharge_orders: number;
+  today_recharge_amount: string;
+  today_credited_amount: string;
+  total_recharge_orders: number;
+  total_recharge_amount: string;
+  total_credited_amount: string;
+  pending_recharge_orders: number;
+  model_usage: Array<{ model: string; provider: string; requests: number; total_tokens: number; total_spend: string }>;
+  usage_trend: Array<{ at: string; requests: number; input_tokens: number; output_tokens: number; total_tokens: number; total_spend: string }>;
   collected_at: string;
 }
 

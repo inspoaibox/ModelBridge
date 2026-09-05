@@ -1277,10 +1277,12 @@ export default function App() {
     refreshFinanceReport(true, 0);
   }, [signedIn, audience, route.view, adminSection, language, financeSearch, financeCurrency, financeFrom, financeTo]);
 
-	useEffect(() => {
-		if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "dashboard" && adminSection !== "ops")) return;
-		refreshOperations(true);
-	}, [signedIn, audience, route.view, adminSection, language]);
+		useEffect(() => {
+			if (!signedIn || audience !== "admin" || route.view !== "admin" || (adminSection !== "dashboard" && adminSection !== "ops")) return;
+			refreshOperations(true);
+			const interval = window.setInterval(() => void refreshOperations(false), 30_000);
+			return () => window.clearInterval(interval);
+		}, [signedIn, audience, route.view, adminSection, language]);
 
 	useEffect(() => {
 		if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "model-status") return;

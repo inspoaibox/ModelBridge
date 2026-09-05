@@ -785,7 +785,7 @@ export function AdminConsole({
         {/* Section 1: Dashboard View */}
         {adminSection === "dashboard" && (
           <div className="space-y-6">
-            {/* 4 Stats Cards */}
+            {/* Platform summary cards */}
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {[
                 {
@@ -810,11 +810,46 @@ export function AdminConsole({
                   icon: Waypoints,
                 },
                 {
-                  title: t("statAlertsLabel"),
-                  hint: t("statAlertsHint"),
-                  value: operationsBusy ? "..." : operationsSnapshot ? String(operationsSnapshot.failed_requests_24h) : "-",
+                    title: t("statTokensLabel"),
+                    hint: t("statTokensHint"),
+                    value: operationsBusy ? "..." : operationsSnapshot ? String(operationsSnapshot.tokens) : "-",
+                    delta: operationsSnapshot ? `${operationsSnapshot.active_tokens} ${t("adminMetricActive")}` : "-",
+                    icon: KeyRound,
+                },
+                {
+                  title: t("statRequestsTodayLabel"),
+                  hint: t("statRequestsTodayHint"),
+                  value: operationsBusy ? "..." : operationsSnapshot ? String(operationsSnapshot.today_requests) : "-",
                   delta: operationsSnapshot ? `${operationsSnapshot.requests_24h} / ${t("adminMetric24h")}` : "-",
-                  icon: ShieldCheck,
+                  icon: Activity,
+                },
+                {
+                  title: t("statSpendTodayLabel"),
+                  hint: t("statSpendTodayHint"),
+                  value: operationsBusy ? "..." : operationsSnapshot ? formatDecimalWithoutTrailingZeros(operationsSnapshot.today_spend, "0") : "-",
+                  delta: operationsSnapshot ? t("adminMetricToday") : "-",
+                  icon: CircleDollarSign,
+                },
+                {
+                  title: t("statRechargeTodayLabel"),
+                  hint: t("statRechargeTodayHint"),
+                  value: operationsBusy ? "..." : operationsSnapshot ? formatDecimalWithoutTrailingZeros(operationsSnapshot.today_recharge_amount, "0") : "-",
+                  delta: operationsSnapshot ? `${operationsSnapshot.today_recharge_orders} ${t("adminMetricOrders")}` : "-",
+                  icon: WalletCards,
+                },
+                {
+                  title: t("statTokensTodayLabel"),
+                  hint: t("statTokensTodayHint"),
+                  value: operationsBusy ? "..." : operationsSnapshot ? String(operationsSnapshot.today_tokens) : "-",
+                  delta: operationsSnapshot ? `${operationsSnapshot.today_input_tokens} / ${operationsSnapshot.today_output_tokens}` : "-",
+                  icon: Gauge,
+                },
+                {
+                  title: t("statTokensTotalLabel"),
+                  hint: t("statTokensTotalHint"),
+                  value: operationsBusy ? "..." : operationsSnapshot ? String(operationsSnapshot.total_tokens) : "-",
+                  delta: operationsSnapshot ? t("adminMetricAllTime") : "-",
+                  icon: Network,
                 },
               ].map((stat) => (
                 <Card key={stat.title} className="glass-panel relative overflow-hidden">
@@ -895,9 +930,10 @@ export function AdminConsole({
                   ))}
                 </CardContent>
               </Card>
-            </div>
-          </div>
-        )}
+	            </div>
+	            <AdminDashboardInsights t={t} snapshot={operationsSnapshot} busy={operationsBusy} formatTime={formatTime} routeTo={routeTo} />
+	          </div>
+	        )}
 
         {/* Section 2: Ops Monitoring View */}
         {adminSection === "ops" && (
@@ -1764,6 +1800,51 @@ export function AdminConsole({
       </div>
     </div>
   );
+}
+
+function AdminDashboardInsights({ t, snapshot, busy, formatTime, routeTo }: { t: (key: TranslationKey) => string; snapshot: OperationsSnapshot | null; busy: boolean; formatTime: (value: string) => string; routeTo: (target: string) => void }) {
+  const models = snapshot?.model_usage || [];
+  const trend = snapshot?.usage_trend || [];
+  const maxTokens = Math.max(1, ...models.map((item) => item.total_tokens));
+  const maxTrendTokens = Math.max(1, ...trend.map((item) => item.total_tokens));
+  const chartWidth = 760;
+  const chartHeight = 180;
+  const points = trend.map((item, index) => `${trend.length === 1 ? chartWidth / 2 : (index / (trend.length - 1)) * chartWidth},${chartHeight - (item.total_tokens / maxTrendTokens) * (chartHeight - 18)}`).join(" ");
+  const money = (value?: string) => formatDecimalWithoutTrailingZeros(value || "0", "0");
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-[minmax(300px,0.85fr)_minmax(0,1.15fr)]">
+        <Card className="glass-panel">
+          <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
+            <div><CardTitle className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white"><WalletCards className="h-4 w-4 text-emerald-600" />{t("adminDashboardFinanceTitle")}</CardTitle><CardDescription>{t("adminDashboardFinanceDescription")}</CardDescription></div>
+            <Button type="button" variant="outline" size="icon" onClick={() => routeTo("#admin/finance")} title={t("adminDashboardOpenFinance")} aria-label={t("adminDashboardOpenFinance")}><Receipt className="h-4 w-4" /></Button>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2"><MetricRow label={t("adminDashboardTodayRecharge")} value={money(snapshot?.today_recharge_amount)} detail={`${snapshot?.today_recharge_orders || 0} ${t("adminMetricOrders")}`} tone="emerald" /><MetricRow label={t("adminDashboardTodayCredited")} value={money(snapshot?.today_credited_amount)} detail={t("adminDashboardCreditedHint")} tone="cyan" /><MetricRow label={t("adminDashboardTodaySpend")} value={money(snapshot?.today_spend)} detail={t("adminDashboardSpendHint")} tone="amber" /><MetricRow label={t("adminDashboardPendingRecharge")} value={String(snapshot?.pending_recharge_orders || 0)} detail={t("adminDashboardPendingHint")} tone="indigo" /></div>
+            <div className="flex items-center justify-between border-t border-slate-200/80 pt-3 text-xs dark:border-slate-800/80"><span className="text-slate-500">{t("adminDashboardTotalRecharge")}</span><span className="font-mono font-semibold text-slate-900 dark:text-white">{money(snapshot?.total_recharge_amount)} · {snapshot?.total_recharge_orders || 0} {t("adminMetricOrders")}</span></div>
+            <div className="flex items-center justify-between border-t border-slate-200/80 pt-3 text-xs dark:border-slate-800/80"><span className="text-slate-500">{t("adminDashboard24hCalls")}</span><span className="font-mono font-semibold text-slate-900 dark:text-white">{snapshot?.requests_24h || 0} · {snapshot?.failed_requests_24h || 0} {t("adminDashboardFailed")}</span></div>
+            <div className="flex items-center justify-between text-xs"><span className="text-slate-500">{t("adminDashboardAverageLatency")}</span><span className="font-mono font-semibold text-slate-900 dark:text-white">{snapshot ? snapshot.average_latency_ms.toFixed(0) : "0"}ms</span></div>
+          </CardContent>
+        </Card>
+        <Card className="glass-panel">
+          <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3"><div><CardTitle className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white"><Waypoints className="h-4 w-4 text-indigo-600" />{t("adminDashboardModelTitle")}</CardTitle><CardDescription>{t("adminDashboardModelDescription")}</CardDescription></div><Button type="button" variant="outline" size="icon" onClick={() => routeTo("#admin/usage")} title={t("adminDashboardOpenUsage")} aria-label={t("adminDashboardOpenUsage")}><ClipboardList className="h-4 w-4" /></Button></CardHeader>
+          <CardContent>{models.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 py-12 text-center text-xs text-slate-500 dark:border-slate-700">{t("adminDashboardNoUsage")}</div> : <div className="space-y-3">{models.slice(0, 8).map((item) => <div key={`${item.provider}:${item.model}`}><div className="flex items-center justify-between gap-3 text-xs"><span className="min-w-0 truncate font-semibold text-slate-800 dark:text-slate-200" title={item.model}>{item.model}</span><span className="shrink-0 font-mono text-slate-500">{formatAdminInteger(item.total_tokens)}</span></div><div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(2, item.total_tokens / maxTokens * 100)}%` }} /></div><div className="mt-1 flex justify-between text-[10px] text-slate-500"><span>{item.provider} · {formatAdminInteger(item.requests)} {t("adminDashboardRequestsUnit")}</span><span>{money(item.total_spend)}</span></div></div>)}</div>}</CardContent>
+        </Card>
+      </div>
+      <Card className="glass-panel">
+        <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3"><div><CardTitle className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white"><Activity className="h-4 w-4 text-cyan-600" />{t("adminDashboardTrendTitle")}</CardTitle><CardDescription>{t("adminDashboardTrendDescription")}</CardDescription></div><Badge variant={busy ? "warning" : "success"}>{busy ? t("adminDashboardRefreshing") : snapshot ? formatTime(snapshot.collected_at) : "-"}</Badge></CardHeader>
+        <CardContent>{trend.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 py-12 text-center text-xs text-slate-500 dark:border-slate-700">{t("adminDashboardNoUsage")}</div> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40"><svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="h-52 w-full" preserveAspectRatio="none" role="img" aria-label={t("adminDashboardTrendTitle")}><polyline points={points} fill="none" stroke="currentColor" strokeWidth="4" vectorEffect="non-scaling-stroke" className="text-cyan-500" />{trend.map((item, index) => <circle key={item.at} cx={trend.length === 1 ? chartWidth / 2 : (index / (trend.length - 1)) * chartWidth} cy={chartHeight - (item.total_tokens / maxTrendTokens) * (chartHeight - 18)} r="4" className="fill-emerald-500" />)}</svg><div className="mt-2 flex justify-between text-[10px] text-slate-500"><span>{formatTime(trend[0].at)}</span><span>{formatTime(trend[trend.length - 1].at)}</span></div></div>}</CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function MetricRow({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: "indigo" | "cyan" | "amber" | "emerald" }) {
+  return <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35"><div className="text-[11px] text-slate-500">{label}</div><div className={cn("mt-1 text-xl font-bold", tone === "emerald" ? "text-emerald-700 dark:text-emerald-300" : tone === "cyan" ? "text-cyan-700 dark:text-cyan-300" : tone === "amber" ? "text-amber-700 dark:text-amber-300" : "text-indigo-700 dark:text-indigo-300")}>{value}</div><div className="mt-1 truncate text-[10px] text-slate-500" title={detail}>{detail}</div></div>;
+}
+
+function formatAdminInteger(value: number) {
+  return new Intl.NumberFormat("en-US", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
 }
 
 type PriceMatrixGroup = {
