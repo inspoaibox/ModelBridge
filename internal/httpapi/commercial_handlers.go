@@ -231,6 +231,52 @@ func paymentAdminUpdateHandler(service payments.Service) http.Handler {
 	})
 }
 
+func paymentAdminRechargePackagesHandler(service payments.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reader, ok := service.(interface {
+			GetRechargePresets(context.Context) ([]string, error)
+		})
+		if !ok || reader == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PAYMENTS_UNAVAILABLE"})
+			return
+		}
+		presets, err := reader.GetRechargePresets(r.Context())
+		if err != nil {
+			writePaymentError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, payments.RechargePackages{RechargePresets: presets})
+	})
+}
+
+func paymentAdminRechargePackagesUpdateHandler(service payments.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writer, ok := service.(interface {
+			UpdateRechargePresets(context.Context, string, []string) ([]string, error)
+		})
+		if !ok || writer == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "PAYMENTS_UNAVAILABLE"})
+			return
+		}
+		var payload payments.RechargePackages
+		if err := decodeJSON(w, r, &payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "INVALID_PAYMENT_CONFIG"})
+			return
+		}
+		principal, ok := principalFromRequest(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "AUTH_REQUIRED"})
+			return
+		}
+		presets, err := writer.UpdateRechargePresets(r.Context(), principal.ID, payload.RechargePresets)
+		if err != nil {
+			writePaymentError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, payments.RechargePackages{RechargePresets: presets})
+	})
+}
+
 func paymentCreateOrderHandler(service payments.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {

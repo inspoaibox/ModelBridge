@@ -123,6 +123,8 @@ interface AdminSettingsPanelProps {
   paymentSettingsBusy: boolean;
   paymentSettingsMessage: LoginMessage;
   savePaymentConfig: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
+  paymentRechargePresets: string[];
+  savePaymentRechargePresets: (presets: string[]) => Promise<void>;
   canUpdatePaymentSettings: boolean;
 }
 
@@ -144,7 +146,7 @@ export function AdminSettingsPanel(props: AdminSettingsPanelProps) {
       {tab === "base" ? <BaseTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "email" ? <EmailTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
       {tab === "features" ? <FeatureTab {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
-      {tab === "payments" ? <PaymentSettingsPanel language={language} configs={props.paymentConfigs} busy={props.paymentSettingsBusy} message={props.paymentSettingsMessage} save={props.savePaymentConfig} canUpdate={props.canUpdatePaymentSettings} /> : null}
+      {tab === "payments" ? <PaymentSettingsPanel language={language} configs={props.paymentConfigs} busy={props.paymentSettingsBusy} message={props.paymentSettingsMessage} save={props.savePaymentConfig} canUpdate={props.canUpdatePaymentSettings} rechargePresets={props.paymentRechargePresets} saveRechargePresets={props.savePaymentRechargePresets} /> : null}
       {props.apiEndpointFormOpen ? <APIEndpointModal {...props} t={t} canUpdate={props.canUpdateSystemSettings} /> : null}
     </div>
   );

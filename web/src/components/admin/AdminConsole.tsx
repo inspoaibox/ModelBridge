@@ -218,6 +218,8 @@ interface AdminConsoleProps {
   paymentSettingsBusy: boolean;
   paymentSettingsMessage: LoginMessage;
   savePaymentConfig: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
+  paymentRechargePresets: string[];
+  savePaymentRechargePresets: (presets: string[]) => Promise<void>;
   canUpdatePaymentSettings: boolean;
   usageReport: UsageReport | null;
   usageReportBusy: boolean;
@@ -414,6 +416,8 @@ export function AdminConsole({
   paymentSettingsBusy,
   paymentSettingsMessage,
   savePaymentConfig,
+  paymentRechargePresets,
+  savePaymentRechargePresets,
   canUpdatePaymentSettings,
   usageReport,
   usageReportBusy,
@@ -1678,6 +1682,8 @@ export function AdminConsole({
             paymentSettingsBusy={paymentSettingsBusy}
             paymentSettingsMessage={paymentSettingsMessage}
             savePaymentConfig={savePaymentConfig}
+            paymentRechargePresets={paymentRechargePresets}
+            savePaymentRechargePresets={savePaymentRechargePresets}
             canUpdatePaymentSettings={canUpdatePaymentSettings}
           />
         )}

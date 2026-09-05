@@ -418,9 +418,17 @@ func newHandler(
 		mux.Handle("GET /admin/v1/settings/payments", authMiddleware.Protect(
 			auth.AudienceAdmin, "payment:read",
 		)(paymentAdminListHandler(paymentService)))
+		mux.Handle("GET /admin/v1/settings/payment-packages", authMiddleware.Protect(
+			auth.AudienceAdmin, "payment:read",
+		)(paymentAdminRechargePackagesHandler(paymentService)))
 		mux.Handle("PUT /admin/v1/settings/payments/{provider}", protectStepUp(
 			adminsettings.StepUpOperationSystem,
 			paymentAdminUpdateHandler(paymentService),
+			"payment:update",
+		))
+		mux.Handle("PUT /admin/v1/settings/payment-packages", protectStepUp(
+			adminsettings.StepUpOperationSystem,
+			paymentAdminRechargePackagesUpdateHandler(paymentService),
 			"payment:update",
 		))
 	}

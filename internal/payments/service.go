@@ -62,6 +62,10 @@ type PublicProvider struct {
 	PublishableKey  string   `json:"publishable_key,omitempty"`
 }
 
+type RechargePackages struct {
+	RechargePresets []string `json:"recharge_presets"`
+}
+
 type OrderQuery struct {
 	Limit  int
 	Offset int
@@ -219,6 +223,10 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	globalPresets, globalConfigured, err := s.globalRechargePresets(ctx)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]PublicProvider, 0, 4)
 	for rows.Next() {
 		var item PublicProvider
@@ -233,11 +241,70 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 			continue
 		}
 		item.RechargeRate = normalizedRechargeRate(values["recharge_rate"])
-		item.RechargePresets = normalizedRechargePresets(values["recharge_presets"])
+		item.RechargePresets = append([]string(nil), globalPresets...)
+		if !globalConfigured {
+			// Keep installations upgraded from the provider-scoped setting usable
+			// until an administrator saves the new global package configuration.
+			item.RechargePresets = normalizedRechargePresets(values["recharge_presets"])
+		}
 		item.PublishableKey = strings.TrimSpace(values["publishable_key"])
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *SQLService) GetRechargePresets(ctx context.Context) ([]string, error) {
+	presets, _, err := s.globalRechargePresets(ctx)
+	return presets, err
+}
+
+func (s *SQLService) globalRechargePresets(ctx context.Context) ([]string, bool, error) {
+	if s == nil || s.db == nil {
+		return nil, false, ErrUnavailable
+	}
+	var encoded string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM platform_settings WHERE key = 'payment_recharge_presets'`).Scan(&encoded)
+	if err == nil {
+		return normalizedRechargePresets(encoded), true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, err
+	}
+	// Older deployments stored this value alongside each payment provider.
+	// Read the first configured value as a one-time compatibility fallback;
+	// saving the global setting removes this dependency.
+	for _, provider := range []string{ProviderStripe, ProviderPayPal, ProviderWechat, ProviderAlipay} {
+		values, readErr := s.readRawConfig(ctx, provider)
+		if readErr != nil {
+			return nil, false, readErr
+		}
+		if presets := normalizedRechargePresets(values["recharge_presets"]); len(presets) > 0 {
+			return presets, false, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func (s *SQLService) UpdateRechargePresets(ctx context.Context, actorID string, presets []string) ([]string, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(actorID) == "" {
+		return nil, ErrInvalidRequest
+	}
+	values := make([]string, 0, len(presets))
+	for _, preset := range presets {
+		values = append(values, strings.TrimSpace(preset))
+	}
+	normalized, err := normalizeRechargePresetsValue(strings.Join(values, ","))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO platform_settings (key, value, updated_by, updated_at)
+		VALUES ('payment_recharge_presets', $1, $2::uuid, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+	`, normalized, actorID); err != nil {
+		return nil, err
+	}
+	return normalizedRechargePresets(normalized), nil
 }
 
 func (s *SQLService) AdminUpdate(ctx context.Context, actorID, provider string, request ConfigUpdate) (ProviderConfig, error) {

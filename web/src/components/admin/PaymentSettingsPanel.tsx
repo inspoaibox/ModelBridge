@@ -17,6 +17,8 @@ interface Props {
   message: LoginMessage;
   save: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
   canUpdate: boolean;
+  rechargePresets: string[];
+  saveRechargePresets: (presets: string[]) => Promise<void>;
 }
 
 type Provider = PaymentProviderConfig["provider"];
@@ -73,7 +75,7 @@ const stripeMethodOptions: Array<{ value: string; label: TranslationKey }> = [
   { value: "wechat_pay", label: "paymentStripeWechatPay" },
 ];
 
-export function PaymentSettingsPanel({ language, configs, busy, message, save, canUpdate }: Props) {
+export function PaymentSettingsPanel({ language, configs, busy, message, save, canUpdate, rechargePresets, saveRechargePresets }: Props) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [provider, setProvider] = useState<Provider>("wechat");
   const [enabled, setEnabled] = useState(false);
@@ -161,14 +163,17 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
           <div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400"><Badge variant="muted">{t("paymentCallbackOnly")}</Badge><span>{t("paymentSecurityHint")}</span></div>
         </CardContent>
       </Card>
-      <RechargePackagePanel provider={provider} value={draft.recharge_presets || ""} onChange={(value) => setDraft((current) => ({ ...current, recharge_presets: value }))} disabled={busy || !canUpdate} t={t} />
+      <RechargePackagePanel value={rechargePresets.join(",")} save={saveRechargePresets} disabled={busy || !canUpdate} busy={busy} message={message} t={t} />
       </div>
     </div>
   );
 }
 
-function RechargePackagePanel({ provider, value, onChange, disabled, t }: { provider: Provider; value: string; onChange: (value: string) => void; disabled: boolean; t: (key: TranslationKey) => string }) {
-  return <Card className="h-fit border-emerald-500/25 bg-emerald-50/35 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-500/[0.06]"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />{t("paymentRechargePackagesTitle")}</CardTitle><CardDescription>{t("paymentRechargePackagesDescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-white/75 px-3 py-2 text-xs dark:bg-slate-950/40"><span className="text-slate-500">{t("paymentRechargePackagesProvider")}</span><strong className="text-slate-900 dark:text-white">{t(providerLabels[provider])}</strong></div><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentRechargePresets")}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePresetsHint")}</p></div><RechargePresetsEditor id={`payment-${provider}-recharge-presets`} value={value} onChange={onChange} disabled={disabled} t={t} /><p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePackagesSaveHint")}</p></CardContent></Card>;
+function RechargePackagePanel({ value, save, disabled, busy, message, t }: { value: string; save: (presets: string[]) => Promise<void>; disabled: boolean; busy: boolean; message: LoginMessage; t: (key: TranslationKey) => string }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const presets = draft.split(",").map((item) => item.trim()).filter(Boolean);
+  return <Card className="h-fit border-emerald-500/25 bg-emerald-50/35 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-500/[0.06]"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />{t("paymentRechargePackagesTitle")}</CardTitle><CardDescription>{t("paymentRechargePackagesDescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-white/75 px-3 py-2 text-xs dark:bg-slate-950/40"><span className="text-slate-500">{t("paymentRechargePackagesProvider")}</span><strong className="text-slate-900 dark:text-white">{t("paymentRechargePackagesAllProviders")}</strong></div><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentRechargePresets")}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePresetsHint")}</p></div><RechargePresetsEditor id="payment-global-recharge-presets" value={draft} onChange={setDraft} disabled={disabled} t={t} /><p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePackagesSaveHint")}</p>{message.kind === "success" || message.kind === "error" ? <div className={message.kind === "error" ? "text-xs text-rose-700 dark:text-rose-300" : "text-xs text-emerald-700 dark:text-emerald-300"}>{message.text}</div> : null}<div className="flex justify-end"><Button type="button" onClick={() => void save(presets)} disabled={disabled || busy} className="gap-2"><Save className="h-4 w-4" />{busy ? t("paymentRechargePackagesSaving") : t("paymentRechargePackagesSave")}</Button></div></CardContent></Card>;
 }
 
 function RechargePresetsEditor({ id, value, onChange, disabled, t }: { id: string; value: string; onChange: (value: string) => void; disabled: boolean; t: (key: TranslationKey) => string }) {

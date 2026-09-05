@@ -664,6 +664,10 @@ export interface PublicPaymentProvider {
   publishable_key?: string;
 }
 
+export interface PaymentRechargePackages {
+  recharge_presets: string[];
+}
+
 export interface PaymentOrder {
   id: string;
   tenant_id: string;

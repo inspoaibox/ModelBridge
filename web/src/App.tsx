@@ -48,6 +48,7 @@ import {
   PaymentOrder,
   PaymentOrderList,
   PaymentProviderConfig,
+  PaymentRechargePackages,
   PublicPaymentProvider,
   ModelPriceFormState,
   ModelMonitor,
@@ -794,6 +795,7 @@ export default function App() {
   const [paymentConfigs, setPaymentConfigs] = useState<PaymentProviderConfig[]>([]);
   const [paymentSettingsBusy, setPaymentSettingsBusy] = useState(false);
   const [paymentSettingsMessage, setPaymentSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [paymentRechargePresets, setPaymentRechargePresets] = useState<string[]>([]);
   const [officialPriceSyncBusy, setOfficialPriceSyncBusy] = useState(false);
   const [modelPriceForm, setModelPriceForm] = useState<ModelPriceFormState>(() => defaultModelPriceForm());
   const [modelPriceFormOpen, setModelPriceFormOpen] = useState(false);
@@ -1594,7 +1596,7 @@ export default function App() {
     setAdminProfileBusy(true);
     if (showPending) setAdminProfileMessage({ kind: "pending", text: t("systemSettingsLoading") });
     try {
-	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse, paymentResponse] = await Promise.all([
+	      const [profileResponse, mfaResponse, settingsResponse, endpointResponse, emailResponse, featureResponse, templateResponse, paymentResponse, paymentPackagesResponse] = await Promise.all([
 	        fetch("/admin/v1/profile", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/auth/mfa/status", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
@@ -1603,6 +1605,7 @@ export default function App() {
 	        fetch("/admin/v1/settings/features", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/email/templates", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	        fetch("/admin/v1/settings/payments", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
+	        fetch("/admin/v1/settings/payment-packages", { headers: { Accept: "application/json" }, credentials: "same-origin" }),
 	      ]);
       const profileResult = (await profileResponse.json().catch(() => ({}))) as ConsoleProfile & { error?: string };
 	      const mfaResult = (await mfaResponse.json().catch(() => ({}))) as MFAStatus & { error?: string };
@@ -1612,6 +1615,7 @@ export default function App() {
 	      const featureResult = (await featureResponse.json().catch(() => ({}))) as FeatureSettings & { error?: string };
 	      const templateResult = (await templateResponse.json().catch(() => ({}))) as { templates?: EmailTemplate[]; error?: string };
 	      const paymentResult = (await paymentResponse.json().catch(() => ({}))) as { providers?: PaymentProviderConfig[]; error?: string };
+	      const paymentPackagesResult = (await paymentPackagesResponse.json().catch(() => ({}))) as PaymentRechargePackages & { error?: string };
 	      if (!profileResponse.ok) throw new Error(resolveProfileError(profileResponse.status, profileResult.error, t));
 	      if (!mfaResponse.ok) throw new Error(resolveProfileError(mfaResponse.status, mfaResult.error, t));
 	      if (!settingsResponse.ok) throw new Error(resolveSystemSettingsError(settingsResponse.status, settingsResult.error, t));
@@ -1651,6 +1655,7 @@ export default function App() {
       setEmailTemplates(templateResult.templates || []);
       setPaymentConfigs(paymentResponse.ok ? paymentResult.providers || [] : []);
       setPaymentSettingsMessage(paymentResponse.ok ? { kind: "", text: "" } : { kind: "error", text: t("paymentSettingsUnavailable") });
+      setPaymentRechargePresets(paymentPackagesResponse.ok ? paymentPackagesResult.recharge_presets || [] : []);
       setSiteSettings({
         site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
         site_logo_url: settingsResult.site_logo_url?.trim() || "",
@@ -2186,6 +2191,27 @@ export default function App() {
       });
     } catch (error) {
       setPaymentSettingsMessage({ kind: "error", text: error instanceof Error ? error.message : t("paymentSaveFailed") });
+    } finally {
+      setPaymentSettingsBusy(false);
+    }
+  }
+
+  async function savePaymentRechargePresets(presets: string[]) {
+    setPaymentSettingsBusy(true);
+    setPaymentSettingsMessage({ kind: "pending", text: t("paymentRechargePackagesSaving") });
+    try {
+      const response = await fetchAdminSensitive("/admin/v1/settings/payment-packages", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ recharge_presets: presets }),
+      });
+      const result = (await response.json().catch(() => ({}))) as PaymentRechargePackages & { error?: string };
+      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+      setPaymentRechargePresets(result.recharge_presets || []);
+      setPaymentSettingsMessage({ kind: "success", text: t("paymentRechargePackagesSaved") });
+    } catch (error) {
+      setPaymentSettingsMessage({ kind: "error", text: error instanceof Error ? error.message : t("paymentRechargePackagesSaveFailed") });
     } finally {
       setPaymentSettingsBusy(false);
     }
@@ -4571,6 +4597,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             paymentSettingsBusy={paymentSettingsBusy}
             paymentSettingsMessage={paymentSettingsMessage}
             savePaymentConfig={savePaymentConfig}
+            paymentRechargePresets={paymentRechargePresets}
+            savePaymentRechargePresets={savePaymentRechargePresets}
             canUpdatePaymentSettings={principal?.permissions?.includes("payment:update") === true}
             usageReport={usageReport}
             usageReportBusy={usageReportBusy}
