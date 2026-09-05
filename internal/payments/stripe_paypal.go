@@ -16,6 +16,29 @@ import (
 	"time"
 )
 
+type ProviderError struct {
+	Provider   string
+	StatusCode int
+	Detail     string
+}
+
+func (e *ProviderError) Error() string {
+	if e == nil {
+		return "payment provider failed"
+	}
+	detail := strings.TrimSpace(e.Detail)
+	if e.StatusCode > 0 {
+		if detail == "" {
+			return fmt.Sprintf("%s provider returned HTTP %d", e.Provider, e.StatusCode)
+		}
+		return fmt.Sprintf("%s provider returned HTTP %d: %s", e.Provider, e.StatusCode, detail)
+	}
+	if detail == "" {
+		return e.Provider + " provider request failed"
+	}
+	return e.Provider + " provider request failed: " + detail
+}
+
 func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config map[string]string, returnURL string) (providerOrder, error) {
 	minor, err := minorAmount(order.Amount, order.Currency)
 	if err != nil {
@@ -75,12 +98,12 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		return providerOrder{}, err
+		return providerOrder{}, &ProviderError{Provider: ProviderStripe, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return providerOrder{}, fmt.Errorf("stripe checkout returned HTTP %d: %s", resp.StatusCode, stripeErrorSummary(raw))
+		return providerOrder{}, &ProviderError{Provider: ProviderStripe, StatusCode: resp.StatusCode, Detail: stripeErrorSummary(raw)}
 	}
 	var payload struct {
 		ID           string `json:"id"`
@@ -88,7 +111,7 @@ func (s *SQLService) createStripeOrder(ctx context.Context, order Order, config 
 		ClientSecret string `json:"client_secret"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil || payload.ID == "" || (!embedded && payload.URL == "") || (embedded && payload.ClientSecret == "") {
-		return providerOrder{}, ErrCallbackInvalid
+		return providerOrder{}, &ProviderError{Provider: ProviderStripe, StatusCode: resp.StatusCode, Detail: "Stripe returned an invalid Checkout Session response"}
 	}
 	return providerOrder{ProviderOrderID: payload.ID, CheckoutURL: payload.URL, CheckoutClientSecret: payload.ClientSecret, Raw: raw}, nil
 }

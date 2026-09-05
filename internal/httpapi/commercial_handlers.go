@@ -536,6 +536,11 @@ func writePaymentError(w http.ResponseWriter, err error) {
 	case errors.Is(err, billing.ErrAccountNotFound):
 		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "BILLING_ACCOUNT_NOT_FOUND"})
 	default:
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "PAYMENT_PROVIDER_FAILED"})
+		response := map[string]string{"error": "PAYMENT_PROVIDER_FAILED"}
+		var providerErr *payments.ProviderError
+		if errors.As(err, &providerErr) {
+			response["message"] = providerErr.Error()
+		}
+		writeJSON(w, http.StatusBadGateway, response)
 	}
 }

@@ -579,13 +579,14 @@ function resolveEnterpriseError(status: number, error: string | undefined, t: (k
   }
 }
 
-function resolvePaymentError(status: number, error: string | undefined, t: (key: TranslationKey) => string) {
+function resolvePaymentError(status: number, error: string | undefined, t: (key: TranslationKey) => string, message?: string) {
   switch (error) {
     case "PAYMENT_PROVIDER_DISABLED": return t("rechargeProviderDisabled");
     case "PAYMENT_PROVIDER_UNCONFIGURED": return t("rechargeProviderUnconfigured");
     case "PAYMENT_ORDER_NOT_FOUND": return t("rechargeOrderNotFound");
     case "PAYMENT_ORDER_CLOSED": return t("rechargeOrderClosed");
     case "INVALID_PAYMENT_REQUEST": return t("rechargeInvalid");
+    case "PAYMENT_PROVIDER_FAILED": return message?.trim() ? `${t("rechargeProviderFailed")} ${message.trim()}` : t("rechargeFailed");
     default: return status === 503 ? t("rechargeUnavailable") : t("rechargeFailed");
   }
 }
@@ -2745,8 +2746,8 @@ export default function App() {
         credentials: "same-origin",
         body: JSON.stringify({ provider, amount, currency, package_id: packageID || "", return_url: paymentReturnURL() }),
       });
-      const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
-      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+		const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string; message?: string };
+		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message));
       setPaymentOrder(result);
       setPaymentMessage({ kind: "success", text: t("rechargeCreated") });
       await refreshPaymentOrders(0);
@@ -2765,8 +2766,8 @@ export default function App() {
     setPaymentBusy(true);
     try {
       const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(orderID)}`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
-      const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
-      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+		const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string; message?: string };
+		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message));
       setPaymentOrder(result);
       if (result.status === "paid") {
         await refreshConsoleBilling();
@@ -2794,8 +2795,8 @@ export default function App() {
     setPaymentMessage({ kind: "pending", text: t("rechargeConfirming") });
     try {
       const response = await fetch(`/console/v1/tenants/${encodeURIComponent(principal.tenant_id)}/billing/recharge/${encodeURIComponent(paymentOrder.id)}/capture`, { method: "POST", headers: { Accept: "application/json" }, credentials: "same-origin" });
-      const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
-      if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
+		const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string; message?: string };
+		if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t, result.message));
       setPaymentOrder(result);
       await refreshConsoleBilling();
       setPaymentMessage({ kind: "success", text: t("rechargePaid") });

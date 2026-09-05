@@ -177,6 +177,13 @@ func TestStripeAPIBaseURLNormalizesVersionSuffix(t *testing.T) {
 	}
 }
 
+func TestProviderErrorPreservesStripeProviderDetail(t *testing.T) {
+	err := (&ProviderError{Provider: ProviderStripe, StatusCode: http.StatusBadRequest, Detail: "invalid_request_error: currency is not supported"}).Error()
+	if !strings.Contains(err, "stripe provider returned HTTP 400") || !strings.Contains(err, "currency is not supported") {
+		t.Fatalf("provider error lost actionable detail: %q", err)
+	}
+}
+
 func TestPaymentReturnURLKeepsHashRouteAfterAddingProviderParameters(t *testing.T) {
 	got, err := paymentReturnURL("https://gateway.example.com/#console/billing", url.Values{
 		"payment_order_id": {"order-123"},
