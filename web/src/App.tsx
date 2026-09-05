@@ -2915,9 +2915,10 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       if (!response.ok) throw new Error(result.error || "model status unavailable");
       setAdminModelStatusReport(result);
       setAdminModelStatusMessage({ kind: "", text: "" });
-    } catch {
+    } catch (error) {
       setAdminModelStatusReport(null);
-      setAdminModelStatusMessage({ kind: "error", text: t("adminModelStatusUnavailable") });
+      const code = error instanceof Error ? error.message : "";
+      setAdminModelStatusMessage({ kind: "error", text: code === "PERMISSION_DENIED" ? t("adminModelMonitorPermissionDenied") : t("adminModelStatusUnavailable") });
     } finally {
       setAdminModelStatusBusy(false);
     }
@@ -2936,8 +2937,9 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
       if (!response.ok) throw new Error(result.error || "model monitors unavailable");
       setAdminModelMonitors(result.monitors || []);
       setAdminModelMonitorsMessage({ kind: "", text: "" });
-    } catch {
-      setAdminModelMonitorsMessage({ kind: "error", text: t("adminModelMonitorUnavailable") });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      setAdminModelMonitorsMessage({ kind: "error", text: code === "PERMISSION_DENIED" ? t("adminModelMonitorPermissionDenied") : t("adminModelMonitorUnavailable") });
     } finally {
       setAdminModelMonitorsBusy(false);
     }
@@ -3017,6 +3019,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
           ? t("adminModelMonitorGroupInactive")
           : code === "MODEL_MONITORS_UNAVAILABLE"
           ? t("adminModelMonitorUnavailable")
+          : code === "PERMISSION_DENIED"
+          ? t("adminModelMonitorPermissionDenied")
           : t("adminModelMonitorValidation"),
       });
       return false;

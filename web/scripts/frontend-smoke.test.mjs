@@ -116,6 +116,16 @@ test("customer finance navigation groups records, cost center, and orders", () =
   assert.match(app, /billing-center/);
 });
 
+test("model monitor permission failures are actionable and owner grants are backfilled", () => {
+  const app = readFileSync(resolve(root, "src", "App.tsx"), "utf8");
+  const bootstrap = readFileSync(resolve(root, "..", "cmd", "bootstrap-admin", "main.go"), "utf8");
+  const migration = readFileSync(resolve(root, "..", "migrations", "062_model_monitor_permissions_backfill.sql"), "utf8");
+  assert.match(app, /code === "PERMISSION_DENIED"/);
+  assert.match(app, /adminModelMonitorPermissionDenied/);
+  assert.match(bootstrap, /"operations:update"/);
+  assert.match(migration, /p\.action IN \('read', 'update'\)/);
+});
+
 test("video debugging exposes Seedance capabilities and request fields", () => {
   const media = readFileSync(resolve(root, "src", "components", "MediaLabsView.tsx"), "utf8");
   const translations = readFileSync(resolve(root, "src", "locales", "translations.ts"), "utf8");

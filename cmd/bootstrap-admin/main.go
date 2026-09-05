@@ -40,6 +40,7 @@ var platformPermissions = []string{
 	"billing:update",
 	"finance:read",
 	"operations:read",
+	"operations:update",
 	"security:read",
 	"security:update",
 	"role:read",

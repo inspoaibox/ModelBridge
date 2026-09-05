@@ -633,6 +633,8 @@ PM2_HOME=/opt/ai-token/.pm2 pm2 logs ai-token --lines 100 --nostream
 | PM2 日志提示 `function regexp_replace(...) does not exist` | 使用了包含错误迁移文件的旧版本。先更新到包含 `migrations/040_api_endpoint_protocols.sql` 修复的 `main`，再重新构建并重启；不要手动创建 `schema_migrations`。 |
 | `relation "schema_migrations" does not exist` | 先按第 7.1 节执行独立迁移程序。若失败，查看它输出的第一条 SQL 错误；不要手动创建 `schema_migrations`。 |
 | 支付设置页返回 `403` | 首次安装时支付权限可能在 `platform_owner` 创建前执行，更新到包含 `057_payment_permissions_backfill.sql` 的版本后重新执行迁移并重新登录管理员。 |
+| 模型监控列表或保存返回 `403` | 更新到包含 `062_model_monitor_permissions_backfill.sql` 的版本后重新执行迁移，并重新登录管理员；该迁移会为 `platform_owner` 补齐 `operations:read/update`。若是自定义平台角色，请在角色权限中授予 `operations:update`。 |
+| 浏览器提示 CSS MIME 类型为 `text/html` | 线上 `web/dist` 缺少当前 `index.html` 引用的同版本 CSS/JS 资产，通常是只上传了部分构建产物。重新执行完整前端构建并原子替换整个 `web/dist` 目录后再 reload。 |
 | PM2 显示 `online`，但 `curl http://127.0.0.1:8080/healthz` 返回 `Connection refused` | PM2 守护进程在线不等于应用在线。执行 `pm2 describe ai-token`，如果是 `waiting restart`、重启次数增加或内存为 `0b`，继续查看 `pm2 logs ai-token --err --lines 100 --nostream`，先修复日志中的首个启动错误，再重启应用。 |
 | Caddy 提示同域名站点已存在 | 该域名已有业务配置。不要追加、不要覆盖；读取原站点块后再决定如何把反代加入其中。 |
 | `caddy validate` 失败 | 只修改刚追加的 AI Token 站点块，修复后重新 validate；验证通过前不要 reload。 |
