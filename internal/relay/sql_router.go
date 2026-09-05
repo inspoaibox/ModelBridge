@@ -507,15 +507,9 @@ func (r *SQLChannelRouter) CreateChannel(
 	if err := r.replaceChannelModels(ctx, tx, channelID, request.Provider, request.Models); err != nil {
 		return ChannelSummary{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO routing_group_channels (group_id, channel_id)
-		SELECT id, $1
-		FROM routing_groups
-		WHERE code = 'default' AND deleted_at IS NULL
-		ON CONFLICT DO NOTHING
-	`, channelID); err != nil {
-		return ChannelSummary{}, err
-	}
+	// New upstream channels remain unassigned until an administrator explicitly
+	// selects them in a routing group. This prevents an unreviewed channel from
+	// becoming routable through the platform default group.
 	if err := tx.Commit(); err != nil {
 		return ChannelSummary{}, err
 	}
