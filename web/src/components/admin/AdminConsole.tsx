@@ -59,6 +59,7 @@ import {
   PriceMatrixCostEstimate,
   PriceMatrixSummary,
   PaymentProviderConfig,
+  PaymentRechargePackage,
   OperationsSnapshot,
   ModelStatusReport,
   ModelMonitor,
@@ -218,8 +219,8 @@ interface AdminConsoleProps {
   paymentSettingsBusy: boolean;
   paymentSettingsMessage: LoginMessage;
   savePaymentConfig: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
-  paymentRechargePresets: string[];
-  savePaymentRechargePresets: (presets: string[]) => Promise<void>;
+	  paymentRechargePackages: PaymentRechargePackage[];
+	  savePaymentRechargePackages: (packages: PaymentRechargePackage[]) => Promise<void>;
   canUpdatePaymentSettings: boolean;
   usageReport: UsageReport | null;
   usageReportBusy: boolean;
@@ -416,8 +417,8 @@ export function AdminConsole({
   paymentSettingsBusy,
   paymentSettingsMessage,
   savePaymentConfig,
-  paymentRechargePresets,
-  savePaymentRechargePresets,
+	  paymentRechargePackages,
+	  savePaymentRechargePackages,
   canUpdatePaymentSettings,
   usageReport,
   usageReportBusy,
@@ -1684,8 +1685,8 @@ export function AdminConsole({
             paymentSettingsBusy={paymentSettingsBusy}
             paymentSettingsMessage={paymentSettingsMessage}
             savePaymentConfig={savePaymentConfig}
-            paymentRechargePresets={paymentRechargePresets}
-            savePaymentRechargePresets={savePaymentRechargePresets}
+            paymentRechargePackages={paymentRechargePackages}
+            savePaymentRechargePackages={savePaymentRechargePackages}
             canUpdatePaymentSettings={canUpdatePaymentSettings}
           />
         )}

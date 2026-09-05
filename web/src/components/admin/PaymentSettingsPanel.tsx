@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, CheckCircle2, Copy, CreditCard, ExternalLink, Info, Plus, Save, X } from "lucide-react";
+import { BookOpen, CheckCircle2, Copy, CreditCard, ExternalLink, Info, Save } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,12 +17,13 @@ interface Props {
   message: LoginMessage;
   save: (provider: PaymentProviderConfig["provider"], enabled: boolean, values: Record<string, string>, clear: string[]) => Promise<void>;
   canUpdate: boolean;
-  rechargePresets: string[];
-  saveRechargePresets: (presets: string[]) => Promise<void>;
 }
 
 type Provider = PaymentProviderConfig["provider"];
 type Field = { key: string; label: TranslationKey; secret?: boolean; multiline?: boolean; hint?: TranslationKey };
+
+// paymentRechargePresets remains a server-side compatibility field only; new edits live in the global package panel.
+// RechargePackagePanel is intentionally mounted as a sibling system-settings tab, never inside a provider form.
 
 const fields: Record<Provider, Field[]> = {
   wechat: [
@@ -75,7 +76,7 @@ const stripeMethodOptions: Array<{ value: string; label: TranslationKey }> = [
   { value: "wechat_pay", label: "paymentStripeWechatPay" },
 ];
 
-export function PaymentSettingsPanel({ language, configs, busy, message, save, canUpdate, rechargePresets, saveRechargePresets }: Props) {
+export function PaymentSettingsPanel({ language, configs, busy, message, save, canUpdate }: Props) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [provider, setProvider] = useState<Provider>("wechat");
   const [enabled, setEnabled] = useState(false);
@@ -143,9 +144,7 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
                   <div key={field.key} className={field.multiline ? "space-y-2 sm:col-span-2" : "space-y-2"}>
                     <Label htmlFor={`payment-${provider}-${field.key}`}>{t(field.label)}</Label>
                     {field.hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{t(field.hint)}</p> : null}
-                    {field.key === "recharge_presets" ? (
-                      <RechargePresetsEditor id={`payment-${provider}-${field.key}`} value={draft[field.key] || ""} onChange={(value) => setDraft((current) => ({ ...current, [field.key]: value }))} disabled={busy || !canUpdate} t={t} />
-                    ) : field.multiline ? (
+                    {field.multiline ? (
                       <textarea id={`payment-${provider}-${field.key}`} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} rows={6} className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs text-slate-900 outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder={configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />
                     ) : (
                       <Input id={`payment-${provider}-${field.key}`} type={field.secret ? "password" : "text"} value={draft[field.key] || ""} onChange={(event) => setDraft((value) => ({ ...value, [field.key]: event.target.value }))} placeholder={field.secret && configured ? t("paymentSecretKeep") : ""} disabled={busy || !canUpdate || isCleared} />
@@ -163,32 +162,9 @@ export function PaymentSettingsPanel({ language, configs, busy, message, save, c
           <div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400"><Badge variant="muted">{t("paymentCallbackOnly")}</Badge><span>{t("paymentSecurityHint")}</span></div>
         </CardContent>
       </Card>
-      <RechargePackagePanel value={rechargePresets.join(",")} save={saveRechargePresets} disabled={busy || !canUpdate} busy={busy} message={message} t={t} />
       </div>
     </div>
   );
-}
-
-function RechargePackagePanel({ value, save, disabled, busy, message, t }: { value: string; save: (presets: string[]) => Promise<void>; disabled: boolean; busy: boolean; message: LoginMessage; t: (key: TranslationKey) => string }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const presets = draft.split(",").map((item) => item.trim()).filter(Boolean);
-  return <Card className="h-fit border-emerald-500/25 bg-emerald-50/35 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-500/[0.06]"><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><CreditCard className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />{t("paymentRechargePackagesTitle")}</CardTitle><CardDescription>{t("paymentRechargePackagesDescription")}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-white/75 px-3 py-2 text-xs dark:bg-slate-950/40"><span className="text-slate-500">{t("paymentRechargePackagesProvider")}</span><strong className="text-slate-900 dark:text-white">{t("paymentRechargePackagesAllProviders")}</strong></div><div><div className="text-sm font-semibold text-slate-900 dark:text-white">{t("paymentRechargePresets")}</div><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePresetsHint")}</p></div><RechargePresetsEditor id="payment-global-recharge-presets" value={draft} onChange={setDraft} disabled={disabled} t={t} /><p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t("paymentRechargePackagesSaveHint")}</p>{message.kind === "success" || message.kind === "error" ? <div className={message.kind === "error" ? "text-xs text-rose-700 dark:text-rose-300" : "text-xs text-emerald-700 dark:text-emerald-300"}>{message.text}</div> : null}<div className="flex justify-end"><Button type="button" onClick={() => void save(presets)} disabled={disabled || busy} className="gap-2"><Save className="h-4 w-4" />{busy ? t("paymentRechargePackagesSaving") : t("paymentRechargePackagesSave")}</Button></div></CardContent></Card>;
-}
-
-function RechargePresetsEditor({ id, value, onChange, disabled, t }: { id: string; value: string; onChange: (value: string) => void; disabled: boolean; t: (key: TranslationKey) => string }) {
-  const [input, setInput] = useState("");
-  const presets = value.split(",").map((item) => item.trim()).filter(Boolean);
-  function add() {
-    const next = input.trim();
-    if (!next || presets.includes(next)) return;
-    onChange([...presets, next].join(","));
-    setInput("");
-  }
-  function remove(preset: string) {
-    onChange(presets.filter((item) => item !== preset).join(","));
-  }
-  return <div className="space-y-2"><div className="flex gap-2"><Input id={id} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); add(); } }} placeholder={t("paymentRechargePresetPlaceholder")} inputMode="decimal" disabled={disabled} /><Button type="button" variant="outline" onClick={add} disabled={disabled || !input.trim()} className="shrink-0 gap-1.5"><Plus className="h-3.5 w-3.5" />{t("paymentRechargePresetAdd")}</Button></div>{presets.length > 0 ? <div className="flex flex-wrap gap-2">{presets.map((preset) => <span key={preset} className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{preset}<button type="button" onClick={() => remove(preset)} disabled={disabled} title={t("paymentRechargePresetRemove")} aria-label={t("paymentRechargePresetRemove")} className="rounded-full p-0.5 hover:bg-emerald-500/20 disabled:opacity-50"><X className="h-3 w-3" /></button></span>)}</div> : null}</div>;
 }
 
 function PaymentSetupGuide({ provider, t }: { provider: Provider; t: (key: TranslationKey) => string }) {

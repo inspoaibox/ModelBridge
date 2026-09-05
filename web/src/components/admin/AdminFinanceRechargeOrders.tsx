@@ -38,15 +38,16 @@ export function AdminFinanceRechargeOrders({ language, report, busy, tenantID, c
                 <th className="px-5 py-3 font-semibold">{t("financePaymentProvider")}</th>
                 <th className="px-5 py-3 font-semibold">{t("financeOrderAmount")}</th>
                 <th className="px-5 py-3 font-semibold">{t("financeCreditedAmount")}</th>
+                <th className="px-5 py-3 font-semibold">{t("financeRechargePackage")}</th>
                 <th className="px-5 py-3 font-semibold">{t("financeOrderStatus")}</th>
                 <th className="px-5 py-3 font-semibold">{t("financeTransactionTime")}</th>
               </tr>
             </thead>
             <tbody>
               {busy && !report ? (
-                <tr><td colSpan={7} className="py-14 text-center text-slate-500"><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-emerald-600" />{t("financeLoading")}</td></tr>
+                <tr><td colSpan={8} className="py-14 text-center text-slate-500"><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-emerald-600" />{t("financeLoading")}</td></tr>
               ) : orders.length === 0 ? (
-                <tr><td colSpan={7} className="py-14 text-center text-slate-500 dark:text-slate-400">{t("financeRechargeOrdersEmpty")}</td></tr>
+                <tr><td colSpan={8} className="py-14 text-center text-slate-500 dark:text-slate-400">{t("financeRechargeOrdersEmpty")}</td></tr>
               ) : orders.map((order) => (
                 <tr key={order.id} className="border-b border-slate-100 last:border-0 dark:border-slate-800/80">
                   <td className="px-5 py-4">
@@ -60,6 +61,7 @@ export function AdminFinanceRechargeOrders({ language, report, busy, tenantID, c
                   <td className="px-5 py-4 text-xs font-medium text-slate-700 dark:text-slate-300">{paymentProviderLabel(order.provider, t)}</td>
                   <td className="whitespace-nowrap px-5 py-4 font-mono text-sm font-semibold text-slate-800 dark:text-slate-200">{order.currency} {formatMoney(order.amount)}</td>
                   <td className="whitespace-nowrap px-5 py-4 font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{order.currency} {formatMoney(order.credited_amount)}<div className="mt-1 text-[10px] font-normal text-slate-500">x{formatMoney(order.recharge_rate)}</div></td>
+                  <td className="px-5 py-4 text-xs text-slate-600 dark:text-slate-300">{order.package_id ? <><div className="font-mono text-[10px]">{order.package_id}</div>{Number(order.bonus_amount || "0") > 0 ? <div className="mt-1 text-emerald-700 dark:text-emerald-300">+{formatMoney(order.bonus_amount)} {t("rechargeBonus")}</div> : null}{order.valid_until ? <div className="mt-1 text-[10px] text-slate-500">{formatDate(order.valid_until, language)}</div> : null}</> : "-"}</td>
                   <td className="px-5 py-4"><Badge variant={paymentOrderStatusVariant(order.status)}>{paymentOrderStatusLabel(order.status, t)}</Badge>{order.failure_reason ? <div className="mt-1 max-w-[180px] truncate text-[10px] text-rose-600 dark:text-rose-300" title={order.failure_reason}>{order.failure_reason}</div> : null}</td>
                   <td className="whitespace-nowrap px-5 py-4 text-xs text-slate-500 dark:text-slate-400">{formatDate(order.created_at, language)}</td>
                 </tr>

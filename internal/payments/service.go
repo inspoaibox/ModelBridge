@@ -5,6 +5,7 @@ package payments
 // only source of truth used to credit a tenant account.
 
 import (
+	"crypto/md5"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -59,10 +60,28 @@ type PublicProvider struct {
 	Enabled         bool     `json:"enabled"`
 	RechargeRate    string   `json:"recharge_rate,omitempty"`
 	RechargePresets []string `json:"recharge_presets,omitempty"`
+	RechargePackages []RechargePackage `json:"recharge_packages,omitempty"`
 	PublishableKey  string   `json:"publishable_key,omitempty"`
 }
 
+type RechargePackage struct {
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Description          string `json:"description,omitempty"`
+	Kind                 string `json:"kind"`
+	Currency             string `json:"currency"`
+	Amount               string `json:"amount"`
+	CreditedAmount       string `json:"credited_amount"`
+	BonusAmount          string `json:"bonus_amount"`
+	ValidityDays         int    `json:"validity_days"`
+	StartsAt             string `json:"starts_at,omitempty"`
+	EndsAt               string `json:"ends_at,omitempty"`
+	SubscriptionPlanCode string `json:"subscription_plan_code,omitempty"`
+	Enabled              bool   `json:"enabled"`
+}
+
 type RechargePackages struct {
+	Packages       []RechargePackage `json:"packages"`
 	RechargePresets []string `json:"recharge_presets"`
 }
 
@@ -98,6 +117,7 @@ type CreateRequest struct {
 	Currency       string
 	IdempotencyKey string
 	ReturnURL      string
+	PackageID      string
 }
 
 type Order struct {
@@ -109,6 +129,9 @@ type Order struct {
 	ProviderOrderID      string     `json:"provider_order_id,omitempty"`
 	Amount               string     `json:"amount"`
 	CreditedAmount       string     `json:"credited_amount"`
+	PackageID            string     `json:"package_id,omitempty"`
+	BonusAmount          string     `json:"bonus_amount,omitempty"`
+	ValidUntil           *time.Time `json:"valid_until,omitempty"`
 	RechargeRate         string     `json:"recharge_rate"`
 	Currency             string     `json:"currency"`
 	Status               string     `json:"status"`
@@ -223,7 +246,7 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	globalPresets, globalConfigured, err := s.globalRechargePresets(ctx)
+	globalPackages, globalConfigured, err := s.globalRechargePackages(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -241,11 +264,13 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 			continue
 		}
 		item.RechargeRate = normalizedRechargeRate(values["recharge_rate"])
-		item.RechargePresets = append([]string(nil), globalPresets...)
+		item.RechargePackages = publicRechargePackages(globalPackages, time.Now())
+		item.RechargePresets = packageAmounts(item.RechargePackages)
 		if !globalConfigured {
 			// Keep installations upgraded from the provider-scoped setting usable
 			// until an administrator saves the new global package configuration.
-			item.RechargePresets = normalizedRechargePresets(values["recharge_presets"])
+			item.RechargePackages = legacyRechargePackages(normalizedRechargePresets(values["recharge_presets"]))
+			item.RechargePresets = packageAmounts(item.RechargePackages)
 		}
 		item.PublishableKey = strings.TrimSpace(values["publishable_key"])
 		items = append(items, item)
@@ -254,18 +279,27 @@ func (s *SQLService) PublicList(ctx context.Context) ([]PublicProvider, error) {
 }
 
 func (s *SQLService) GetRechargePresets(ctx context.Context) ([]string, error) {
-	presets, _, err := s.globalRechargePresets(ctx)
-	return presets, err
+	packages, _, err := s.globalRechargePackages(ctx)
+	return packageAmounts(packages), err
 }
 
-func (s *SQLService) globalRechargePresets(ctx context.Context) ([]string, bool, error) {
+func (s *SQLService) GetRechargePackages(ctx context.Context) ([]RechargePackage, error) {
+	packages, _, err := s.globalRechargePackages(ctx)
+	return packages, err
+}
+
+func (s *SQLService) globalRechargePackages(ctx context.Context) ([]RechargePackage, bool, error) {
 	if s == nil || s.db == nil {
 		return nil, false, ErrUnavailable
 	}
 	var encoded string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM platform_settings WHERE key = 'payment_recharge_presets'`).Scan(&encoded)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM platform_settings WHERE key = 'payment_recharge_packages'`).Scan(&encoded)
 	if err == nil {
-		return normalizedRechargePresets(encoded), true, nil
+		var packages []RechargePackage
+		if json.Unmarshal([]byte(encoded), &packages) != nil {
+			return nil, true, ErrInvalidRequest
+		}
+		return normalizeRechargePackages(packages)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, false, err
@@ -279,32 +313,213 @@ func (s *SQLService) globalRechargePresets(ctx context.Context) ([]string, bool,
 			return nil, false, readErr
 		}
 		if presets := normalizedRechargePresets(values["recharge_presets"]); len(presets) > 0 {
-			return presets, false, nil
+			return legacyRechargePackages(presets), false, nil
 		}
 	}
 	return nil, false, nil
 }
 
+func normalizeRechargePackages(input []RechargePackage) ([]RechargePackage, bool, error) {
+	result := make([]RechargePackage, 0, len(input))
+	seen := make(map[string]struct{}, len(input))
+		for index, item := range input {
+			item.ID = strings.TrimSpace(item.ID)
+			if item.ID == "" {
+				// Keep IDs stable when reading a legacy or hand-written JSON setting.
+				// The same package must validate on the public-list request and the
+				// subsequent create-order request.
+				item.ID = generatedPackageID(item, index)
+		}
+		if !ids.Valid(item.ID) || item.Name == "" || len(item.Name) > 128 || len(item.Description) > 500 {
+			return nil, true, ErrInvalidRequest
+		}
+		if _, exists := seen[item.ID]; exists {
+			return nil, true, ErrInvalidRequest
+		}
+		seen[item.ID] = struct{}{}
+		item.Name = strings.TrimSpace(item.Name)
+		item.Description = strings.TrimSpace(item.Description)
+		item.Kind = strings.ToLower(strings.TrimSpace(item.Kind))
+		if item.Kind == "" {
+			item.Kind = "recharge"
+		}
+		if item.Kind != "recharge" && item.Kind != "subscription" {
+			return nil, true, ErrInvalidRequest
+		}
+		item.Currency = strings.ToUpper(strings.TrimSpace(item.Currency))
+		if len(item.Currency) != 3 {
+			return nil, true, ErrInvalidRequest
+		}
+		amount, err := normalizeAmount(item.Amount, item.Currency)
+		if err != nil {
+			return nil, true, err
+		}
+		bonus := strings.TrimSpace(item.BonusAmount)
+		if bonus == "" {
+			bonus = "0"
+		} else if bonus, err = normalizeNonNegativeAmount(bonus, item.Currency); err != nil {
+			return nil, true, err
+		}
+		credited := strings.TrimSpace(item.CreditedAmount)
+		computed := addAmounts(amount, bonus)
+		if credited == "" {
+			credited = computed
+		} else if credited, err = normalizeAmount(credited, item.Currency); err != nil {
+			return nil, true, err
+		} else if credited != computed {
+			return nil, true, ErrInvalidRequest
+		}
+		item.Amount, item.BonusAmount, item.CreditedAmount = amount, bonus, credited
+		if item.ValidityDays < 0 || item.ValidityDays > 36500 {
+			return nil, true, ErrInvalidRequest
+		}
+		for _, value := range []string{item.StartsAt, item.EndsAt} {
+			if value != "" {
+				if _, err := time.Parse(time.RFC3339, strings.TrimSpace(value)); err != nil {
+					return nil, true, ErrInvalidRequest
+				}
+			}
+		}
+		if item.StartsAt != "" && item.EndsAt != "" {
+			start, _ := time.Parse(time.RFC3339, item.StartsAt)
+			end, _ := time.Parse(time.RFC3339, item.EndsAt)
+			if !end.After(start) {
+				return nil, true, ErrInvalidRequest
+			}
+		}
+		if item.Kind == "subscription" && len(item.SubscriptionPlanCode) > 128 {
+			return nil, true, ErrInvalidRequest
+		}
+		result = append(result, item)
+	}
+	return result, true, nil
+}
+
+func generatedPackageID(item RechargePackage, index int) string {
+	payload := strings.Join([]string{item.Kind, item.Currency, item.Name, item.Amount, item.BonusAmount, fmt.Sprint(index)}, "\x00")
+	sum := md5.Sum([]byte(payload))
+	sum[6] = (sum[6] & 0x0f) | 0x30
+	sum[8] = (sum[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
+func normalizeNonNegativeAmount(value, currency string) (string, error) {
+	rat, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+	if !ok || rat.Sign() < 0 {
+		return "", ErrInvalidRequest
+	}
+	if rat.Sign() == 0 {
+		return "0", nil
+	}
+	return normalizeAmount(value, currency)
+}
+
+func addAmounts(left, right string) string {
+	a, _ := new(big.Rat).SetString(left)
+	b, _ := new(big.Rat).SetString(right)
+	return trimDecimal(new(big.Rat).Add(a, b).FloatString(12))
+}
+
+func legacyRechargePackages(presets []string) []RechargePackage {
+	result := make([]RechargePackage, 0, len(presets))
+	for _, preset := range presets {
+		amount := strings.TrimSpace(preset)
+		if amount == "" {
+			continue
+		}
+		result = append(result, RechargePackage{ID: legacyPackageID(amount, "USD"), Name: "USD " + amount, Kind: "recharge", Currency: "USD", Amount: amount, CreditedAmount: amount, BonusAmount: "0", Enabled: true})
+	}
+	return result
+}
+
+func packageAmounts(packages []RechargePackage) []string {
+	result := make([]string, 0, len(packages))
+	seen := map[string]struct{}{}
+	for _, item := range packages {
+		if !item.Enabled || item.Kind != "recharge" {
+			continue
+		}
+		if _, ok := seen[item.Amount]; ok {
+			continue
+		}
+		seen[item.Amount] = struct{}{}
+		result = append(result, item.Amount)
+	}
+	return result
+}
+
+func publicRechargePackages(packages []RechargePackage, now time.Time) []RechargePackage {
+	result := make([]RechargePackage, 0, len(packages))
+	for _, item := range packages {
+		if !item.Enabled || item.Kind != "recharge" {
+			continue
+		}
+		if item.StartsAt != "" {
+			start, _ := time.Parse(time.RFC3339, item.StartsAt)
+			if now.Before(start) {
+				continue
+			}
+		}
+		if item.EndsAt != "" {
+			end, _ := time.Parse(time.RFC3339, item.EndsAt)
+			if !now.Before(end) {
+				continue
+			}
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func isRechargePackageActive(item RechargePackage, now time.Time) bool {
+	if item.StartsAt != "" {
+		start, err := time.Parse(time.RFC3339, item.StartsAt)
+		if err != nil || now.Before(start) {
+			return false
+		}
+	}
+	if item.EndsAt != "" {
+		end, err := time.Parse(time.RFC3339, item.EndsAt)
+		if err != nil || !now.Before(end) {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyPackageID(amount, currency string) string {
+	sum := md5.Sum([]byte(strings.ToUpper(strings.TrimSpace(currency)) + ":" + strings.TrimSpace(amount)))
+	sum[6] = (sum[6] & 0x0f) | 0x30
+	sum[8] = (sum[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
 func (s *SQLService) UpdateRechargePresets(ctx context.Context, actorID string, presets []string) ([]string, error) {
+	packages := legacyRechargePackages(presets)
+	updated, err := s.UpdateRechargePackages(ctx, actorID, packages)
+	return packageAmounts(updated), err
+}
+
+func (s *SQLService) UpdateRechargePackages(ctx context.Context, actorID string, packages []RechargePackage) ([]RechargePackage, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(actorID) == "" {
 		return nil, ErrInvalidRequest
 	}
-	values := make([]string, 0, len(presets))
-	for _, preset := range presets {
-		values = append(values, strings.TrimSpace(preset))
+	normalizedPackages, _, err := normalizeRechargePackages(packages)
+	if err != nil {
+		return nil, err
 	}
-	normalized, err := normalizeRechargePresetsValue(strings.Join(values, ","))
+	encoded, err := json.Marshal(normalizedPackages)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO platform_settings (key, value, updated_by, updated_at)
-		VALUES ('payment_recharge_presets', $1, $2::uuid, now())
+		VALUES ('payment_recharge_packages', $1, $2::uuid, now())
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
-	`, normalized, actorID); err != nil {
+	`, string(encoded), actorID); err != nil {
 		return nil, err
 	}
-	return normalizedRechargePresets(normalized), nil
+	return normalizedPackages, nil
 }
 
 func (s *SQLService) AdminUpdate(ctx context.Context, actorID, provider string, request ConfigUpdate) (ProviderConfig, error) {
@@ -633,6 +848,7 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	}
 	request.TenantID, request.UserID, request.Provider = strings.TrimSpace(request.TenantID), strings.TrimSpace(request.UserID), strings.ToLower(strings.TrimSpace(request.Provider))
 	request.Amount, request.Currency, request.IdempotencyKey, request.ReturnURL = strings.TrimSpace(request.Amount), strings.ToUpper(strings.TrimSpace(request.Currency)), strings.TrimSpace(request.IdempotencyKey), strings.TrimSpace(request.ReturnURL)
+	request.PackageID = strings.TrimSpace(request.PackageID)
 	if !ids.Valid(request.TenantID) || !ids.Valid(request.UserID) || !supportedProvider(request.Provider) || request.IdempotencyKey == "" || len(request.IdempotencyKey) > 128 || !validHTTPSURL(request.ReturnURL) {
 		return CreateResult{}, ErrInvalidRequest
 	}
@@ -666,8 +882,36 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	if !hasRequiredFields(request.Provider, config) {
 		return CreateResult{}, ErrProviderUnconfig
 	}
+	var selectedPackage *RechargePackage
+	if request.PackageID != "" {
+		packages, packageErr := s.GetRechargePackages(ctx)
+		if packageErr != nil {
+			return CreateResult{}, packageErr
+		}
+		for index := range packages {
+			candidate := packages[index]
+			if candidate.ID == request.PackageID && candidate.Enabled && candidate.Kind == "recharge" && strings.EqualFold(candidate.Currency, request.Currency) && isRechargePackageActive(candidate, s.clock()) {
+				selectedPackage = &candidate
+				break
+			}
+		}
+		if selectedPackage == nil || !sameAmount(paidAmount, selectedPackage.Amount, request.Currency) {
+			return CreateResult{}, ErrInvalidRequest
+		}
+	}
 	rate := normalizedRechargeRate(config["recharge_rate"])
-	creditedAmount, err := applyRechargeRate(paidAmount, rate, request.Currency)
+	creditBasis := paidAmount
+	bonusAmount := "0"
+	validUntil := (*time.Time)(nil)
+	if selectedPackage != nil {
+		creditBasis = selectedPackage.CreditedAmount
+		bonusAmount = selectedPackage.BonusAmount
+		if selectedPackage.ValidityDays > 0 {
+			value := s.clock().Add(time.Duration(selectedPackage.ValidityDays) * 24 * time.Hour)
+			validUntil = &value
+		}
+	}
+	creditedAmount, err := applyRechargeRate(creditBasis, rate, request.Currency)
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -683,7 +927,11 @@ func (s *SQLService) CreateOrder(ctx context.Context, request CreateRequest) (Cr
 	}
 	merchant := "recharge_" + strings.ReplaceAll(id, "-", "")
 	expires := s.clock().Add(orderLifetime)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO payment_orders (id, tenant_id, user_id, provider, merchant_order_no, amount, credited_amount, recharge_rate, currency, expires_at, idempotency_key) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::numeric, $7::numeric, $8::numeric, $9, $10, $11)`, id, request.TenantID, request.UserID, request.Provider, merchant, paidAmount, creditedAmount, rate, request.Currency, expires, request.IdempotencyKey)
+	packageID, packageBonus := "", "0"
+	if selectedPackage != nil {
+		packageID, packageBonus = selectedPackage.ID, bonusAmount
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO payment_orders (id, tenant_id, user_id, provider, merchant_order_no, amount, credited_amount, recharge_rate, currency, package_id, bonus_amount, valid_until, expires_at, idempotency_key) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::numeric, $7::numeric, $8::numeric, $9, NULLIF($10, ''), $11::numeric, $12, $13, $14)`, id, request.TenantID, request.UserID, request.Provider, merchant, paidAmount, creditedAmount, rate, request.Currency, packageID, packageBonus, validUntil, expires, request.IdempotencyKey)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return s.getExistingByIdempotency(ctx, request.TenantID, request.IdempotencyKey)
@@ -777,13 +1025,16 @@ func (s *SQLService) ListOrders(ctx context.Context, tenantID string, query Orde
 	return OrderList{Orders: orders, Total: total, Limit: query.Limit, Offset: query.Offset}, nil
 }
 
-const orderSelect = `SELECT po.id::text, po.tenant_id::text, po.user_id::text, po.provider, po.merchant_order_no, COALESCE(po.provider_order_id, ''), po.amount::text, po.credited_amount::text, po.recharge_rate::text, po.currency, po.status, COALESCE(po.checkout_url, ''), COALESCE(po.checkout_client_secret, ''), COALESCE(po.qr_code, ''), COALESCE(po.failure_reason, ''), po.paid_at, po.expires_at, po.created_at, po.updated_at FROM payment_orders po`
+const orderSelect = `SELECT po.id::text, po.tenant_id::text, po.user_id::text, po.provider, po.merchant_order_no, COALESCE(po.provider_order_id, ''), po.amount::text, po.credited_amount::text, po.recharge_rate::text, po.currency, COALESCE(po.package_id::text, ''), COALESCE(po.bonus_amount::text, '0'), po.valid_until, po.status, COALESCE(po.checkout_url, ''), COALESCE(po.checkout_client_secret, ''), COALESCE(po.qr_code, ''), COALESCE(po.failure_reason, ''), po.paid_at, po.expires_at, po.created_at, po.updated_at FROM payment_orders po`
 
 type scanner interface{ Scan(...any) error }
 
 func (s *SQLService) scanOrder(row scanner, order *Order) error {
-	var paid sql.NullTime
-	err := row.Scan(&order.ID, &order.TenantID, &order.UserID, &order.Provider, &order.MerchantOrderNo, &order.ProviderOrderID, &order.Amount, &order.CreditedAmount, &order.RechargeRate, &order.Currency, &order.Status, &order.CheckoutURL, &order.CheckoutClientSecret, &order.QRCode, &order.FailureReason, &paid, &order.ExpiresAt, &order.CreatedAt, &order.UpdatedAt)
+	var paid, validUntil sql.NullTime
+	err := row.Scan(&order.ID, &order.TenantID, &order.UserID, &order.Provider, &order.MerchantOrderNo, &order.ProviderOrderID, &order.Amount, &order.CreditedAmount, &order.RechargeRate, &order.Currency, &order.PackageID, &order.BonusAmount, &validUntil, &order.Status, &order.CheckoutURL, &order.CheckoutClientSecret, &order.QRCode, &order.FailureReason, &paid, &order.ExpiresAt, &order.CreatedAt, &order.UpdatedAt)
+	if validUntil.Valid {
+		order.ValidUntil = &validUntil.Time
+	}
 	if paid.Valid {
 		order.PaidAt = &paid.Time
 	}

@@ -49,6 +49,7 @@ import {
   PaymentOrderList,
   PaymentProviderConfig,
   PaymentRechargePackages,
+  PaymentRechargePackage,
   PublicPaymentProvider,
   ModelPriceFormState,
   ModelMonitor,
@@ -798,7 +799,7 @@ export default function App() {
   const [paymentConfigs, setPaymentConfigs] = useState<PaymentProviderConfig[]>([]);
   const [paymentSettingsBusy, setPaymentSettingsBusy] = useState(false);
   const [paymentSettingsMessage, setPaymentSettingsMessage] = useState<LoginMessage>({ kind: "", text: "" });
-  const [paymentRechargePresets, setPaymentRechargePresets] = useState<string[]>([]);
+  const [paymentRechargePackages, setPaymentRechargePackages] = useState<PaymentRechargePackage[]>([]);
   const [officialPriceSyncBusy, setOfficialPriceSyncBusy] = useState(false);
   const [modelPriceForm, setModelPriceForm] = useState<ModelPriceFormState>(() => defaultModelPriceForm());
   const [modelPriceFormOpen, setModelPriceFormOpen] = useState(false);
@@ -1658,7 +1659,7 @@ export default function App() {
       setEmailTemplates(templateResult.templates || []);
       setPaymentConfigs(paymentResponse.ok ? paymentResult.providers || [] : []);
       setPaymentSettingsMessage(paymentResponse.ok ? { kind: "", text: "" } : { kind: "error", text: t("paymentSettingsUnavailable") });
-      setPaymentRechargePresets(paymentPackagesResponse.ok ? paymentPackagesResult.recharge_presets || [] : []);
+      setPaymentRechargePackages(paymentPackagesResponse.ok ? paymentPackagesResult.packages || [] : []);
       setSiteSettings({
         site_name: settingsResult.site_name?.trim() || "AI Token Gateway",
         site_logo_url: settingsResult.site_logo_url?.trim() || "",
@@ -2199,7 +2200,7 @@ export default function App() {
     }
   }
 
-  async function savePaymentRechargePresets(presets: string[]) {
+  async function savePaymentRechargePackages(packages: PaymentRechargePackage[]) {
     setPaymentSettingsBusy(true);
     setPaymentSettingsMessage({ kind: "pending", text: t("paymentRechargePackagesSaving") });
     try {
@@ -2207,11 +2208,11 @@ export default function App() {
         method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ recharge_presets: presets }),
+        body: JSON.stringify({ packages }),
       });
       const result = (await response.json().catch(() => ({}))) as PaymentRechargePackages & { error?: string };
       if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
-      setPaymentRechargePresets(result.recharge_presets || []);
+      setPaymentRechargePackages(result.packages || []);
       setPaymentSettingsMessage({ kind: "success", text: t("paymentRechargePackagesSaved") });
     } catch (error) {
       setPaymentSettingsMessage({ kind: "error", text: error instanceof Error ? error.message : t("paymentRechargePackagesSaveFailed") });
@@ -2719,7 +2720,7 @@ export default function App() {
     }
   }
 
-  async function createPaymentOrder(provider: PaymentOrder["provider"], amount: string, currency: string) {
+  async function createPaymentOrder(provider: PaymentOrder["provider"], amount: string, currency: string, packageID?: string) {
     if (!principal?.tenant_id) return;
     setPaymentBusy(true);
     setPaymentMessage({ kind: "pending", text: t("rechargeCreating") });
@@ -2729,7 +2730,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json", "Idempotency-Key": idempotencyKey },
         credentials: "same-origin",
-        body: JSON.stringify({ provider, amount, currency, return_url: paymentReturnURL() }),
+        body: JSON.stringify({ provider, amount, currency, package_id: packageID || "", return_url: paymentReturnURL() }),
       });
       const result = (await response.json().catch(() => ({}))) as PaymentOrder & { error?: string };
       if (!response.ok) throw new Error(resolvePaymentError(response.status, result.error, t));
@@ -4605,8 +4606,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             paymentSettingsBusy={paymentSettingsBusy}
             paymentSettingsMessage={paymentSettingsMessage}
             savePaymentConfig={savePaymentConfig}
-            paymentRechargePresets={paymentRechargePresets}
-            savePaymentRechargePresets={savePaymentRechargePresets}
+            paymentRechargePackages={paymentRechargePackages}
+            savePaymentRechargePackages={savePaymentRechargePackages}
             canUpdatePaymentSettings={principal?.permissions?.includes("payment:update") === true}
             usageReport={usageReport}
             usageReportBusy={usageReportBusy}

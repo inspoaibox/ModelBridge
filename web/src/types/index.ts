@@ -667,11 +667,29 @@ export interface PublicPaymentProvider {
   enabled: boolean;
   recharge_rate?: string;
   recharge_presets?: string[];
+  recharge_packages?: PaymentRechargePackage[];
   publishable_key?: string;
 }
 
 export interface PaymentRechargePackages {
+  packages: PaymentRechargePackage[];
   recharge_presets: string[];
+}
+
+export interface PaymentRechargePackage {
+  id: string;
+  name: string;
+  description?: string;
+  kind: "recharge" | "subscription" | string;
+  currency: string;
+  amount: string;
+  credited_amount: string;
+  bonus_amount: string;
+  validity_days: number;
+  starts_at?: string;
+  ends_at?: string;
+  subscription_plan_code?: string;
+  enabled: boolean;
 }
 
 export interface PaymentOrder {
@@ -683,6 +701,9 @@ export interface PaymentOrder {
   provider_order_id?: string;
   amount: string;
   credited_amount?: string;
+  package_id?: string;
+  bonus_amount?: string;
+  valid_until?: string;
   recharge_rate?: string;
   currency: string;
   status: "pending" | "paid" | "failed" | "cancelled" | "expired";
@@ -852,6 +873,9 @@ export interface FinanceRechargeOrder {
   provider_order_id?: string;
   amount: string;
   credited_amount: string;
+  package_id?: string;
+  bonus_amount?: string;
+  valid_until?: string;
   recharge_rate: string;
   currency: string;
   status: "pending" | "paid" | "failed" | "cancelled" | "expired" | string;
