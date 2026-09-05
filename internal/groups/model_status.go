@@ -157,6 +157,12 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		                AND cmm0.model_id = m.id
 		          ))
 		      )
+		), health_requests AS (
+			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			FROM model_requests
+			UNION ALL
+			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			FROM model_probe_requests
 		)
 		SELECT mm.group_id::text, mm.code, mm.name, mm.status,
 		       mm.multiplier::text, mm.rpm_limit, mm.billing_type, mm.metering_mode, mm.updated_at,
@@ -178,50 +184,50 @@ func (s *SQLService) ListModelStatuses(ctx context.Context, tenantID string) (Mo
 		       GREATEST(MAX(cm.last_success_at), MAX(cm.probe_last_success_at)),
 		       GREATEST(MAX(cm.last_failure_at), MAX(cm.probe_last_failure_at)),
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending')
 		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT jsonb_agg(recent.status ORDER BY recent.created_at ASC, recent.id ASC)
 		           FROM (
 		               SELECT mr.id, mr.status, mr.created_at
-		               FROM model_requests mr
+           FROM health_requests mr
 		               WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		               ORDER BY mr.created_at DESC, mr.id DESC
 		               LIMIT mm.recent_request_limit
 		           ) recent), '[]'::jsonb),
 		       (SELECT mr.latency_ms
-		           FROM model_requests mr
+               FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT mr.status
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT mr.created_at
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT COALESCE(mr.failure_reason, '')
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status = 'failed'
 		           ORDER BY mr.created_at DESC, mr.id DESC
@@ -457,6 +463,12 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 			            AND cmm0.model_id = m.id
 			      ))
 			  )
+		), health_requests AS (
+			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			FROM model_requests
+			UNION ALL
+			SELECT group_id, model_id, status, latency_ms, created_at, failure_reason
+			FROM model_probe_requests
 		)
 		SELECT mm.monitor_id::text, mm.monitor_name, mm.selection_mode, mm.mode,
 		       mm.probe_interval_seconds, mm.recent_request_limit, mm.last_probe_started_at,
@@ -479,50 +491,50 @@ func (s *SQLService) ListAdminModelStatuses(ctx context.Context) (ModelStatusRep
 		       GREATEST(MAX(cm.last_success_at), MAX(cm.probe_last_success_at)),
 		       GREATEST(MAX(cm.last_failure_at), MAX(cm.probe_last_failure_at)),
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending')
 		             AND mr.created_at >= now() - interval '24 hours'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending', 'failed')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT COUNT(*)::int
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status IN ('settled', 'settlement_pending')
 		             AND mr.created_at >= now() - interval '7 days'), 0)::int,
 		       COALESCE((SELECT jsonb_agg(recent.status ORDER BY recent.created_at ASC, recent.id ASC)
 		           FROM (
 		               SELECT mr.id, mr.status, mr.created_at
-		               FROM model_requests mr
+           FROM health_requests mr
 		               WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		               ORDER BY mr.created_at DESC, mr.id DESC
 		               LIMIT mm.recent_request_limit
 		           ) recent), '[]'::jsonb),
 		       (SELECT mr.latency_ms
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT mr.status
-		           FROM model_requests mr
+               FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT mr.created_at
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		           ORDER BY mr.created_at DESC, mr.id DESC
 		           LIMIT 1),
 		       (SELECT COALESCE(mr.failure_reason, '')
-		           FROM model_requests mr
+           FROM health_requests mr
 		           WHERE mr.group_id = mm.group_id AND mr.model_id = mm.model_id
 		             AND mr.status = 'failed'
 		           ORDER BY mr.created_at DESC, mr.id DESC

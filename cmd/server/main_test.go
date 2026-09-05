@@ -42,11 +42,11 @@ func TestProbeModelMonitorUsesPrimaryThenFallback(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(received) != 2 {
-		t.Fatalf("received %v, want primary and fallback only", received)
+	if len(received) != 3 {
+		t.Fatalf("received %v, want every configured model", received)
 	}
-	if received[0] != "primary" || received[1] != "fallback" {
-		t.Fatalf("probe order = %v, want [primary fallback]", received)
+	if received[0] != "primary" || received[1] != "fallback" || received[2] != "never" {
+		t.Fatalf("probe order = %v, want [primary fallback never]", received)
 	}
 }
 

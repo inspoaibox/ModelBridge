@@ -322,6 +322,23 @@ created_at
 
 `request_id` 必须唯一。请求状态只能按状态机推进，不能由客户端直接设置。
 
+### `model_probe_requests`
+
+```text
+id
+group_id
+model_id
+channel_id
+status                  settled | failed
+latency_ms              主动探测请求耗时
+status_code             上游 HTTP 状态码（如有）
+failure_reason
+created_at
+finished_at
+```
+
+主动探测请求写入独立健康记录表，和 `model_requests` 合并用于模型状态页的最近请求、延迟和可用率统计；它不会产生客户账单、客户 Token 用量或 `usage_events`。
+
 ### `usage_events`
 
 ```text

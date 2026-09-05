@@ -705,6 +705,8 @@ type fakeChannelRouter struct {
 	modelSuccesses  int
 	probeFailures   int
 	probeSuccesses  int
+	probeRecords    int
+	probeRecordOK   int
 }
 
 func (r *fakeChannelRouter) RecordChannelFailure(_ context.Context, _ string, _ int) error {
@@ -729,6 +731,13 @@ func (r *fakeChannelRouter) RecordChannelModelProbeFailure(_ context.Context, _,
 }
 func (r *fakeChannelRouter) RecordChannelModelProbeSuccess(_ context.Context, _, _ string) error {
 	r.probeSuccesses++
+	return nil
+}
+func (r *fakeChannelRouter) RecordModelProbeRequest(_ context.Context, _, _, _, status string, _ int64, success bool, _ int, _ string) error {
+	r.probeRecords++
+	if status == "settled" && success {
+		r.probeRecordOK++
+	}
 	return nil
 }
 
@@ -1121,6 +1130,9 @@ func TestProbeModelUsesMinimalProviderCompatibleRequestWithoutBilling(t *testing
 			}
 			if router.probeSuccesses != 1 || router.probeFailures != 0 {
 				t.Fatalf("probe health state was not recorded separately: %#v", router)
+			}
+			if router.probeRecords != 1 || router.probeRecordOK != 1 {
+				t.Fatalf("probe request record was not persisted: %#v", router)
 			}
 		})
 	}

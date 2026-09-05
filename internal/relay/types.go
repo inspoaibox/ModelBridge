@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	mathrand "math/rand"
 	"net/http"
@@ -144,17 +145,24 @@ type ChannelModelHealthRecorder interface {
 	RecordChannelModelSuccess(context.Context, string, string) error
 }
 
-// ChannelModelProbeHealthRecorder stores active probe observations separately
-// from real customer traffic. Probe results are diagnostics only and never
-// affect routing eligibility or customer-facing health state.
+// ChannelModelProbeHealthRecorder stores active probe observations alongside
+// real customer traffic. Probe results feed routing eligibility and the
+// customer-facing health state, while remaining outside customer billing.
 type ChannelModelProbeHealthRecorder interface {
 	RecordChannelModelProbeFailure(context.Context, string, string, int) error
 	RecordChannelModelProbeSuccess(context.Context, string, string) error
 }
 
+// ModelProbeRequestRecorder persists active probe outcomes as health events.
+// These records are intentionally separate from customer model_requests so
+// probes can participate in status views without affecting billing.
+type ModelProbeRequestRecorder interface {
+	RecordModelProbeRequest(context.Context, string, string, string, string, int64, bool, int, string) error
+}
+
 // ModelProbeService performs an explicit, non-tenant probe against the
-// configured upstream route. It must never create a billing reservation or a
-// customer usage record.
+// configured upstream route. It may create a system health request event, but
+// must never create a billing reservation or customer usage event.
 type ModelProbeService interface {
 	ProbeModel(context.Context, string, string) error
 }
@@ -1032,9 +1040,9 @@ func (s *Service) channelCandidates(ctx context.Context, principal *auth.Princip
 }
 
 // ProbeModel sends the smallest supported text request through the same
-// group-aware candidate order used by customer traffic. The request is
-// intentionally outside ChatCompletions so it cannot consume tenant quota or
-// write a billing record.
+// group-aware candidate order used by customer traffic. It records a system
+// health event for each attempted channel, but never consumes tenant quota or
+// writes a customer billing record.
 func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 	if s == nil || s.router == nil || s.credentials == nil {
 		return ErrUnavailable
@@ -1061,6 +1069,7 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 
 	attempted := map[string]struct{}{}
 	var lastErr error
+	succeeded := false
 	for len(attempted) < len(candidates) {
 		channel, found := pickWeightedChannel(candidates, attempted)
 		if !found {
@@ -1070,12 +1079,14 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 		provider := s.providers[canonicalProvider(channel.Provider)]
 		if provider == nil {
 			lastErr = ErrProviderUnsupported
+			s.recordModelProbeRequest(ctx, groupID, channel, model, false, 0, 0, lastErr.Error())
 			continue
 		}
 		apiKey, resolveErr := s.credentials.Resolve(ctx, channel.CredentialRef)
 		if resolveErr != nil {
 			lastErr = resolveErr
 			s.recordChannelProbeFailure(ctx, channel, resolveErr)
+			s.recordModelProbeRequest(ctx, groupID, channel, model, false, 0, upstreamStatusCode(resolveErr), resolveErr.Error())
 			continue
 		}
 		upstreamModel := strings.TrimSpace(channel.UpstreamModelName)
@@ -1083,23 +1094,45 @@ func (s *Service) ProbeModel(ctx context.Context, groupID, model string) error {
 			upstreamModel = model
 		}
 		probeRequest := minimalProbeRequest(canonicalProvider(channel.Provider), upstreamModel, model)
+		probeStartedAt := time.Now()
 		_, callErr := provider.ChatCompletions(ctx, UpstreamChatCompletionRequest{
 			Channel: channel, APIKey: apiKey, Request: probeRequest, UpstreamModel: upstreamModel,
 		})
+		probeLatencyMS := time.Since(probeStartedAt).Milliseconds()
 		if callErr == nil {
 			s.recordChannelProbeSuccess(ctx, channel)
-			return nil
+			s.recordModelProbeRequest(ctx, groupID, channel, model, true, probeLatencyMS, 0, "")
+			succeeded = true
+			continue
 		}
 		lastErr = callErr
 		s.recordChannelProbeFailure(ctx, channel, callErr)
-		if ctx.Err() != nil || !retryableUpstreamError(callErr) {
+		s.recordModelProbeRequest(ctx, groupID, channel, model, false, probeLatencyMS, upstreamStatusCode(callErr), callErr.Error())
+		if ctx.Err() != nil {
 			break
 		}
+	}
+	if succeeded {
+		return nil
 	}
 	if lastErr == nil {
 		return ErrUpstream
 	}
 	return lastErr
+}
+
+func (s *Service) recordModelProbeRequest(ctx context.Context, groupID string, channel Channel, model string, success bool, latencyMS int64, statusCode int, reason string) {
+	recorder, ok := s.router.(ModelProbeRequestRecorder)
+	if !ok || recorder == nil {
+		return
+	}
+	status := "failed"
+	if success {
+		status = "settled"
+	}
+	if err := recorder.RecordModelProbeRequest(ctx, groupID, channel.ID, model, status, latencyMS, success, statusCode, reason); err != nil {
+		log.Printf("model probe request record failed group_id=%s channel_id=%s model=%s error=%v", groupID, channel.ID, model, err)
+	}
 }
 
 func minimalProbeRequest(provider, upstreamModel, requestedModel string) ChatCompletionRequest {
@@ -1142,10 +1175,11 @@ func geminiThinkingProbeModel(model string) bool {
 		strings.Contains(name, "thinking")
 }
 
-// ModelProbeOutcome describes a group-level probe that uses the configured
-// primary model first and only falls back to the remaining models when it
-// fails. A single model failure therefore does not make the whole group
-// unavailable when another configured model succeeds.
+// ModelProbeOutcome describes a group-level probe that checks the configured
+// primary model first and then every remaining model in the monitor scope.
+// A single model failure therefore does not make the whole group unavailable
+// when another configured model succeeds, while every model receives a health
+// request record for the current probe cycle.
 type ModelProbeOutcome struct {
 	Supported int
 	Succeeded bool
@@ -1174,7 +1208,7 @@ func ProbeModelCandidates(
 		outcome.Supported++
 		if err == nil {
 			outcome.Succeeded = true
-			break
+			continue
 		}
 		outcome.Failures = append(outcome.Failures, model+": "+err.Error())
 	}

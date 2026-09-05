@@ -175,6 +175,52 @@ func (r *SQLChannelRouter) RecordChannelModelProbeSuccess(ctx context.Context, c
 	return err
 }
 
+func (r *SQLChannelRouter) RecordModelProbeRequest(ctx context.Context, groupID, channelID, model, status string, latencyMS int64, success bool, statusCode int, failureReason string) error {
+	if r == nil || r.db == nil {
+		return ErrUnavailable
+	}
+	groupID, channelID, model = strings.TrimSpace(groupID), strings.TrimSpace(channelID), strings.TrimSpace(model)
+	status = strings.ToLower(strings.TrimSpace(status))
+	if groupID == "" || !ids.Valid(groupID) || channelID == "" || !ids.Valid(channelID) || model == "" || latencyMS < 0 || (status != "settled" && status != "failed") {
+		return ErrInvalidRequest
+	}
+	if success {
+		status = "settled"
+	} else {
+		status = "failed"
+	}
+	if statusCode < 0 || statusCode > 599 {
+		return ErrInvalidRequest
+	}
+	if len(failureReason) > 1000 {
+		failureReason = failureReason[:1000]
+	}
+	id, err := ids.New()
+	if err != nil {
+		return err
+	}
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO model_probe_requests (
+			id, group_id, model_id, channel_id, status, latency_ms, status_code, failure_reason
+		)
+		SELECT $1::uuid, $2::uuid, m.id, $3::uuid, $4, $5, NULLIF($6, 0), NULLIF($7, '')
+		FROM models m
+		WHERE m.provider = (SELECT provider FROM channels WHERE id = $3::uuid)
+		  AND m.model_name = $8
+	`, id, groupID, channelID, status, latencyMS, statusCode, strings.TrimSpace(failureReason), model)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrModelNotFound
+	}
+	return nil
+}
+
 func (r *SQLChannelRouter) RecordChannelFailure(ctx context.Context, channelID string, statusCode int) error {
 	if r == nil || r.db == nil {
 		return ErrUnavailable
