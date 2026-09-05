@@ -268,18 +268,18 @@ func paypalAccessToken(ctx context.Context, client *http.Client, config map[stri
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", &ProviderError{Provider: ProviderPayPal, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("paypal oauth returned HTTP %d", resp.StatusCode)
+		return "", &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	var payload struct {
 		AccessToken string `json:"access_token"`
 	}
 	if json.Unmarshal(raw, &payload) != nil || payload.AccessToken == "" {
-		return "", ErrProviderUnconfig
+		return "", &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	return payload.AccessToken, nil
 }
@@ -315,12 +315,12 @@ func (s *SQLService) createPayPalOrder(ctx context.Context, order Order, config 
 	req.Header.Set("PayPal-Request-Id", order.MerchantOrderNo)
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		return providerOrder{}, err
+		return providerOrder{}, &ProviderError{Provider: ProviderPayPal, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return providerOrder{}, fmt.Errorf("paypal create order returned HTTP %d", resp.StatusCode)
+		return providerOrder{}, &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	var result struct {
 		ID    string `json:"id"`
@@ -330,7 +330,7 @@ func (s *SQLService) createPayPalOrder(ctx context.Context, order Order, config 
 		} `json:"links"`
 	}
 	if json.Unmarshal(raw, &result) != nil || result.ID == "" {
-		return providerOrder{}, ErrCallbackInvalid
+		return providerOrder{}, &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	checkout := ""
 	for _, link := range result.Links {

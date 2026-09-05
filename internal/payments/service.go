@@ -1230,12 +1230,12 @@ func (s *SQLService) CapturePayPal(ctx context.Context, tenantID, orderID string
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		return err
+		return &ProviderError{Provider: ProviderPayPal, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("paypal capture returned HTTP %d", resp.StatusCode)
+		return &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	var payload struct {
 		ID            string `json:"id"`
@@ -1253,7 +1253,7 @@ func (s *SQLService) CapturePayPal(ctx context.Context, tenantID, orderID string
 		} `json:"purchase_units"`
 	}
 	if json.Unmarshal(raw, &payload) != nil || !strings.EqualFold(payload.Status, "COMPLETED") {
-		return ErrCallbackInvalid
+		return &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	amount, currency, captureStatus := "", "", ""
 	if len(payload.PurchaseUnits) > 0 && len(payload.PurchaseUnits[0].Payments.Captures) > 0 {
@@ -1261,7 +1261,7 @@ func (s *SQLService) CapturePayPal(ctx context.Context, tenantID, orderID string
 		amount, currency, captureStatus = capture.Amount.Value, capture.Amount.CurrencyCode, capture.Status
 	}
 	if captureStatus != "COMPLETED" || amount == "" || currency == "" {
-		return ErrCallbackInvalid
+		return &ProviderError{Provider: ProviderPayPal, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	return s.settleCallback(ctx, callbackPayment{Provider: ProviderPayPal, MerchantOrderNo: order.MerchantOrderNo, ProviderOrderID: order.ProviderOrderID, Currency: currency, Amount: amount, Paid: true})
 }

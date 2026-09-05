@@ -1,6 +1,7 @@
 import React from "react";
 import {
-	Boxes,
+  Boxes,
+  Bell,
   Globe,
   LayoutDashboard,
   LogIn,
@@ -29,6 +30,8 @@ interface NavbarProps {
   siteName?: string;
   siteLogoURL?: string;
   registrationEnabled: boolean;
+  announcementUnreadCount?: number;
+  onOpenAnnouncements?: () => void;
 }
 
 export function Navbar({
@@ -45,6 +48,8 @@ export function Navbar({
   siteName,
   siteLogoURL,
   registrationEnabled,
+  announcementUnreadCount = 0,
+  onOpenAnnouncements,
 }: NavbarProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const brandName = siteName?.trim() || t("brandName");
@@ -146,6 +151,8 @@ export function Navbar({
               </Button> : null}
             </>
           )}
+
+          {signedIn && principalAudience === "console" ? <Button variant="outline" size="sm" onClick={onOpenAnnouncements} className="relative h-8.5 w-8.5 p-0 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white" title={t("consoleNavAnnouncements")} aria-label={t("consoleNavAnnouncements")}><Bell className="h-4 w-4" />{announcementUnreadCount > 0 ? <span className="absolute -right-1 -top-1 flex min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold leading-4 text-white">{announcementUnreadCount > 99 ? "99+" : announcementUnreadCount}</span> : null}</Button> : null}
 
           {/* Theme Toggle (Light / Dark) */}
           <Button

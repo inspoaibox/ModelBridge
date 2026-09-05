@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   Activity,
   BadgeDollarSign,
+  Bell,
   Building2,
   BookOpen,
   CheckCircle2,
@@ -36,7 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BillingAccount, ConsoleDashboardReport, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, EnterpriseVerification, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, PaymentOrder, PaymentOrderList, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, PublicModelSummary, PublicPaymentProvider, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
+import { Announcement, BillingAccount, ConsoleDashboardReport, ConsoleProfile, ConsoleSection, ConsoleUsageStatus, EmailFormState, EnterpriseVerification, Language, LoginMessage, MFAEnrollment, MFAStatus, ModelStatusReport, PasswordFormState, PaymentOrder, PaymentOrderList, Principal, ProfileFormState, ProjectFormState, ProjectMember, ProjectSummary, PublicAPIEndpoint, PublicModelSummary, PublicPaymentProvider, TenantMember, TokenGroupOption, TokenSummary, TranslationKey, UsageRecord, UsageReport } from "@/types";
 import { translations } from "@/locales/translations";
 import { cn, formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import { ProfilePanel } from "@/components/ProfilePanel";
@@ -48,6 +49,7 @@ import { PaymentRechargePanel } from "@/components/PaymentRechargePanel";
 import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 import { ImageLabView, VideoLabView } from "@/components/MediaLabsView";
 import { TextDebugPanel } from "@/components/TextDebugPanel";
+import { ConsoleAnnouncementsPanel } from "@/components/ConsoleAnnouncementsPanel";
 
 type ConsoleNavItem = { id: ConsoleSection; icon: typeof LayoutDashboard; label: TranslationKey; title: TranslationKey; description: TranslationKey; permission?: string };
 
@@ -141,6 +143,11 @@ interface ConsoleViewProps {
   confirmMFA: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   cancelMFA: () => void;
   disableMFA: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  announcements: Announcement[];
+  announcementsBusy: boolean;
+  announcementsMessage: LoginMessage;
+  refreshAnnouncements: () => Promise<void>;
+  markAnnouncementRead: (announcement: Announcement) => Promise<void>;
   projects: ProjectSummary[];
   projectsBusy: boolean;
   projectsMessage: LoginMessage;
@@ -175,6 +182,7 @@ const consoleSections: ConsoleNavItem[] = [
   { id: "projects", icon: FolderKanban, label: "consoleNavProjects", title: "consoleProjectsTitle", description: "consoleProjectsDescription", permission: "project:read" },
   { id: "tokens", icon: KeyRound, label: "consoleNavTokens", title: "tokensConsoleTitle", description: "tokensConsoleDescription", permission: "token:read" },
   { id: "enterprise", icon: Building2, label: "consoleNavEnterprise", title: "enterpriseTitle", description: "enterpriseDescription", permission: "enterprise:read" },
+  { id: "announcements", icon: Bell, label: "consoleNavAnnouncements", title: "consoleAnnouncementsTitle", description: "consoleAnnouncementsDescription" },
   { id: "profile", icon: UserRound, label: "consoleNavProfile", title: "consoleProfileTitle", description: "consoleProfileDescription" },
   { id: "docs", icon: BookOpen, label: "consoleNavDocs", title: "consoleDocsTitle", description: "consoleDocsDescription" },
 ];
@@ -290,6 +298,11 @@ export function ConsoleView({
   confirmMFA,
   cancelMFA,
   disableMFA,
+  announcements,
+  announcementsBusy,
+  announcementsMessage,
+  refreshAnnouncements,
+  markAnnouncementRead,
   projects,
   projectsBusy,
   projectsMessage,
@@ -369,6 +382,7 @@ export function ConsoleView({
           {displayedSection === "interface-debug-model" ? <VideoLabView language={language} models={models} apiEndpoints={apiEndpoints} routeTo={routeTo} embedded /> : null}
           {displayedSection === "interface-debug-image" ? <ImageLabView language={language} models={models} apiEndpoints={apiEndpoints} routeTo={routeTo} embedded /> : null}
           {displayedSection === "enterprise" ? <EnterpriseVerificationPanel language={language} item={enterpriseVerification} busy={enterpriseBusy} message={enterpriseMessage} refresh={refreshEnterprise} submit={submitEnterprise} /> : null}
+          {displayedSection === "announcements" ? <ConsoleAnnouncementsPanel language={language} announcements={announcements} busy={announcementsBusy} message={announcementsMessage} markRead={markAnnouncementRead} refresh={refreshAnnouncements} /> : null}
           {displayedSection === "profile" ? <ProfilePanel language={language} profile={consoleProfile} profileForm={profileForm} setProfileForm={setProfileForm} emailForm={emailForm} setEmailForm={setEmailForm} passwordForm={passwordForm} setPasswordForm={setPasswordForm} profileBusy={profileBusy} profileMessage={profileMessage} refreshProfile={refreshProfile} saveProfile={saveProfile} saveEmail={saveEmail} savePassword={savePassword} totpEnabled={totpEnabled} mfaStatus={mfaStatus} mfaEnrollment={mfaEnrollment} profileMfaCode={profileMfaCode} setProfileMfaCode={setProfileMfaCode} mfaBusy={mfaBusy} beginMFA={beginMFA} confirmMFA={confirmMFA} cancelMFA={cancelMFA} disableMFA={disableMFA} /> : null}
           {displayedSection === "docs" ? <UsageDocsPanel language={language} routeTo={routeTo} apiEndpoints={apiEndpoints} /> : null}
         </div>

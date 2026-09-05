@@ -184,6 +184,21 @@ func TestProviderErrorPreservesStripeProviderDetail(t *testing.T) {
 	}
 }
 
+func TestProviderErrorSummaryPreservesOfficialFields(t *testing.T) {
+	wechat := providerErrorSummary([]byte(`{"code":"PARAM_ERROR","message":"invalid notify_url"}`))
+	if wechat != "PARAM_ERROR: invalid notify_url" {
+		t.Fatalf("unexpected wechat provider detail: %q", wechat)
+	}
+	alipay := providerErrorSummary([]byte(`{"alipay_trade_precreate_response":{"code":"40004","msg":"Business Failed","sub_code":"ACQ.INVALID_PARAMETER","sub_msg":"invalid amount"}}`))
+	if !strings.Contains(alipay, "40004") || !strings.Contains(alipay, "ACQ.INVALID_PARAMETER") || !strings.Contains(alipay, "invalid amount") {
+		t.Fatalf("unexpected alipay provider detail: %q", alipay)
+	}
+	paypal := providerErrorSummary([]byte(`{"name":"INVALID_REQUEST","message":"Request is not well-formed","details":[{"issue":"INVALID_CURRENCY","description":"currency is not supported"}]}`))
+	if !strings.Contains(paypal, "INVALID_REQUEST") || !strings.Contains(paypal, "INVALID_CURRENCY") || !strings.Contains(paypal, "currency is not supported") {
+		t.Fatalf("unexpected paypal provider detail: %q", paypal)
+	}
+}
+
 func TestPaymentReturnURLKeepsHashRouteAfterAddingProviderParameters(t *testing.T) {
 	got, err := paymentReturnURL("https://gateway.example.com/#console/billing", url.Values{
 		"payment_order_id": {"order-123"},

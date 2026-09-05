@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"ai-token/internal/adminsettings"
+	"ai-token/internal/announcements"
 	"ai-token/internal/audit"
 	"ai-token/internal/auth"
 	"ai-token/internal/billing"
@@ -166,7 +167,7 @@ func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPri
 	priceSyncService modelprices.SyncService,
 	billers ...billing.AdminService,
 ) http.Handler {
-	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, nil, nil, nil, billers...)
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, nil, nil, nil, nil, billers...)
 }
 
 func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAudit(
@@ -184,7 +185,7 @@ func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPri
 	auditReader audit.Reader,
 	billers ...billing.AdminService,
 ) http.Handler {
-	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, nil, nil, billers...)
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, nil, nil, nil, billers...)
 }
 
 // NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercial
@@ -207,7 +208,28 @@ func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPri
 	paymentService payments.Service,
 	billers ...billing.AdminService,
 ) http.Handler {
-	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, enterpriseService, paymentService, billers...)
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, enterpriseService, paymentService, nil, billers...)
+}
+
+func NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercialAndAnnouncements(
+	authMiddleware *auth.Middleware,
+	services *auth.Services,
+	relayService relay.ChatCompletionService,
+	secureCookies bool,
+	webDir string,
+	tokenService tokens.AdminService,
+	groupService groups.Service,
+	consoleTokenService tokens.ConsoleService,
+	modelCatalog models.Catalog,
+	userService users.AdminService,
+	priceSyncService modelprices.SyncService,
+	auditReader audit.Reader,
+	enterpriseService enterprise.AdminService,
+	paymentService payments.Service,
+	announcementService announcements.Service,
+	billers ...billing.AdminService,
+) http.Handler {
+	return newHandler(authMiddleware, services, relayService, secureCookies, webDir, tokenService, groupService, consoleTokenService, modelCatalog, userService, priceSyncService, auditReader, enterpriseService, paymentService, announcementService, billers...)
 }
 
 func newHandler(
@@ -225,6 +247,7 @@ func newHandler(
 	auditReader audit.Reader,
 	enterpriseService enterprise.AdminService,
 	paymentService payments.Service,
+	announcementService announcements.Service,
 	billers ...billing.AdminService,
 ) http.Handler {
 	if authMiddleware == nil {
@@ -444,6 +467,30 @@ func newHandler(
 			paymentAdminRechargePackagesUpdateHandler(paymentService),
 			"payment:update",
 		))
+	}
+
+	if announcementService != nil {
+		mux.Handle("GET /admin/v1/announcements", authMiddleware.Protect(
+			auth.AudienceAdmin, "security:read",
+		)(adminAnnouncementListHandler(announcementService)))
+		mux.Handle("POST /admin/v1/announcements", protectStepUp(
+			adminsettings.StepUpOperationSystem, adminAnnouncementCreateHandler(announcementService), "security:update",
+		))
+		mux.Handle("PUT /admin/v1/announcements/{announcementID}", protectStepUp(
+			adminsettings.StepUpOperationSystem, adminAnnouncementUpdateHandler(announcementService), "security:update",
+		))
+		mux.Handle("DELETE /admin/v1/announcements/{announcementID}", protectStepUp(
+			adminsettings.StepUpOperationSystem, adminAnnouncementDeleteHandler(announcementService), "security:update",
+		))
+		mux.Handle("GET /admin/v1/announcements/{announcementID}/recipients", authMiddleware.Protect(
+			auth.AudienceAdmin, "security:read",
+		)(adminAnnouncementRecipientsHandler(announcementService)))
+		mux.Handle("GET /console/v1/announcements", authMiddleware.Protect(
+			auth.AudienceConsole,
+		)(consoleAnnouncementListHandler(announcementService)))
+		mux.Handle("POST /console/v1/announcements/{announcementID}/read", authMiddleware.Protect(
+			auth.AudienceConsole,
+		)(consoleAnnouncementReadHandler(announcementService)))
 	}
 
 	mux.Handle("GET /admin/v1/channels", authMiddleware.Protect(

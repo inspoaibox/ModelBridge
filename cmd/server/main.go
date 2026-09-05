@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ai-token/internal/adminsettings"
+	"ai-token/internal/announcements"
 	"ai-token/internal/audit"
 	"ai-token/internal/auth"
 	"ai-token/internal/billing"
@@ -57,6 +58,7 @@ func main() {
 		auditWriter         audit.Writer
 		enterpriseService   enterprise.AdminService
 		paymentService      payments.Service
+		announcementService announcements.Service
 	)
 	if cfg.DatabaseURL != "" {
 		if len(cfg.MFAEncryptionKey) == 0 {
@@ -197,6 +199,11 @@ func main() {
 			log.Fatal(err)
 		}
 		paymentService = paymentSQLService
+		announcementSQLService, err := announcements.NewSQLService(dbConn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		announcementService = announcementSQLService
 		// Registration is initialized regardless of its current availability.
 		// The database-backed feature switch is checked for each request, so
 		// administrators can open or close registration without a restart.
@@ -258,7 +265,7 @@ func main() {
 		}
 	}
 
-	handler := httpapi.NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercial(
+	handler := httpapi.NewWithRelayAndGroupsAndTokensAndConsoleTokensAndModelCatalogAndUsersAndPriceSyncAndAuditAndCommercialAndAnnouncements(
 		auth.NewCredentialMiddleware(tokenResolver, sessionResolver),
 		&services,
 		relayService,
@@ -273,6 +280,7 @@ func main() {
 		auditReader,
 		enterpriseService,
 		paymentService,
+		announcementService,
 		billingService,
 	)
 	if auditWriter != nil {

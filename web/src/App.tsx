@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
+import { AnnouncementReaderModal } from "@/components/AnnouncementReaderModal";
+import type { AnnouncementDraft } from "@/components/admin/AdminAnnouncementsPanel";
 import { ChannelModal } from "@/components/ChannelModal";
 import { GroupModal } from "@/components/GroupModal";
 import { TokenCreateModal } from "@/components/TokenCreateModal";
@@ -14,6 +16,8 @@ import { resolveAPIEndpointURLs } from "@/lib/api-endpoint";
 import { formatDecimalWithoutTrailingZeros } from "@/lib/utils";
 import {
   AdminSection,
+  Announcement,
+  AnnouncementRecipient,
   APIEndpoint,
   APIEndpointFormState,
   AuditReport,
@@ -164,7 +168,7 @@ function normalizeConsoleSection(value: string): ConsoleSection {
   if (value === "security") return "profile";
   if (value === "usage") return "billing-records";
   if (value === "billing-center") return "billing";
-  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "billing-records" || value === "billing-center" || value === "billing-orders" || value === "interface-debug-text" || value === "interface-debug-model" || value === "interface-debug-image" || value === "enterprise" || value === "profile" || value === "docs"
+  return value === "model-status" || value === "usage" || value === "projects" || value === "tokens" || value === "billing" || value === "billing-records" || value === "billing-center" || value === "billing-orders" || value === "interface-debug-text" || value === "interface-debug-model" || value === "interface-debug-image" || value === "enterprise" || value === "profile" || value === "docs" || value === "announcements"
     ? value
     : "dashboard";
 }
@@ -184,7 +188,8 @@ function normalizeSection(value: string): AdminSection {
     value === "usage" ||
     value === "audit" ||
     value === "enterprise" ||
-    value === "settings"
+    value === "settings" ||
+    value === "announcements"
     ? value
     : "dashboard";
 }
@@ -713,6 +718,12 @@ export default function App() {
   const [adminModelMonitorActionBusy, setAdminModelMonitorActionBusy] = useState("");
   const [publicFeatures, setPublicFeatures] = useState<PublicFeatureSettings | null>(null);
   const [oauthProviders, setOauthProviders] = useState<Array<{ provider: string; enabled: boolean }>>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [announcementsBusy, setAnnouncementsBusy] = useState(false);
+  const [announcementsMessage, setAnnouncementsMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [announcementPopup, setAnnouncementPopup] = useState<Announcement | null>(null);
+  const [announcementPopupBusy, setAnnouncementPopupBusy] = useState(false);
+  const dismissedAnnouncementIDs = useRef<Set<string>>(new Set());
   const [consoleProfile, setConsoleProfile] = useState<ConsoleProfile | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileFormState>(() => defaultProfileForm());
   const [emailForm, setEmailForm] = useState<EmailFormState>(() => defaultEmailForm());
@@ -781,6 +792,9 @@ export default function App() {
   const [adminEnterpriseStatus, setAdminEnterpriseStatus] = useState("");
   const [adminEnterpriseBusy, setAdminEnterpriseBusy] = useState(false);
   const [adminEnterpriseMessage, setAdminEnterpriseMessage] = useState<LoginMessage>({ kind: "", text: "" });
+  const [adminAnnouncements, setAdminAnnouncements] = useState<Announcement[]>([]);
+  const [adminAnnouncementsBusy, setAdminAnnouncementsBusy] = useState(false);
+  const [adminAnnouncementsMessage, setAdminAnnouncementsMessage] = useState<LoginMessage>({ kind: "", text: "" });
 	  const [stepUpOpen, setStepUpOpen] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpError, setStepUpError] = useState("");
@@ -1298,6 +1312,17 @@ export default function App() {
   }, [signedIn, audience, route.view, consoleSection, language]);
 
   useEffect(() => {
+    if (!signedIn || audience !== "console" || route.view !== "console") return;
+    void refreshConsoleAnnouncements();
+    const interval = window.setInterval(() => void refreshConsoleAnnouncements(), 60_000);
+    return () => window.clearInterval(interval);
+  }, [signedIn, audience, route.view]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "console") dismissedAnnouncementIDs.current.clear();
+  }, [signedIn, audience]);
+
+  useEffect(() => {
     if (!signedIn || audience !== "admin" || route.view !== "admin") return;
     let cancelled = false;
     async function loadSecurity() {
@@ -1392,6 +1417,11 @@ export default function App() {
 		if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "audit") return;
 		refreshAudit(true, 0);
 	}, [signedIn, audience, route.view, adminSection, language]);
+
+  useEffect(() => {
+    if (!signedIn || audience !== "admin" || route.view !== "admin" || adminSection !== "announcements") return;
+    void refreshAdminAnnouncements(true);
+  }, [signedIn, audience, route.view, adminSection, language]);
 
   const routeTo = (target: string) => {
     if (target === "#register" && publicFeatures?.registration_enabled === false) {
@@ -2961,6 +2991,122 @@ export default function App() {
     }
   }
 
+  async function refreshConsoleAnnouncements() {
+    if (!signedIn || audience !== "console") return;
+    setAnnouncementsBusy(true);
+    try {
+      const response = await fetch("/console/v1/announcements", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { announcements?: Announcement[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "announcements unavailable");
+      const items = result.announcements || [];
+      setAnnouncements(items);
+      setAnnouncementsMessage({ kind: "", text: "" });
+      setAnnouncementPopup((current) => current && items.some((item) => item.id === current.id && !item.read_at) ? current : items.find((item) => !item.read_at && !dismissedAnnouncementIDs.current.has(item.id)) || null);
+    } catch {
+      setAnnouncementsMessage({ kind: "error", text: t("announcementsUnavailable") });
+    } finally {
+      setAnnouncementsBusy(false);
+    }
+  }
+
+  async function markAnnouncementRead(item: Announcement) {
+    try {
+      const response = await fetch(`/console/v1/announcements/${encodeURIComponent(item.id)}/read`, { method: "POST", headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "announcement read failed");
+      const readAt = new Date().toISOString();
+      dismissedAnnouncementIDs.current.add(item.id);
+      setAnnouncements((current) => current.map((entry) => entry.id === item.id ? { ...entry, read_at: readAt } : entry));
+      setAnnouncementPopup((current) => current?.id === item.id ? null : current);
+      setAnnouncementsMessage({ kind: "", text: "" });
+    } catch {
+      setAnnouncementsMessage({ kind: "error", text: t("announcementsReadFailed") });
+    }
+  }
+
+  async function closeAnnouncementPopup() {
+    if (!announcementPopup) return;
+    setAnnouncementPopupBusy(true);
+    try {
+      await markAnnouncementRead(announcementPopup);
+    } finally {
+      setAnnouncementPopupBusy(false);
+    }
+  }
+
+  function dismissAnnouncementPopup() {
+    if (announcementPopup) dismissedAnnouncementIDs.current.add(announcementPopup.id);
+    setAnnouncementPopup(null);
+  }
+
+  async function refreshAdminAnnouncements(showPending = false) {
+    if (!signedIn || audience !== "admin" || !principal?.permissions?.includes("security:read")) return;
+    setAdminAnnouncementsBusy(true);
+    if (showPending) setAdminAnnouncementsMessage({ kind: "pending", text: t("announcementsLoading") });
+    try {
+      const response = await fetch("/admin/v1/announcements", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { announcements?: Announcement[]; error?: string };
+      if (!response.ok) throw new Error(result.error || "announcements unavailable");
+      setAdminAnnouncements(result.announcements || []);
+      setAdminAnnouncementsMessage({ kind: "", text: "" });
+    } catch {
+      setAdminAnnouncementsMessage({ kind: "error", text: t("announcementsUnavailable") });
+    } finally {
+      setAdminAnnouncementsBusy(false);
+    }
+  }
+
+  async function saveAdminAnnouncement(draft: AnnouncementDraft) {
+    const effectiveAt = new Date(draft.effective_at);
+    const expiresAt = draft.expires_at ? new Date(draft.expires_at) : null;
+    if (Number.isNaN(effectiveAt.getTime()) || (expiresAt && Number.isNaN(expiresAt.getTime()))) {
+      setAdminAnnouncementsMessage({ kind: "error", text: t("announcementsValidation") });
+      return false;
+    }
+    setAdminAnnouncementsBusy(true);
+    setAdminAnnouncementsMessage({ kind: "pending", text: t("announcementsSaving") });
+    try {
+      const response = await fetchAdminSensitive(draft.id ? `/admin/v1/announcements/${encodeURIComponent(draft.id)}` : "/admin/v1/announcements", {
+        method: draft.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ title: draft.title, content: draft.content, effective_at: effectiveAt.toISOString(), expires_at: expiresAt ? expiresAt.toISOString() : "", enabled: draft.enabled }),
+      });
+      const result = (await response.json().catch(() => ({}))) as Announcement & { error?: string };
+      if (!response.ok) throw new Error(result.error || "announcement save failed");
+      await refreshAdminAnnouncements(false);
+      setAdminAnnouncementsMessage({ kind: "success", text: t("announcementsSaved") });
+      return true;
+    } catch (error) {
+      setAdminAnnouncementsMessage({ kind: "error", text: error instanceof Error && error.message === "INVALID_ANNOUNCEMENT" ? t("announcementsValidation") : t("announcementsSaveFailed") });
+      return false;
+    } finally {
+      setAdminAnnouncementsBusy(false);
+    }
+  }
+
+  async function deleteAdminAnnouncement(item: Announcement) {
+    setAdminAnnouncementsBusy(true);
+    try {
+      const response = await fetchAdminSensitive(`/admin/v1/announcements/${encodeURIComponent(item.id)}`, { method: "DELETE", headers: { Accept: "application/json" }, credentials: "same-origin" });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "announcement delete failed");
+      await refreshAdminAnnouncements(false);
+      setAdminAnnouncementsMessage({ kind: "success", text: t("announcementsDeleted") });
+    } catch {
+      setAdminAnnouncementsMessage({ kind: "error", text: t("announcementsDeleteFailed") });
+    } finally {
+      setAdminAnnouncementsBusy(false);
+    }
+  }
+
+  async function loadAdminAnnouncementRecipients(item: Announcement): Promise<AnnouncementRecipient[]> {
+    const response = await fetch(`/admin/v1/announcements/${encodeURIComponent(item.id)}/recipients`, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+    const result = (await response.json().catch(() => ({}))) as { recipients?: AnnouncementRecipient[]; error?: string };
+    if (!response.ok) throw new Error(result.error || "announcement recipients unavailable");
+    return result.recipients || [];
+  }
+
   async function refreshAdminEnterprise(showPending = false) {
     if (!signedIn || audience !== "admin" || !principal?.id || !principal.permissions?.includes("enterprise:read")) return;
     setAdminEnterpriseBusy(true);
@@ -4455,6 +4601,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         siteName={siteSettings.site_name}
         siteLogoURL={siteSettings.site_logo_url}
         registrationEnabled={publicFeatures?.registration_enabled !== false}
+        announcementUnreadCount={audience === "console" ? announcements.filter((item) => !item.read_at).length : 0}
+        onOpenAnnouncements={() => routeTo("#console/announcements")}
       />
 
       {/* Main View Router */}
@@ -4635,9 +4783,14 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             mfaBusy={mfaBusy}
             beginMFA={beginConsoleMFA}
             confirmMFA={confirmConsoleMFA}
-            cancelMFA={cancelConsoleMFA}
-            disableMFA={disableConsoleMFA}
-            />
+             cancelMFA={cancelConsoleMFA}
+             disableMFA={disableConsoleMFA}
+             announcements={announcements}
+             announcementsBusy={announcementsBusy}
+             announcementsMessage={announcementsMessage}
+             refreshAnnouncements={refreshConsoleAnnouncements}
+             markAnnouncementRead={markAnnouncementRead}
+             />
           ) : (
             <AdminConsole
             language={language}
@@ -4839,6 +4992,12 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
             refreshEnterprise={() => refreshAdminEnterprise(true)}
             loadEnterprise={loadAdminEnterpriseDetails}
             reviewEnterprise={reviewEnterprise}
+            adminAnnouncements={adminAnnouncements}
+            adminAnnouncementsBusy={adminAnnouncementsBusy}
+            adminAnnouncementsMessage={adminAnnouncementsMessage}
+            saveAdminAnnouncement={saveAdminAnnouncement}
+            deleteAdminAnnouncement={deleteAdminAnnouncement}
+            loadAdminAnnouncementRecipients={loadAdminAnnouncementRecipients}
             />
           )}
         </Suspense>
@@ -4926,6 +5085,8 @@ function usageDateBoundary(value: string, endOfDay: boolean) {
         onClose={closeModelPriceForm}
         onSubmit={handleModelPriceSubmit}
       />
+
+      <AnnouncementReaderModal language={language} announcement={audience === "console" ? announcementPopup : null} busy={announcementPopupBusy} onClose={dismissAnnouncementPopup} onMarkRead={() => void closeAnnouncementPopup()} />
 
       {/* Commercial Footer (Visible on Home, Login, Register) */}
       {currentView !== "admin" && currentView !== "console" && <Footer language={language} routeTo={routeTo} siteName={siteSettings.site_name} siteLogoURL={siteSettings.site_logo_url} />}

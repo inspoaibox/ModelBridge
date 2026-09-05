@@ -48,6 +48,25 @@ GET /console/v1/tenants/{tenantID}/billing/recharge
 
 控制台的“费用中心”用于查看余额、选择全局充值套餐并创建支付订单；“订单中心”用于查看订单状态、到账额度、赠送金额和支付失败详情；“账单记录”用于核对模型调用用量和费用。支付成功必须以服务端回调确认，浏览器回跳只负责重新读取订单状态。
 
+控制台“公告”入口展示当前已生效的全站公告。登录后如果存在未读公告，会在首次进入控制台时弹窗提示；关闭弹窗只隐藏提示，点击“我已阅读”或在公告中心标记后才会清除未读角标。公告内容使用平台安全 Markdown 渲染，不执行原始 HTML：
+
+```text
+GET  /console/v1/announcements
+POST /console/v1/announcements/{announcementID}/read
+```
+
+管理员在“组织与安全 -> 公告管理”创建和维护公告，可设置标题、Markdown 内容、生效时间、结束时间和启用状态；列表会统计实际触达用户、已读和未读数量，并可查看触达用户及阅读时间：
+
+```text
+GET    /admin/v1/announcements
+POST   /admin/v1/announcements
+PUT    /admin/v1/announcements/{announcementID}
+DELETE /admin/v1/announcements/{announcementID}
+GET    /admin/v1/announcements/{announcementID}/recipients
+```
+
+公告写操作需要 `security:update` 和管理员 Step-up MFA；用户只会看到生效时间已到且未过期、启用状态的公告。
+
 ## 控制台模型状态
 
 登录租户控制台后，模型状态页面调用：
@@ -186,6 +205,8 @@ POST /payments/webhooks/paypal
 ```
 
 支付回调不是前端传入成功状态的依据。服务端会校验平台签名、订单号、金额、币种、支付方式和订单有效期，验证成功后使用 `payment:credit:<order_id>` 写入不可变账务流水；重复回调不会重复增加余额。充值页返回后会按订单 ID 重新读取订单并轮询待支付订单，避免回跳后丢失状态。
+
+创建订单失败时，接口不会只返回笼统的“处理失败”：支付服务商错误会返回 `502 PAYMENT_PROVIDER_FAILED`，并附带 `stage`（例如 `provider_config`、`order_persistence`、`provider_checkout`）和 `message`。其中 `message` 包含 Stripe、微信支付、支付宝或 PayPal 官方返回的 HTTP 状态、错误码和错误描述；前端应将这些字段展示给用户，同时使用 `X-Request-Id` 在服务端日志中定位完整请求。
 
 ## 注册与邮箱验证
 

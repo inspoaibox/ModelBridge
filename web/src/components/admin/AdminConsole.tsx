@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   Activity,
+  Bell,
   Building2,
   CheckCircle2,
   CircleDollarSign,
@@ -39,6 +40,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   APIEndpoint,
   APIEndpointFormState,
+  Announcement,
+  AnnouncementRecipient,
   AdminSection,
   BillingAccount,
   ChannelSummary,
@@ -90,6 +93,7 @@ import { AdminAuditPanel } from "@/components/admin/AdminAuditPanel";
 import { AdminRoleManagementPanel } from "@/components/admin/AdminRoleManagementPanel";
 import { AdminModelStatusPanel } from "@/components/admin/AdminModelStatusPanel";
 import { AdminEnterprisePanel } from "@/components/admin/AdminEnterprisePanel";
+import { AdminAnnouncementsPanel, type AnnouncementDraft } from "@/components/admin/AdminAnnouncementsPanel";
 
 interface AdminConsoleProps {
   language: Language;
@@ -291,6 +295,12 @@ interface AdminConsoleProps {
   refreshEnterprise: () => Promise<void>;
   loadEnterprise: (item: EnterpriseVerification) => Promise<EnterpriseVerification>;
   reviewEnterprise: (item: EnterpriseVerification, status: "approved" | "rejected", reason: string) => Promise<void>;
+  adminAnnouncements: Announcement[];
+  adminAnnouncementsBusy: boolean;
+  adminAnnouncementsMessage: LoginMessage;
+  saveAdminAnnouncement: (draft: AnnouncementDraft) => Promise<boolean>;
+  deleteAdminAnnouncement: (item: Announcement) => Promise<void>;
+  loadAdminAnnouncementRecipients: (item: Announcement) => Promise<AnnouncementRecipient[]>;
 }
 
 export function AdminConsole({
@@ -493,6 +503,12 @@ export function AdminConsole({
   refreshEnterprise,
   loadEnterprise,
   reviewEnterprise,
+  adminAnnouncements,
+  adminAnnouncementsBusy,
+  adminAnnouncementsMessage,
+  saveAdminAnnouncement,
+  deleteAdminAnnouncement,
+  loadAdminAnnouncementRecipients,
 }: AdminConsoleProps) {
   const t = (key: TranslationKey) => translations[language][key] ?? translations.en[key] ?? key;
   const [channelSearch, setChannelSearch] = useState("");
@@ -619,6 +635,7 @@ export function AdminConsole({
         { id: "users" as const, label: t("adminNavUsers"), icon: Users, permission: "user:read" },
         { id: "roles" as const, label: t("adminNavRoles"), icon: ShieldCheck, permission: "role:read" },
         { id: "settings" as const, label: t("adminNavSettings"), icon: Settings2, permission: "security:read" },
+        { id: "announcements" as const, label: t("adminNavAnnouncements"), icon: Bell, permission: "security:read" },
         { id: "enterprise" as const, label: t("adminNavEnterprise"), icon: Building2, permission: "enterprise:read" },
       ],
     },
@@ -732,6 +749,8 @@ export function AdminConsole({
                   ? t("adminNavEnterprise")
                 : adminSection === "settings"
                   ? t("adminNavSettings")
+                : adminSection === "announcements"
+                  ? t("adminNavAnnouncements")
                   : t("adminNavDashboard")}
               </span>
             </div>
@@ -764,7 +783,9 @@ export function AdminConsole({
                   ? t("adminNavEnterprise")
                 : adminSection === "settings"
                   ? t("systemSettingsTitle")
-                : t("dashboardTitle")}
+                : adminSection === "announcements"
+                  ? t("adminAnnouncementsTitle")
+                  : t("dashboardTitle")}
             </h1>
           </div>
 
@@ -1738,6 +1759,18 @@ export function AdminConsole({
             loginSettingsBusy={loginSettingsBusy}
             loginSettingsMessage={loginSettingsMessage}
             saveLoginSettings={saveLoginSettings}
+          />
+        )}
+        {adminSection === "announcements" && (
+          <AdminAnnouncementsPanel
+            language={language}
+            items={adminAnnouncements}
+            busy={adminAnnouncementsBusy}
+            message={adminAnnouncementsMessage}
+            canUpdate={canSeeAdminPermission("security:update")}
+            save={saveAdminAnnouncement}
+            remove={deleteAdminAnnouncement}
+            loadRecipients={loadAdminAnnouncementRecipients}
           />
         )}
         {adminSection === "usage" && (

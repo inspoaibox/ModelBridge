@@ -84,18 +84,18 @@ func (s *SQLService) createWechatOrder(ctx context.Context, order Order, config 
 	req.Header.Set("Authorization", wechatAuthorization("POST", "/v3/pay/transactions/native", timestamp, nonce, encoded, config["mch_id"], config["serial_no"], privateKey))
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		return providerOrder{}, err
+		return providerOrder{}, &ProviderError{Provider: ProviderWechat, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return providerOrder{}, fmt.Errorf("wechat native order returned HTTP %d", resp.StatusCode)
+		return providerOrder{}, &ProviderError{Provider: ProviderWechat, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	var result struct {
 		CodeURL string `json:"code_url"`
 	}
 	if json.Unmarshal(raw, &result) != nil || result.CodeURL == "" {
-		return providerOrder{}, ErrCallbackInvalid
+		return providerOrder{}, &ProviderError{Provider: ProviderWechat, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	return providerOrder{QRCode: result.CodeURL, Raw: raw}, nil
 }
@@ -220,12 +220,12 @@ func (s *SQLService) createAlipayOrder(ctx context.Context, order Order, config 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		return providerOrder{}, err
+		return providerOrder{}, &ProviderError{Provider: ProviderAlipay, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return providerOrder{}, fmt.Errorf("alipay precreate returned HTTP %d", resp.StatusCode)
+		return providerOrder{}, &ProviderError{Provider: ProviderAlipay, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	var result struct {
 		Response struct {
@@ -235,7 +235,7 @@ func (s *SQLService) createAlipayOrder(ctx context.Context, order Order, config 
 		} `json:"alipay_trade_precreate_response"`
 	}
 	if json.Unmarshal(raw, &result) != nil || result.Response.Code != "10000" || result.Response.QRCode == "" {
-		return providerOrder{}, fmt.Errorf("alipay precreate failed: %s", result.Response.Msg)
+		return providerOrder{}, &ProviderError{Provider: ProviderAlipay, StatusCode: resp.StatusCode, Detail: providerErrorSummary(raw)}
 	}
 	return providerOrder{QRCode: result.Response.QRCode, Raw: raw}, nil
 }

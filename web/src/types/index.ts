@@ -4,8 +4,8 @@ export type Theme = "light" | "dark";
 export type Language = "zh" | "en";
 export type Audience = "admin" | "console";
 export type TranslationKey = keyof (typeof translations)["zh"];
-export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "account-finance" | "usage" | "audit" | "enterprise" | "settings";
-export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "billing-records" | "billing-center" | "billing-orders" | "interface-debug-text" | "interface-debug-model" | "interface-debug-image" | "enterprise" | "profile" | "docs";
+export type AdminSection = "dashboard" | "ops" | "model-status" | "users" | "roles" | "groups" | "tokens" | "channels" | "billing" | "finance" | "account-finance" | "usage" | "audit" | "enterprise" | "settings" | "announcements";
+export type ConsoleSection = "dashboard" | "model-status" | "usage" | "projects" | "tokens" | "billing" | "billing-records" | "billing-center" | "billing-orders" | "interface-debug-text" | "interface-debug-model" | "interface-debug-image" | "enterprise" | "profile" | "docs" | "announcements";
 export type View = "home" | "models" | "login" | "admin-login" | "register" | "reset" | "verify-email" | "admin" | "console" | "not-found";
 
 export interface Principal {
@@ -133,6 +133,32 @@ export interface LoginProviderSettings {
 
 export interface LoginSettings {
   providers: LoginProviderSettings[];
+}
+
+export interface Announcement {
+  id: string;
+  title: string;
+  content: string;
+  effective_at: string;
+  expires_at?: string;
+  enabled: boolean;
+  status: "scheduled" | "active" | "expired" | "disabled" | string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  total_recipients: number;
+  read_recipients: number;
+  unread_recipients: number;
+  read_at?: string;
+}
+
+export interface AnnouncementRecipient {
+  user_id: string;
+  email: string;
+  display_name: string;
+  user_status: string;
+  delivered_at: string;
+  read_at?: string;
 }
 
 export interface SiteSettings {
